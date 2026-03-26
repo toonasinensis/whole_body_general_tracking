@@ -1,0 +1,1 @@
+python scripts/rsl_rl/train.py --task=Tracking-Flat-G1-v0 --registry_name=test1 --num_envs=4000 --headless

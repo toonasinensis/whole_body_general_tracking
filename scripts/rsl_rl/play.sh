@@ -1,0 +1,1 @@
+python scripts/rsl_rl/play.py --task=Tracking-Flat-G1-v0 --num_envs=40 --model_path=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/2026-03-26_11-42-47/model_4500.pt
