@@ -20,7 +20,7 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
-parser.add_argument("--model_path", type=str, default=None, help="Path to the model file.")
+parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -110,7 +110,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         print(f"[INFO] Loading experiment from directory: {log_root_path}")
         # resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-        resume_path = args_cli.model_path
+        resume_path = args_cli.resume_path
 
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 

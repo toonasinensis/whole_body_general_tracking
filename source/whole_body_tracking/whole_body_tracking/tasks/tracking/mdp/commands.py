@@ -92,7 +92,8 @@ class MotionLoader:
                 print("当前本地时间:", datetime.datetime.now().strftime("%H%M"))
                 self.sample_counter += 1
             else:
-                sampled_files = random.sample(npz_files, motion_num)
+                # 采样后保持排序顺序：先按motion号排序，再按z_scale排序
+                sampled_files = sorted(random.sample(npz_files, motion_num))
         elif self.cfg.distributed:
             total_motion_num = len(npz_files)
             subset_motion_num = total_motion_num // self.cfg.total_rank
@@ -195,6 +196,7 @@ class MotionLoader:
 
         self.time_step_total = sum(frame_list)  # self.joint_pos.shape[0]
         self.file_names = file_names
+        print("self.file_names: ", self.file_names)
         self.time_step_end_idx = []
         self.frame_list = torch.tensor(frame_list, device=device)  
         self.time_step_end_idx = torch.cumsum(self.frame_list, dim=0)
@@ -375,9 +377,6 @@ class MotionCommand(CommandTerm):
         terrain_origins = self._env.scene.terrain.terrain_origins.reshape(-1, 3)
         terrain_ids = motion_ids % terrain_origins.shape[0]
         offsets = terrain_origins[terrain_ids].to(self.device)
-
-        base = torch.tensor(self.cfg.motion_offset_base, device=self.device, dtype=offsets.dtype)
-        offsets = offsets + base
         return offsets
 
     @property

@@ -91,7 +91,7 @@ class ReplayMotionsSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
 
-num_motion = 50
+num_motion = 200
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # Extract scene entities
@@ -176,7 +176,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     row_spacing = terrain_size_y  # 每行的间距
     print(f"\n=== Motion-Terrain Mapping ===")
     # print(f"Terrain rows: {num_terrain_rows}, terrain size_y: {terrain_size_y}, row_spacing: {row_spacing:.4f}")
-    print(f"Motion assignments (env -> motion_id): env 0->{motion_ids[0]}, env 1->{motion_ids[1]}, ...")
+    # print(f"Motion assignments (env -> motion_id): env 0->{motion_ids[0]}, env 1->{motion_ids[1]}, ...")
     
     import time
     while simulation_app.is_running():
@@ -196,7 +196,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         
         # 获取 motion 中的 base pos（动作录制时的原始位置）
         base_pos = motion._body_pos_w[time_steps][:, 0].clone()  # [num_envs, 3]
-        
+        # import ipdb; ipdb.set_trace()
         # 根据 motion_id 添加位置偏移，实现不同动作在不同地形行
         # terrain_origins 形状通常为 [num_levels, num_rows, 3]，先展平再按 motion_id 映射
         terrain_origins = scene.terrain.terrain_origins.reshape(-1, 3)

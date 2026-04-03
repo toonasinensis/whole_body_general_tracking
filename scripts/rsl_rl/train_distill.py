@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from ast import arg
 import os
 import sys
 
@@ -26,7 +27,8 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
-parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
+parser.add_argument("--resume_teacher_path", type=str, default=None, help="Path to the teacher model file.")
+parser.add_argument("--resume_student_path", type=str, default=None, help="Path to the student model file.")
 parser.add_argument("--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes.")
 
 # append RSL-RL cli arguments
@@ -159,12 +161,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # save resume path before creating a new log_dir
-    if agent_cfg.resume:
+    if args_cli.resume_student_path is not None:
         # get path to previous checkpoint
-        resume_path = args_cli.resume_path
+        resume_path = args_cli.resume_student_path
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
+
+    else:
+        print(f"[INFO] Loading experiment from directory: {log_root_path}")
+        # resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = args_cli.resume_student_path
+
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+
+        if args_cli.resume_teacher_path is not None:
+            print(f"[INFO]: Loading teacher model checkpoint from: {args_cli.resume_teacher_path}")
+            runner.load(args_cli.resume_teacher_path)
 
     # dump the configuration into log-directory
     # dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)

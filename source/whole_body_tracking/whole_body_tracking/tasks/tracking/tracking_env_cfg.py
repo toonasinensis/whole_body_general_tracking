@@ -78,7 +78,7 @@ class MySceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot/pelvis",
         offset=RayCasterCfg.OffsetCfg(pos=(1.0, 0.0, 0.5)),
         ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[3.0, 1.0]),
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[2.5, 1.0]),
         debug_vis=True,
         mesh_prim_paths=["/World/ground"],
     )
@@ -100,8 +100,8 @@ class CommandsCfg:
         max_motion_num = 100,
         motion_file = "data/tracking_npz_data",
         pose_range={
-            "x": (-0.05, 0.05),
-            "y": (-0.05, 0.05),
+            "x": (-0.0, 0.0),
+            "y": (-0.0, 0.0),
             "z": (-0.01, 0.01),
             "roll": (-0.0, 0.0),
             "pitch": (-0.0, 0.0),

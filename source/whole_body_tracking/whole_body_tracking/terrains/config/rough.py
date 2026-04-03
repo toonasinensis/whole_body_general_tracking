@@ -44,14 +44,8 @@ from whole_body_tracking.assets import ASSET_DIR
 
 # 自动扫描 assets/terrains/ 目录下的所有 STL 文件，生成均匀分配比例的地形配置
 def _build_stl_sub_terrains(terrain_dir: str) -> dict:
-    import re
-    
-    def extract_number(filename):
-        # 从文件名中提取数字用于排序
-        match = re.search(r'(\d+)', filename)
-        return int(match.group(1)) if match else 0
-    
-    stl_files = sorted(glob.glob(os.path.join(terrain_dir, "*.stl")), key=lambda f: extract_number(os.path.basename(f)))
+    # Keep the same lexicographic ordering strategy as motion npz loading.
+    stl_files = sorted(glob.glob(os.path.join(terrain_dir, "*.stl")))
     if not stl_files:
         raise FileNotFoundError(f"No STL files found in {terrain_dir}")
     proportion = 1.0 / len(stl_files)
