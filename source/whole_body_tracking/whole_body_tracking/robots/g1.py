@@ -155,9 +155,9 @@ G1_CYLINDER_CFG = ArticulationCfg(
                 ".*_shoulder_roll_joint": STIFFNESS_5020,
                 ".*_shoulder_yaw_joint": STIFFNESS_5020,
                 ".*_elbow_joint": STIFFNESS_5020,
-                ".*_wrist_roll_joint": 2 *  STIFFNESS_5020,
+                ".*_wrist_roll_joint": 2 * STIFFNESS_5020,
                 ".*_wrist_pitch_joint": 2 * STIFFNESS_4010,
-                ".*_wrist_yaw_joint":  2 * STIFFNESS_4010,
+                ".*_wrist_yaw_joint": 2 * STIFFNESS_4010,
             },
             damping={
                 ".*_shoulder_pitch_joint": DAMPING_5020,
@@ -165,8 +165,8 @@ G1_CYLINDER_CFG = ArticulationCfg(
                 ".*_shoulder_yaw_joint": DAMPING_5020,
                 ".*_elbow_joint": DAMPING_5020,
                 ".*_wrist_roll_joint": 2 * DAMPING_5020,
-                ".*_wrist_pitch_joint": 2 *DAMPING_4010,
-                ".*_wrist_yaw_joint":  2 * DAMPING_4010,
+                ".*_wrist_pitch_joint": 2 * DAMPING_4010,
+                ".*_wrist_yaw_joint": 2 * DAMPING_4010,
             },
             armature={
                 ".*_shoulder_pitch_joint": ARMATURE_5020,

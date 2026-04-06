@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # Always run under wt_env unless caller already activated an environment.
-if [[ -z "${CONDA_DEFAULT_ENV:-}" || "${CONDA_DEFAULT_ENV}" != "wt_env" ]]; then
-  source /home/xiechunyang/miniforge3/etc/profile.d/conda.sh
-  conda activate wt_env
-fi
+# if [[ -z "${CONDA_DEFAULT_ENV:-}" || "${CONDA_DEFAULT_ENV}" != "wt_env" ]]; then
+#   source /home/xiechunyang/miniforge3/etc/profile.d/conda.sh
+#   conda activate wt_env
+# fi
 
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
-NPROC_PER_NODE=4
+NPROC_PER_NODE=1
 NUM_ENVS="${NUM_ENVS:-4096}"
 
 python -m torch.distributed.run \

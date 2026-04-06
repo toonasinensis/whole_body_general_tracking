@@ -27,7 +27,9 @@ parser.add_argument("--seed", type=int, default=None, help="Seed used for the en
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
-parser.add_argument("--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes.")
+parser.add_argument(
+    "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -66,9 +68,7 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import  dump_yaml
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
@@ -93,9 +93,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.distributed:
         env_cfg.sim.device = args_cli.device
 
-        # env_cfg.commands.motion.distributed = True
-        # env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
-        # env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
+        env_cfg.commands.motion.distributed = True
+        env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
+        env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
 
         agent_cfg.device = args_cli.device
         # set seed to have diversity in different threads
@@ -113,14 +113,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     registry_name = args_cli.registry_name
     if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
         registry_name += ":latest"
-    import pathlib
 
     # import wandb
-
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
     # env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
-
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)

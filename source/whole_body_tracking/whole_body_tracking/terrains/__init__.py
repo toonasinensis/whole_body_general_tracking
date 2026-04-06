@@ -1,4 +1,3 @@
-
 # Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
@@ -21,4 +20,3 @@ There are two main components in this package:
 
 """
 from .height_field import *  # noqa: F401, F403
-

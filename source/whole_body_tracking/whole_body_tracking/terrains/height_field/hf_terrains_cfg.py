@@ -5,9 +5,9 @@
 
 from dataclasses import MISSING
 
+from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg
 from isaaclab.utils import configclass
 
-from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg
 from . import hf_terrains
 
 
@@ -38,7 +38,6 @@ Different height field terrain configurations.
 """
 
 
-
 @configclass
 class HfObstacleCfg(HfTerrainBaseCfg):
     """Configuration for a pyramid sloped height field terrain."""
@@ -49,7 +48,7 @@ class HfObstacleCfg(HfTerrainBaseCfg):
     """The slope of the terrain (in radians)."""
 
     platform_wlh: tuple[float, float, float] = (4, 2.7, 1.7 / 2)
-    platform_xyz: tuple[float, float, float] = (0.76, 4.15, 0.0)#中心点坐标
+    platform_xyz: tuple[float, float, float] = (0.76, 4.15, 0.0)  # 中心点坐标
     """The width of the square platform at the center of the terrain. Defaults to 1.0."""
 
     min_noise_range_wlh: tuple[float, float, float] = (-0.4, -0.4, -0.2)
@@ -107,8 +106,6 @@ class HfPyramidSlopedTerrainCfg(HfTerrainBaseCfg):
 
     If True, the terrain is inverted such that the platform is at the bottom and the slopes are upwards.
     """
-
-
 
 
 @configclass

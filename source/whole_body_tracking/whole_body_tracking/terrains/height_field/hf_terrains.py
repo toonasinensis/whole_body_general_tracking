@@ -436,8 +436,6 @@ def stepping_stones_terrain(difficulty: float, cfg: hf_terrains_cfg.HfSteppingSt
     return np.rint(hf_raw).astype(np.int16)
 
 
-
-
 @height_field_to_mesh
 def obstacles_terrain(difficulty: float, cfg: hf_terrains_cfg.HfObstacleCfg) -> np.ndarray:
     """Generate a terrain with height sampled uniformly from a specified range.
@@ -467,26 +465,25 @@ def obstacles_terrain(difficulty: float, cfg: hf_terrains_cfg.HfObstacleCfg) -> 
     #     raise ValueError(f"Number of waves must be a positive integer. Got: {cfg.num_waves}.")
 
     # resolve terrain configuration
-    hf_w_rd = np.random.uniform(cfg.min_noise_range_wlh[0], cfg.max_noise_range_wlh[0])   
-    hf_l_rd = np.random.uniform(cfg.min_noise_range_wlh[1], cfg.max_noise_range_wlh[1])   
-    hf_h_rd = np.random.uniform(cfg.min_noise_range_wlh[2], cfg.max_noise_range_wlh[2])   
+    hf_w_rd = np.random.uniform(cfg.min_noise_range_wlh[0], cfg.max_noise_range_wlh[0])
+    hf_l_rd = np.random.uniform(cfg.min_noise_range_wlh[1], cfg.max_noise_range_wlh[1])
+    hf_h_rd = np.random.uniform(cfg.min_noise_range_wlh[2], cfg.max_noise_range_wlh[2])
 
-    platform_w = (cfg.platform_wlh[0] + hf_w_rd)
-    platform_l = (cfg.platform_wlh[1] + hf_l_rd)
-    platform_h = (cfg.platform_wlh[2] + hf_h_rd)
+    platform_w = cfg.platform_wlh[0] + hf_w_rd
+    platform_l = cfg.platform_wlh[1] + hf_l_rd
+    platform_h = cfg.platform_wlh[2] + hf_h_rd
 
-    amplitude = (platform_h)/cfg.vertical_scale
+    amplitude = (platform_h) / cfg.vertical_scale
     # switch parameters to discrete units
     # -- terrain
     width_pixels = int(cfg.size[0] / cfg.horizontal_scale)
     length_pixels = int(cfg.size[1] / cfg.horizontal_scale)
 
-    
-    x_start = int((cfg.size[0]/2 + cfg.platform_xyz[0] - platform_w / 2 )/ cfg.horizontal_scale)
-    x_end = int((cfg.size[0]/2 + cfg.platform_xyz[0] + platform_w / 2 ) / cfg.horizontal_scale)
+    x_start = int((cfg.size[0] / 2 + cfg.platform_xyz[0] - platform_w / 2) / cfg.horizontal_scale)
+    x_end = int((cfg.size[0] / 2 + cfg.platform_xyz[0] + platform_w / 2) / cfg.horizontal_scale)
 
-    y_start = int((cfg.size[1]/2 + cfg.platform_xyz[1] - platform_l / 2 )/ cfg.horizontal_scale)
-    y_end = int((cfg.size[1]/2 + cfg.platform_xyz[1] + platform_l / 2 ) / cfg.horizontal_scale)
+    y_start = int((cfg.size[1] / 2 + cfg.platform_xyz[1] - platform_l / 2) / cfg.horizontal_scale)
+    y_end = int((cfg.size[1] / 2 + cfg.platform_xyz[1] + platform_l / 2) / cfg.horizontal_scale)
 
     # create a terrain with a flat platform at the center
     hf_raw = np.zeros((width_pixels, length_pixels))

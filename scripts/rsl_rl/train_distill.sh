@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 
 NPROC_PER_NODE=1
 NUM_ENVS="${NUM_ENVS:-4096}"

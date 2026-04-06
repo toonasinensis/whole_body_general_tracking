@@ -32,6 +32,18 @@ parser.add_argument(
 )
 parser.add_argument("--output_name", type=str, required=False, help="The name of the motion npz file.")
 parser.add_argument("--output_fps", type=int, default=50, help="The fps of the output motion.")
+parser.add_argument(
+    "--max_files_per_run",
+    type=int,
+    default=4000,
+    help="Maximum number of motion files to process in one run.",
+)
+parser.add_argument(
+    "--batch_index",
+    type=int,
+    default=0,
+    help="0-based batch index. batch 0 handles files [0, max_files_per_run).",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -102,11 +114,19 @@ class MotionLoader:
         motion_file: str,
         output_fps: int,
         device: torch.device,
+        max_files_per_run: int = 8000,
+        batch_index: int = 0,
     ):
         self.motion_file = motion_file
         self.output_fps = output_fps
         self.output_dt = 1.0 / self.output_fps
         self.device = device
+        if max_files_per_run <= 0:
+            raise ValueError(f"max_files_per_run must be > 0, got {max_files_per_run}")
+        if batch_index < 0:
+            raise ValueError(f"batch_index must be >= 0, got {batch_index}")
+        self.max_files_per_run = max_files_per_run
+        self.batch_index = batch_index
         self._load_motion()
         self.lerp_bp = []
         self.lerp_bq = []
@@ -156,86 +176,30 @@ class MotionLoader:
         self.current_idx = torch.zeros_like(self.lerpfn, device=self.device)
         self.finish_flag = torch.zeros_like(self.lerpfn, device=self.device, dtype=torch.bool)
 
-    def _load_motion(self):
-        """Loads the motion from the csv file."""
-        ext = ".csv"
-        # import ipdb;ipdb.set_trace()
-        if ext == ".csv":
-            self.motion_names = []
-            for root, _, files in os.walk(self.motion_file):
-                for f in files:
-                    if f.endswith(".csv"):
-                        rel_path = os.path.relpath(os.path.join(root, f), self.motion_file)
-                        self.motion_names.append(rel_path)
+    def _select_batch(self, motion_names: list[str]) -> list[str]:
+        motion_names = sorted(motion_names)
+        total_files = len(motion_names)
+        if total_files == 0:
+            raise ValueError(f"No motion file found under: {self.motion_file}")
 
-            self.joint_pos_list = []
-            self.body_pos_w_list = []
-            self.body_quat_w_list = []
-            self.fps_list = []
-            data_list = []
-            self.duration_list = []
-            self.input_frames_list = []
-
-            csv_file_paths = [os.path.join(self.motion_file, f) for f in self.motion_names]
-
-            for f_path in csv_file_paths:
-                motion = torch.from_numpy(np.loadtxt(f_path, delimiter=","))
-                self.data_joint_order = [
-                    "left_hip_pitch_joint",
-                    "left_hip_roll_joint",
-                    "left_hip_yaw_joint",
-                    "left_knee_joint",
-                    "left_ankle_pitch_joint",
-                    "left_ankle_roll_joint",
-                    "right_hip_pitch_joint",
-                    "right_hip_roll_joint",
-                    "right_hip_yaw_joint",
-                    "right_knee_joint",
-                    "right_ankle_pitch_joint",
-                    "right_ankle_roll_joint",
-                    "waist_yaw_joint",
-                    "waist_roll_joint",
-                    "waist_pitch_joint",
-                    "left_shoulder_pitch_joint",
-                    "left_shoulder_roll_joint",
-                    "left_shoulder_yaw_joint",
-                    "left_elbow_joint",
-                    "left_wrist_roll_joint",
-                    "left_wrist_pitch_joint",
-                    "left_wrist_yaw_joint",
-                    "right_shoulder_pitch_joint",
-                    "right_shoulder_roll_joint",
-                    "right_shoulder_yaw_joint",
-                    "right_elbow_joint",
-                    "right_wrist_roll_joint",
-                    "right_wrist_pitch_joint",
-                    "right_wrist_yaw_joint",
-                ]
-                data_list.append(motion)
-
-            for data in data_list:
-                data = data.to(torch.float32).to(self.device)
-
-                motion_base_rots_input = data[:, 3:7]
-
-                j_pos = data[:, 7:].to(self.device)  # (num_frame, dof)
-                b_pos = data[:, :3]  # (num_frame, 3)
-                b_quat = motion_base_rots_input[:, [3, 0, 1, 2]]  # (num_frame, 4)
-                fps = float(args_cli.input_fps)
-                num_frame, dof = j_pos.shape
-
-                self.joint_pos_list.append(j_pos.unsqueeze(0))  # (1, max_frame, dof)
-                self.body_pos_w_list.append(b_pos.unsqueeze(0))  # (1, max_frame, dof)
-                self.body_quat_w_list.append(b_quat.unsqueeze(0))  # (1, max_frame, dof)
-                self.fps_list.append(fps)
-                self.duration_list.append((num_frame - 1) / float(fps))
-                self.input_frames_list.append(num_frame)
-                self.motion_num = len(data_list)
-            print(
-                f"Motion loaded ({self.motion_file}), duration: {self.duration_list} sec, frames:"
-                f" {self.input_frames_list}"
+        start = self.batch_index * self.max_files_per_run
+        end = min(start + self.max_files_per_run, total_files)
+        if start >= total_files:
+            raise ValueError(
+                f"batch_index={self.batch_index} is out of range for {total_files} files "
+                f"with max_files_per_run={self.max_files_per_run}."
             )
 
+        print(
+            f"[BATCH] processing batch {self.batch_index}: files [{start}, {end}) / {total_files}, count={end - start}"
+        )
+        return motion_names[start:end]
+
+    def _load_motion(self):
+        """Loads the motion from the csv file."""
+        ext = ".npz"
+        # import ipdb;ipdb.set_trace()
+        if ext == ".csv":
             pass
         elif ext == ".json":
             self.motion_names = []
@@ -245,9 +209,7 @@ class MotionLoader:
                         rel_path = os.path.relpath(os.path.join(root, f), self.motion_file)
                         self.motion_names.append(rel_path)
 
-            # self.motion_names = [f for f in os.listdir(self.motion_file) if f.endswith(".json")]
-            # self.motion_names.sort()  # 可选，保证顺序
-            # self.motion_names = npz_files
+            self.motion_names = self._select_batch(self.motion_names)
 
             self.joint_pos_list = []
             self.body_pos_w_list = []
@@ -271,14 +233,22 @@ class MotionLoader:
                 j_pos = torch.tensor(data["dof_pos"], dtype=torch.float32, device=self.device)  # (num_frame, dof)
                 b_pos = torch.tensor(data["root_trans"], dtype=torch.float32, device=self.device)  # (num_frame, 3)
                 b_quat = torch.tensor(data["root_wxyz"], dtype=torch.float32, device=self.device)  # (num_frame, 4)
-                fps = float(data["fps"])
+                fps = float(data["fps"]) if not isinstance(data["fps"], list) else float(data["fps"][0])
                 num_frame, dof = j_pos.shape
 
+                # 补齐到 (max_frame, dof)
+                # padded_j = torch.zeros(max_frame, dof, device=self.device)
+                # padded_p = torch.zeros(max_frame, b_pos, device=self.device)
+                # padded_q = torch.zeros(max_frame, b_quat, device=self.device)
+
+                # padded_j[:num_frame] = j_pos
+                # padded_p[:num_frame] = b_pos
+                # padded_q[:num_frame] = b_quat
                 self.joint_pos_list.append(j_pos.unsqueeze(0))  # (1, max_frame, dof)
                 self.body_pos_w_list.append(b_pos.unsqueeze(0))  # (1, max_frame, dof)
                 self.body_quat_w_list.append(b_quat.unsqueeze(0))  # (1, max_frame, dof)
                 self.fps_list.append(fps)
-                self.duration_list.append((num_frame - 1) / float(fps))
+                self.duration_list.append(float(num_frame - 1) / fps)
                 self.input_frames_list.append(num_frame)
                 self.motion_num = len(data_list)
             print(
@@ -293,6 +263,8 @@ class MotionLoader:
                     if f.endswith(".npz"):
                         rel_path = os.path.relpath(os.path.join(root, f), self.motion_file)
                         self.motion_names.append(rel_path)
+
+            self.motion_names = self._select_batch(self.motion_names)
 
             # self.motion_names = [f for f in os.listdir(self.motion_file) if f.endswith(".npz")]
             # self.motion_names.sort()  # 可选，保证顺序
@@ -343,20 +315,27 @@ class MotionLoader:
                 ]
                 data_list.append(data)
             # import ipdb;ipdb.set_trace()
-            max_frame = max(data["qpos"].shape[0] for data in data_list)  # noqa: F841
+            max_frame = max(data["joint_pos"].shape[0] for data in data_list)  # noqa: F841
 
             for data in data_list:
-                j_pos = torch.tensor(data["qpos"][:, 7:], dtype=torch.float32, device=self.device)  # (num_frame, dof)
-                b_pos = torch.tensor(data["qpos"][:, 4:7], dtype=torch.float32, device=self.device)  # (num_frame, 3)
-                b_quat = torch.tensor(data["qpos"][:, 0:4], dtype=torch.float32, device=self.device)  # (num_frame, 4)
-                fps = float(data["fps"])
+
+                # j_pos = torch.tensor(data["qpos"][:,7:], dtype=torch.float32, device=self.device)  # (num_frame, dof)
+                # b_pos = torch.tensor(data["qpos"][:,4:7], dtype=torch.float32, device=self.device)  # (num_frame, 3)
+                # b_quat = torch.tensor(data["qpos"][:,0:4], dtype=torch.float32, device=self.device)  # (num_frame, 4)
+
+                j_pos = torch.tensor(data["joint_pos"], dtype=torch.float32, device=self.device)  # (num_frame, dof)
+                b_pos = torch.tensor(data["root_pos_w"], dtype=torch.float32, device=self.device)  # (num_frame, 3)
+                b_quat = torch.tensor(data["root_quat_w"], dtype=torch.float32, device=self.device)  # (num_frame, 4)
+
+                # import ipdb;ipdb.set_trace()
+                fps = 50.0
                 num_frame, dof = j_pos.shape
 
                 self.joint_pos_list.append(j_pos.unsqueeze(0))  # (1, max_frame, dof)
                 self.body_pos_w_list.append(b_pos.unsqueeze(0))  # (1, max_frame, dof)
                 self.body_quat_w_list.append(b_quat.unsqueeze(0))  # (1, max_frame, dof)
                 self.fps_list.append(fps)
-                self.duration_list.append((num_frame - 1) / float(fps))
+                self.duration_list.append(float(num_frame - 1) / fps)
                 self.input_frames_list.append(num_frame)
                 self.motion_num = len(data_list)
             print(
@@ -415,7 +394,7 @@ class MotionLoader:
 
         phase = times / duration
         index_0 = (phase * (input_frames - 1)).floor().long()
-        index_1 = torch.clamp(index_0 + 1, max=input_frames - 1)
+        index_1 = torch.minimum(index_0 + 1, torch.tensor(input_frames - 1))
         blend = phase * (input_frames - 1) - index_0
         return index_0, index_1, blend
 
@@ -490,6 +469,7 @@ def run_simulator(
     motion: MotionLoader, sim: sim_utils.SimulationContext, scene: InteractiveScene, joint_names: list[str]
 ):
     """Runs the simulation loop."""
+    # Load motion
     # Extract scene entities
     robot = scene["robot"]
     robot_joint_indexes = robot.find_joints(joint_names, preserve_order=True)[0]
@@ -598,6 +578,8 @@ def run_simulator(
 
                 np.savez_compressed(save_path, **motion_file2_save)
 
+        if file_saved:
+            exit(0)
             # os.makedirs(COLLECTION, exist_ok=True)   # 确保目录存在
             # np.savez(motion.motion_file, **log)
 
@@ -609,16 +591,15 @@ def main():
     sim_cfg.dt = 1.0 / args_cli.output_fps
 
     sim = SimulationContext(sim_cfg)
+    default_motion_file = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/AMASS_single_motion"
+    motion_file = args_cli.input_file or default_motion_file
     # Design scene
     motion = MotionLoader(
-        # motion_file="/home/ubuntu/mgg_worspace/project/mgg_wbc/whole_body_parkour/to_real_data/getup2_test/json", #[edit]
-        # motion_file="/home/ubuntu/mgg_worspace/project/dataset/amass_cr1s/cr1s/retargeted_data", #[edit]
-        # motion_file="/home/ubuntu/mgg_worspace/project/mgg_imma/output/cr1s/lafan_walk_things", #[edit]
-        motion_file="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1_lafan",
-        # motion_file="/home/ubuntu/mgg_worspace/project/mgg_wbc/whole_body_parkour/to_real_data/run_test/json", #[edit]
-        # input_fps=args_cli.input_fps,
-        output_fps=50,
+        motion_file=motion_file,
+        output_fps=args_cli.output_fps,
         device=sim.device,
+        max_files_per_run=args_cli.max_files_per_run,
+        batch_index=args_cli.batch_index,
     )
     scene_cfg = ReplayMotionsSceneCfg(num_envs=motion.motion_num, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)

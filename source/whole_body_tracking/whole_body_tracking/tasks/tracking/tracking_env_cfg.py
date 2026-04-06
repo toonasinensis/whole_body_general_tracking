@@ -12,7 +12,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
+from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns  # noqa: F401
 from isaaclab.terrains import TerrainImporterCfg
 
 ##
@@ -22,7 +22,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 import whole_body_tracking.tasks.tracking.mdp as mdp
-from whole_body_tracking.terrains.config import STL_PLATFORM_TERRAINS_CFG, GRAVEL_TERRAINS_CFG
+from whole_body_tracking.terrains.config import GRAVEL_TERRAINS_CFG, STL_PLATFORM_TERRAINS_CFG  # noqa: F401
 
 ##
 # Scene definition
@@ -74,14 +74,14 @@ class MySceneCfg(InteractiveSceneCfg):
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True, force_threshold=10.0, debug_vis=True
     )
-    height_scanner = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/pelvis",
-        offset=RayCasterCfg.OffsetCfg(pos=(1.0, 0.0, 0.5)),
-        ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[2.5, 1.0]),
-        debug_vis=True,
-        mesh_prim_paths=["/World/ground"],
-    )
+    # height_scanner = RayCasterCfg(
+    #     prim_path="{ENV_REGEX_NS}/Robot/pelvis",
+    #     offset=RayCasterCfg.OffsetCfg(pos=(1.0, 0.0, 0.5)),
+    #     ray_alignment="yaw",
+    #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[2.5, 1.0]),
+    #     debug_vis=True,
+    #     mesh_prim_paths=["/World/ground"],
+    # }
 
 
 ##
@@ -97,8 +97,8 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(1.0e9, 1.0e9),
         debug_vis=True,
-        max_motion_num = 100,
-        motion_file = "data/tracking_npz_data",
+        max_motion_num=999999,
+        motion_file="data/tracking_npz_data/lafan",
         pose_range={
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
@@ -163,7 +163,7 @@ class ObservationsCfg:
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         # height_scan = ObsTerm(func=mdp.height_scan, params={"sensor_cfg": SceneEntityCfg("height_scanner")})
         actions = ObsTerm(func=mdp.last_action)
-        
+
     # observation groups
     policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
