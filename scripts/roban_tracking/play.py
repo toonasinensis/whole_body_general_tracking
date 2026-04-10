@@ -14,13 +14,12 @@ import cli_args  # isort: skip
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument(
-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
-)
+parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to local motion npz (overrides wandb_path)")
 parser.add_argument("--model_path", type=str, default=None, help="Direct path to model checkpoint file (.pt)")
+
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -29,7 +28,6 @@ args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
-
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
 
@@ -241,9 +239,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
-            print("obs shape:", obs.shape)
-            print("obs[0] =", obs[0])       # 第0个env的观测
-            print("actions =", actions[0])  # 第0个env的动作输出
 
         if args_cli.video:
             timestep += 1

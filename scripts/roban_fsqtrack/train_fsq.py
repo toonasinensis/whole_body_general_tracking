@@ -35,6 +35,14 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video: args_cli.enable_cameras = True
+
+# If launched via torchrun, make sure each process uses its own GPU.
+# custom_rsl_rl's runner expects device == f"cuda:{LOCAL_RANK}" when WORLD_SIZE>1.
+_world_size = int(os.environ.get("WORLD_SIZE", "1"))
+_local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+if _world_size > 1:
+    if args_cli.device is None or str(args_cli.device).lower() == "cuda":
+        args_cli.device = f"cuda:{_local_rank}"
 sys.argv = [sys.argv[0]] + hydra_args
 
 ### launch isaac sim ###
@@ -83,6 +91,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    # Distributed training: shard motion bins per-rank so each process doesn't load the full dataset.
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    if hasattr(env_cfg, "commands") and hasattr(env_cfg.commands, "motion"):
+        motion_cfg = env_cfg.commands.motion
+        if hasattr(motion_cfg, "distributed_world_size"):
+            motion_cfg.distributed_world_size = world_size
+        if hasattr(motion_cfg, "distributed_rank"):
+            motion_cfg.distributed_rank = rank
+        if hasattr(motion_cfg, "distributed_data_split"):
+            motion_cfg.distributed_data_split = world_size > 1
 
     ####################
     # load motion data #

@@ -14,16 +14,6 @@ python scripts/roban_fsqrack/play_fsq.py \
   --num_envs 16
   --episode_length_s 40.0
 
-# ==========================================
-
-python scripts/roban_tracking/train.py \
-  --task Tracking-Flat-RobanS22-v0 \
-  --motion_file assets/roban_motions/newdance_01_Skeleton.npz \
-  --headless
-  --logger wandb \
-  --log_project_name roban_flat
-
-
 # BeyondMimic Motion Tracking Code
 
 [![IsaacSim](https://img.shields.io/badge/IsaacSim-4.5.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)

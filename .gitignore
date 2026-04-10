@@ -1,5 +1,6 @@
 # repo specific
 v_stack/*
+assets/*
 
 # Omniverse
 **/*.dmp

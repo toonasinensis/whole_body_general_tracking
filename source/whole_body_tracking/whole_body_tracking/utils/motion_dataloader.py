@@ -638,11 +638,18 @@ class Motion_Bins_Dataloader:
         #########################################################
         # Step 2: Determine which motions to load for this rank #
         #########################################################
-        # TODO implement distributed training mechanism (data parallel)
-        # load all motions
-        self.start_motion_idx = 0
-        self.end_motion_idx = self.global_num_motions
+        # Distributed sharding: assign whole motion bins to ranks.
+        # For bins, each item is already a fixed-length segment (same preprocessing),
+        # so partitioning by frame count is effectively partitioning by motion count,
+        # but we keep the frame-count-based logic for robustness.
+        if self.enable_data_split and self.world_size > 1:
+            self._compute_rank_motion_indices(all_motion_lengths)
+        else:
+            # load all motions
+            self.start_motion_idx = 0
+            self.end_motion_idx = self.global_num_motions
         self.num_motions = self.end_motion_idx - self.start_motion_idx
+
 
         #########################################################
         # Step 3: Load and concatenate only this rank's motions #
@@ -695,6 +702,33 @@ class Motion_Bins_Dataloader:
             f"  - motion_lengths: {self.motion_lengths.shape}, "
             f"range: [{self.motion_lengths.min()}, {self.motion_lengths.max()}]"
         )
+
+    def _compute_rank_motion_indices(self, all_motion_lengths: list[int]) -> None:
+        """Assign a contiguous range of motion bins to this rank.
+
+        Strategy: partition by cumulative frame counts to balance load across ranks.
+        Motions are never split across ranks.
+        """
+        total_frames = sum(all_motion_lengths)
+        # +1 safety matches other dataloaders in this file
+        target_frames_per_rank = math.ceil(total_frames / self.world_size) + 1
+
+        cumulative_lengths = list(accumulate(all_motion_lengths))
+        cur_rank_tg_start_frames = self.rank * target_frames_per_rank
+        cur_rank_tg_end_frames = (self.rank + 1) * target_frames_per_rank
+
+        start_motion_idx = bisect.bisect_left(cumulative_lengths, cur_rank_tg_start_frames)
+        end_motion_idx = bisect.bisect_right(cumulative_lengths, cur_rank_tg_end_frames)
+
+        self.start_motion_idx = start_motion_idx
+        self.end_motion_idx = min(end_motion_idx, self.global_num_motions)
+
+        rank_total_frames = sum(all_motion_lengths[i] for i in range(self.start_motion_idx, self.end_motion_idx))
+        print(f"[Motion_Bins_Dataloader] Rank {self.rank}/{self.world_size} motion-bin assignment:")
+        print(f"  - Motion bin range: [{self.start_motion_idx}, {self.end_motion_idx})")
+        print(f"  - Number of motion bins: {self.end_motion_idx - self.start_motion_idx}")
+        print(f"  - Target frames per rank: {target_frames_per_rank}")
+        print(f"  - Assigned frames: {rank_total_frames}")
 
     def _get_motion_length(self, motion_id: int):
         return self.motion_lengths[motion_id].item()
