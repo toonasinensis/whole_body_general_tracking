@@ -13,11 +13,12 @@ from isaaclab.utils.types import ArticulationActions
 from isaaclab.actuators import DelayedPDActuator
 
 if TYPE_CHECKING:
-    from .actuator_cfg import DelayedPDActuatorCfg_RobanS2
+    from .actuator_cfg import DelayedPDActuatorCfg_RobanS22
     from .actuator_cfg import DelayedPDActuatorCfg_KuavoS52
 import re
 
-class DelayedPDActuator_RobanS2(DelayedPDActuator):
+
+class DelayedPDActuator_RobanS22(DelayedPDActuator):
     """Ideal PD actuator with delayed command application.
 
     This class extends the :class:`IdealPDActuator` class by adding a delay to the actuator commands. The delay
@@ -30,10 +31,9 @@ class DelayedPDActuator_RobanS2(DelayedPDActuator):
     to the class.
     """
 
-    cfg: DelayedPDActuatorCfg_RobanS2
-    """The configuration for the actuator model."""
+    cfg: DelayedPDActuatorCfg_RobanS22
 
-    def __init__(self, cfg: DelayedPDActuatorCfg_RobanS2, *args, **kwargs):
+    def __init__(self, cfg: DelayedPDActuatorCfg_RobanS22, *args, **kwargs):
         super().__init__(cfg, *args, **kwargs)
         self.friction_static = self._parse_joint_parameter(self.cfg.friction_static, 0.)
         self.activation_vel = self._parse_joint_parameter(self.cfg.activation_vel, torch.inf)
@@ -106,7 +106,6 @@ class DelayedPDActuator_RobanS2(DelayedPDActuator):
         return limits_tensor
     
     def _clip_effort(self, effort: torch.Tensor) -> torch.Tensor:
-        # 安全除法，避免除以零
         safe_vel_ratio = torch.where(
             self.velocity_limit > 1e-6,  # 避免除以接近零的值
             self._joint_vel / self.velocity_limit,
@@ -137,7 +136,6 @@ class DelayedPDActuator_KuavoS52(DelayedPDActuator):
     """
 
     cfg: DelayedPDActuatorCfg_KuavoS52
-    """The configuration for the actuator model."""
 
     def __init__(self, cfg: DelayedPDActuatorCfg_KuavoS52, *args, **kwargs):
         super().__init__(cfg, *args, **kwargs)

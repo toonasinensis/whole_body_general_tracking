@@ -1,4 +1,4 @@
-python scripts/rsl_fsq_roban/train_fsq.py \
+python scripts/roban_fsqtrack/train_fsq.py \
   --task Fsqtrack-Flat-Roban-v0 \
   --motion_path assets/roban_motions_bins_50 \
   --headless \
@@ -7,7 +7,7 @@ python scripts/rsl_fsq_roban/train_fsq.py \
   --logger wandb \
   --log_project_name roban_flat
 
-python scripts/rsl_fsq_roban/play_fsq.py \
+python scripts/roban_fsqrack/play_fsq.py \
   --task Fsqtrack-Flat-Roban-v0 \
   --motion_file assets/roban_motions/newdance_01_Skeleton.npz \
   --model_path logs/rsl_rl/fsqtrackRoban_flat/2026-04-07_23-39-16/model_38500.pt \
@@ -16,93 +16,13 @@ python scripts/rsl_fsq_roban/play_fsq.py \
 
 # ==========================================
 
-python scripts/rsl_roban/train.py \
-  --task Tracking-Flat-RobanS2_2-v0 \
+python scripts/roban_tracking/train.py \
+  --task Tracking-Flat-RobanS22-v0 \
   --motion_file assets/roban_motions/newdance_01_Skeleton.npz \
   --headless
   --logger wandb \
   --log_project_name roban_flat
 
-# ==========================================
-
-python scripts/rsl_rl/train.py \
-  --task=Tracking-Flat-S52-v0 \
-  --motion_file motiondata/npz/kuavo5_new_year_dance.npz \
-  --headless
-  --logger wandb \
-  --log_project_name kuavoS52_flat
-
-python scripts/rsl_rl/play.py \
-  --task=Tracking-Flat-S52-v0 \
-  --motion_file motiondata/npz/kuavo5_new_year_dance.npz \
-  --model_path logs/rsl_rl/kuavoS52_flat/2026-03-03_14-57-56/model_99999.pt \
-
-# ==========================================
-
-python scripts/rsl_sonic/train_sonic.py \
-  --task=Sonic-Flat-S52-v0 \
-  --motion_file motiondata/npz/kuavo5_new_year_dance.npz \
-  --headless \
-  --logger wandb \
-  --log_project_name kuavoS52_flat
-
-python scripts/rsl_sonic/play_sonic.py \
-  --task=Sonic-Flat-S52-v0 \
-  --motion_file motiondata/npz/kuavo5_new_year_dance.npz \
-  --model_path logs/rsl_rl/kuavoS52_flat/2026-03-08_20-21-48/model_99999.pt \
-  --num_envs 16
-  --no_disturbance
-
-# ==========================================
-
-python scripts/rsl_son/train_son.py \
-  --task Son-Flat-S52-v0 \
-  --motion_path assets/motion_bins_50 \
-  --experiment_name son_s52 \
-  --num_envs 4096 \
-  --device cuda \
-  --headless \
-  --logger wandb \
-  --log_project_name kuavoS52_flat
-
-python scripts/rsl_son/play_son.py \
-  --task Son-Flat-S52-v0 \
-  --motion_file motiondata/npz/kuavo5_new_year_dance.npz \
-  --model_path logs/rsl_rl/kuavoS52_flat/2026-03-13_16-16-19/model_85000.pt \
-  --num_envs 16
-
-# ==========================================
-python scripts/rsl_fsq/train_fsq.py \
-  --task Fsqtrack-Flat-S52-v0 \
-  --motion_path assets/motion_bins_50 \
-  --experiment_name son_s52 \
-  --num_envs 4096 \
-  --device cuda \
-  --headless \
-  --logger wandb \
-  --log_project_name kuavoS52_flat
-
-python scripts/rsl_fsq/play_fsq.py \
-  --task Fsqtrack-Flat-S52-v0 \
-  --motion_file motiondata/npz/kuavo5_new_year_dance.npz \
-  --model_path logs/rsl_rl/fsqtrackS52_flat/2026-03-14_17-41-45/model_96500.pt \
-  --num_envs 16
-  --episode_length_s 40.0
-
-# ============================================ 
-python scripts/split_motion_npz.py split \
-    --input motiondata/npz/kuavo5_new_year_dance.npz \
-    --output-dir assets/motion_bins_50/ \
-    --segment-seconds 1 \
-    --overlap-ratio 0.95 \
-    --write-info-yaml \
-    --robot-name s52
-
-
-0 - Data Preparation 
-1 - Sampling Mechanism
-2 - Model Architecture
-3 - PPO Algorithm and runner
 
 # BeyondMimic Motion Tracking Code
 

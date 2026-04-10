@@ -6,21 +6,20 @@
 
 # from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.actuators import DelayedPDActuatorCfg
-
 from isaaclab.utils import configclass
 
 # from .actuator_pd import DelayedImplicitActuator
-from .actuator_pd import DelayedPDActuator_RobanS2
+from .actuator_pd import DelayedPDActuator_RobanS22
 from .actuator_pd import DelayedPDActuator_KuavoS52
 from dataclasses import MISSING
 import torch
 
 
 @configclass
-class DelayedPDActuatorCfg_RobanS2(DelayedPDActuatorCfg):
+class DelayedPDActuatorCfg_RobanS22(DelayedPDActuatorCfg):
     """Configuration for a delayed PD actuator."""
-
-    class_type: type = DelayedPDActuator_RobanS2
+    effort_limit_rated: float | dict[str, float] = MISSING
+    class_type: type = DelayedPDActuator_RobanS22
     friction_static: float | dict[str, float] = 0
     activation_vel: float = torch.inf
     friction_dynamic: float | dict[str, float] = 0
@@ -35,9 +34,3 @@ class DelayedPDActuatorCfg_KuavoS52(DelayedPDActuatorCfg):
     activation_vel: float = torch.inf
     friction_dynamic: float | dict[str, float] = 0
 
-
-@configclass
-class DelayedPDActuatorCfg_RobanS2_2(DelayedPDActuatorCfg_RobanS2):
-    """Configuration for a delayed PD actuator S2_2."""
-    
-    effort_limit_rated: float | dict[str, float] = MISSING

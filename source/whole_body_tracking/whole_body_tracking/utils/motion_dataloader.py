@@ -9,14 +9,14 @@ import torch
 from itertools import accumulate
 import bisect
 import math
-import numpy as np
-from typing import Any, Dict, Optional
+from typing import Dict
 
 from whole_body_tracking.utils.motion_dataset import (
     Motion_Bins_Dataset,
     Motion_Dataset,
     Unify_Motion_Dataset,
 )
+
 
 class Motion_Dataloader:
     """Dataloader for sampling motion clips with optional weighted sampling.
@@ -529,6 +529,7 @@ class Unify_Motion_Dataloader(Motion_Dataloader):
         print(f"  motion_offsets: {self.motion_offsets.shape}")
 
 
+# TODO implement distributed training mechanism
 class Motion_Bins_Dataloader:
     """ Internal class for storing concatenated motion data tensors.
 
@@ -542,8 +543,6 @@ class Motion_Bins_Dataloader:
         body_quat_w: [total_frames, num_bodies, 4]             - Body quaternions (world frame)
         body_lin_vel_w: [total_frames, num_bodies, 3]          - Body linear velocities
         body_ang_vel_w: [total_frames, num_bodies, 3]          - Body angular velocities
-    
-    TODO implement distributed training mechanism
     """
 
     class MotionBinsBuffer:

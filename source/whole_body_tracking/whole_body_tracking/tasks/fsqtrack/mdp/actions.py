@@ -12,7 +12,7 @@ from isaaclab.assets.articulation import Articulation
 from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.envs.mdp.actions import JointAction, JointPositionAction
 
-from whole_body_tracking.tasks.son.mdp.commands import MultiMotionCommand
+from whole_body_tracking.tasks.fsqtrack.mdp.commands import MultiMotionCommand
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv

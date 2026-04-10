@@ -4,6 +4,8 @@ from isaaclab.assets.articulation import ArticulationCfg
 
 from whole_body_tracking.assets import ASSET_DIR
 
+
+#region joints properties
 ARMATURE_5020 = 0.003609725
 ARMATURE_7520_14 = 0.010177520
 ARMATURE_7520_22 = 0.025101925
@@ -21,7 +23,10 @@ DAMPING_5020 = 2.0 * DAMPING_RATIO * ARMATURE_5020 * NATURAL_FREQ
 DAMPING_7520_14 = 2.0 * DAMPING_RATIO * ARMATURE_7520_14 * NATURAL_FREQ
 DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
 DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
+#endregion joints properties
 
+
+# TODO reset the initial state as stand pose for G1 robot
 G1_CYLINDER_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
@@ -213,6 +218,8 @@ G1_CYLINDER_CFG = ArticulationCfg(
     },
 )
 
+
+# Compute the action scale for joints of G1 robot 
 G1_ACTION_SCALE = {}
 for a in G1_CYLINDER_CFG.actuators.values():
     e = a.effort_limit_sim

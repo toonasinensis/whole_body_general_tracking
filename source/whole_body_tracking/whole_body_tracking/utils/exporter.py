@@ -11,6 +11,7 @@ import onnx
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
 
+
 def export_motion_policy_as_onnx(
     env: ManagerBasedRLEnv,
     actor_critic: object,
@@ -26,6 +27,7 @@ def export_motion_policy_as_onnx(
 
 
 class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
+    # OnnxExporter can merge multiple NNs through defining the forward function in the class
     def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
         super().__init__(actor_critic, normalizer, verbose)
         cmd = env.command_manager.get_term("motion")

@@ -1,3 +1,5 @@
+""" This file defines the MDP """
+
 from __future__ import annotations
 
 from dataclasses import MISSING
@@ -14,12 +16,10 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.terrains import TerrainImporterCfg
-
-from whole_body_tracking.tasks.fsqtrack.mdp.terrain_rough import MY_ROUGH_TERRAINS_CFG
-from whole_body_tracking.robots.roban_s2_2 import PRESERVE_JOINT_ORDER_ASSET_CFG
-
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+
+from whole_body_tracking.robots.roban_s22 import PRESERVE_JOINT_ORDER_ASSET_CFG
 
 import whole_body_tracking.tasks.fsqtrack.mdp as mdp
 

@@ -3,7 +3,7 @@
 from isaaclab.utils import configclass
 from whole_body_tracking.robots.kuavo_s52 import KUAVO_S52_CFG , S52_ACTION_SCALE
 from whole_body_tracking.robots.kuavo_s52 import KUAVO_S52_PRESERVE_JOINT_ORDER_ASSET_CFG
-from whole_body_tracking.tasks.fsqtrack.fsqtrack_env_cfg import FsqtrackEnvCfg
+from whole_body_tracking.tasks.fsqtrack.fsqtrack_env_cfg_kuavo import FsqtrackEnvCfg
 from whole_body_tracking.tasks.fsqtrack.config.kuavo_s52.agents.rsl_rl_ppo_cfg import LOW_FREQ_SCALE
 
 

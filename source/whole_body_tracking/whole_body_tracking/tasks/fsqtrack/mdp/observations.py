@@ -18,7 +18,7 @@ from isaaclab.envs.mdp.observations import (
     generated_commands as _generated_commands,
 )
 
-from whole_body_tracking.tasks.son.mdp.commands import MultiMotionCommand
+from whole_body_tracking.tasks.fsqtrack.mdp.commands import MultiMotionCommand
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
