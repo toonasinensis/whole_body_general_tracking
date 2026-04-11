@@ -36,13 +36,18 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video: args_cli.enable_cameras = True
 
-# If launched via torchrun, make sure each process uses its own GPU.
-# custom_rsl_rl's runner expects device == f"cuda:{LOCAL_RANK}" when WORLD_SIZE>1.
+# If launched via torchrun, each process must use cuda:{LOCAL_RANK}. AppLauncher defaults to
+# --device cuda:0, which would otherwise apply to every rank and break custom_rsl_rl's check.
 _world_size = int(os.environ.get("WORLD_SIZE", "1"))
 _local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 if _world_size > 1:
-    if args_cli.device is None or str(args_cli.device).lower() == "cuda":
-        args_cli.device = f"cuda:{_local_rank}"
+    _expected_dev = f"cuda:{_local_rank}"
+    if args_cli.device is not None and str(args_cli.device) != _expected_dev:
+        print(
+            f"[WARN] torchrun (WORLD_SIZE={_world_size}): overriding --device {args_cli.device!r} "
+            f"with {_expected_dev!r} for LOCAL_RANK={_local_rank} (required by RSL multi-GPU)."
+        )
+    args_cli.device = _expected_dev
 sys.argv = [sys.argv[0]] + hydra_args
 
 ### launch isaac sim ###
@@ -91,6 +96,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    # RSL runner checks device == f"cuda:{LOCAL_RANK}" when WORLD_SIZE>1 (see custom OnPolicyRunner).
+    if args_cli.device is not None:
+        agent_cfg.device = args_cli.device
 
     # Distributed training: shard motion bins per-rank so each process doesn't load the full dataset.
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -103,6 +111,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             motion_cfg.distributed_rank = rank
         if hasattr(motion_cfg, "distributed_data_split"):
             motion_cfg.distributed_data_split = world_size > 1
+
+    # URDF import (Roban) writes a generated USD under a temp directory. The default directory name
+    # uses second-resolution time + random.randint(0, 9999), so several torchrun ranks starting
+    # together can collide, corrupt the USD, and then activate_contact_sensors sees no rigid bodies.
+    if world_size > 1 and hasattr(env_cfg, "scene"):
+        import tempfile
+
+        _robot = getattr(env_cfg.scene, "robot", None)
+        _spawn = getattr(_robot, "spawn", None) if _robot is not None else None
+        if _spawn is not None and getattr(_spawn, "usd_dir", None) is None:
+            _lr = int(os.environ.get("LOCAL_RANK", "0"))
+            _usd_dir = os.path.join(
+                tempfile.gettempdir(),
+                "IsaacLab",
+                f"urdf_conv_ws{world_size}_rank{_lr}_pid{os.getpid()}",
+            )
+            env_cfg.scene.robot = _robot.replace(spawn=_spawn.replace(usd_dir=_usd_dir))
+            print(f"[INFO] Multi-GPU: per-rank URDF USD output (avoid import races): {_usd_dir}")
 
     ####################
     # load motion data #
