@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-MOTION_BINS_DIR = REPO_ROOT / "assets" / "motion_bins_50"
+MOTION_BINS_DIR = REPO_ROOT / "assets" / "roban_motions_bins_50" / "210531"
 
 
 def load_motion_bins_dir(bins_dir: Path) -> list[Path]:

@@ -1,24 +1,34 @@
 """Split motion NPZ into segments (with optional overlap) and/or generate Motion_Dataset info.yaml.
 
-Two subcommands:
+Subcommands:
 
-  1. split   Split one NPZ into fixed-duration segments; optional overlap via --overlap-ratio.
-  2. info    Generate info.yaml from NPZ files in a dataset directory (same as make_motion_info_yaml).
+  1. split        Split one NPZ into fixed-duration segments; optional overlap via --overlap-ratio.
+  2. split-batch  Split many NPZs under an input root, filtered by a kept list (one relative path per line).
 
 Usage examples:
   # Split with 50% overlap between consecutive segments
-  python scripts/split_motion_npz.py split \
+  python preprocess/split_motion_npz.py split \
       --input assets/roban_motions/newdance_01_Skeleton.npz \
       --output-dir assets/roban_motions_bins_50 \
       --segment-seconds 4 \
-      --overlap-ratio 0.9
+      --overlap-ratio 0.5
+
+  # Batch: only motions listed in kept_and_passed_motions.txt (paths relative to input-dir)
+  python preprocess/split_motion_npz.py split-batch \
+      --input-dir assets/roban_motions \
+      --kept-list kept_and_passed_motions.txt \
+      --output-dir assets/roban_motions_bins_50 \
+      --segment-seconds 4 \
+      --overlap-ratio 0.5
 """
 
 from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+
 import numpy as np
+from tqdm import tqdm
 
 
 def get_fps(data) -> float:
@@ -76,9 +86,33 @@ def compute_segment_ranges(
     return ranges
 
 
-def run_split(args: argparse.Namespace) -> None:
-    """
-    Split a long motion NPZ into fixed-duration segments and write them as new NPZ files.
+def load_kept_relative_paths(list_path: Path) -> list[Path]:
+    """Read kept list: one relative path per line; skip blanks and # comments."""
+    text = list_path.read_text(encoding="utf-8", errors="replace")
+    rels: list[Path] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # normalize to POSIX-style for dedup
+        key = Path(line).as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        rels.append(Path(line))
+    return rels
+
+
+def split_npz_file(
+    in_path: Path,
+    out_dir: Path,
+    segment_seconds: float,
+    overlap_ratio: float,
+    *,
+    verbose: bool = True,
+) -> int:
+    """Split one NPZ into segments under out_dir. Returns number of segments written.
 
     For each generated segment NPZ:
 
@@ -91,10 +125,6 @@ def run_split(args: argparse.Namespace) -> None:
         - body_lin_vel_w: np.ndarray, shape (motion_length, num_bodies, 3)
         - body_ang_vel_w: np.ndarray, shape (motion_length, num_bodies, 3)
 
-    Here:
-        - motion_length == number of frames in the segment (end - start)
-        - one_sec_frames == int(round(fps * 1.0))
-
     The joint_pos/joint_vel arrays are extended by one_sec_frames into the future.
     If any of those future frames would go past the end of the original motion,
     they are clamped to the last frame of the original motion (i.e., repeat the
@@ -103,98 +133,169 @@ def run_split(args: argparse.Namespace) -> None:
     All other time-series keys (that have shape[0] == total_frames) are sliced
     to shape (motion_length, ...). Non time-series keys are copied unchanged.
     """
-    ##############
-    # basic info #
-    ##############
-    in_path = Path(args.input).expanduser().resolve()
-    out_dir = Path(args.output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     if not in_path.is_file():
         raise FileNotFoundError(f"Input NPZ not found: {in_path}")
 
     data = np.load(in_path)
-    fps = get_fps(data)
-    segment_seconds = float(args.segment_seconds)
-    if segment_seconds <= 0:
-        raise ValueError("segment_seconds must be > 0.")
+    try:
+        fps = get_fps(data)
+        segment_seconds = float(segment_seconds)
+        if segment_seconds <= 0:
+            raise ValueError("segment_seconds must be > 0.")
 
-    frames_per_segment = int(round(fps * segment_seconds))
-    if frames_per_segment <= 0:
-        raise ValueError(
-            f"Computed frames_per_segment <= 0 (fps={fps}, segment_seconds={segment_seconds})."
+        frames_per_segment = int(round(fps * segment_seconds))
+        if frames_per_segment <= 0:
+            raise ValueError(
+                f"Computed frames_per_segment <= 0 (fps={fps}, segment_seconds={segment_seconds})."
+            )
+
+        overlap_ratio = float(overlap_ratio)
+        total_frames = infer_total_frames(data)
+
+        ############################
+        # Determine segment ranges #
+        ############################
+        ranges = compute_segment_ranges(
+            total_frames=total_frames,
+            frames_per_segment=frames_per_segment,
+            overlap_ratio=overlap_ratio,
         )
 
-    overlap_ratio = float(args.overlap_ratio)
-    total_frames = infer_total_frames(data)
+        #########################################
+        # Prepare one-second horizon for joints #
+        #########################################
+        if "joint_pos" not in data.files or "joint_vel" not in data.files:
+            raise ValueError("Input NPZ must contain 'joint_pos' and 'joint_vel'.")
+        joint_pos_full = np.asarray(data["joint_pos"])
+        joint_vel_full = np.asarray(data["joint_vel"])
+        if joint_pos_full.shape != joint_vel_full.shape:
+            raise ValueError(
+                f"'joint_pos' and 'joint_vel' must have the same shape, "
+                f"got {joint_pos_full.shape} vs {joint_vel_full.shape}."
+            )
+        if joint_pos_full.shape[0] != total_frames:
+            raise ValueError(
+                f"'joint_pos' first dimension ({joint_pos_full.shape[0]}) "
+                f"does not match inferred total_frames ({total_frames})."
+            )
+        one_sec_frames = int(round(fps * 1.0))
+        if one_sec_frames <= 0:
+            raise ValueError(f"Computed one_sec_frames <= 0 for fps={fps}.")
 
-    ############################
-    # Determine segment ranges #
-    ############################
-    ranges = compute_segment_ranges(
-        total_frames=total_frames,
-        frames_per_segment=frames_per_segment,
-        overlap_ratio=overlap_ratio,
+        ####################################
+        # Create segments and write to NPZ #
+        ####################################
+        for seg_idx, (start, end) in enumerate(ranges):
+            segment_dict: dict[str, np.ndarray] = {}
+            for key in data.files:
+                arr = data[key]
+                segment_dict[key] = arr[start:end]
+
+            target_length = segment_dict["joint_pos"].shape[0] + one_sec_frames
+
+            # extend segment_dict["joint_pos"] and segment_dict["joint_vel"] by one_sec_frames
+            if end + one_sec_frames > total_frames:
+                # concat the original motion frames
+                extended_pos = np.concatenate(
+                    [segment_dict["joint_pos"], joint_pos_full[end:total_frames]], axis=0
+                )
+                extended_vel = np.concatenate(
+                    [segment_dict["joint_vel"], joint_vel_full[end:total_frames]], axis=0
+                )
+                remaining = target_length - extended_pos.shape[0]
+                if remaining > 0:
+                    # Pad with the last frame (repeat the final frame)
+                    last_pos_frame = joint_pos_full[total_frames - 1 : total_frames]
+                    last_vel_frame = joint_vel_full[total_frames - 1 : total_frames]
+
+                    pad_pos = np.repeat(last_pos_frame, remaining, axis=0)
+                    pad_vel = np.repeat(last_vel_frame, remaining, axis=0)
+
+                    segment_dict["joint_pos"] = np.concatenate([extended_pos, pad_pos], axis=0)
+                    segment_dict["joint_vel"] = np.concatenate([extended_vel, pad_vel], axis=0)
+                else:
+                    segment_dict["joint_pos"] = extended_pos
+                    segment_dict["joint_vel"] = extended_vel
+            else:
+                segment_dict["joint_pos"] = np.concatenate(
+                    [segment_dict["joint_pos"], joint_pos_full[end : end + one_sec_frames]], axis=0
+                )
+                segment_dict["joint_vel"] = np.concatenate(
+                    [segment_dict["joint_vel"], joint_vel_full[end : end + one_sec_frames]], axis=0
+                )
+
+            segment_dict["fps"] = np.array([fps])
+            out_path = out_dir / f"{in_path.stem}_seg{seg_idx:04d}.npz"
+            np.savez(out_path, **segment_dict)
+            if verbose:
+                print(f"Saved segment {seg_idx} to {out_path}")
+        return len(ranges)
+    finally:
+        data.close()
+
+
+def run_split(args: argparse.Namespace) -> None:
+    in_path = Path(args.input).expanduser().resolve()
+    out_dir = Path(args.output_dir).expanduser().resolve()
+    split_npz_file(
+        in_path,
+        out_dir,
+        segment_seconds=float(args.segment_seconds),
+        overlap_ratio=float(args.overlap_ratio),
     )
 
-    #########################################
-    # Prepare one-second horizon for joints #
-    #########################################
-    if "joint_pos" not in data.files or "joint_vel" not in data.files:
-        raise ValueError("Input NPZ must contain 'joint_pos' and 'joint_vel'.")
-    joint_pos_full = np.asarray(data["joint_pos"])
-    joint_vel_full = np.asarray(data["joint_vel"])
-    if joint_pos_full.shape != joint_vel_full.shape:
-        raise ValueError(
-            f"'joint_pos' and 'joint_vel' must have the same shape, "
-            f"got {joint_pos_full.shape} vs {joint_vel_full.shape}."
-        )
-    if joint_pos_full.shape[0] != total_frames:
-        raise ValueError(
-            f"'joint_pos' first dimension ({joint_pos_full.shape[0]}) "
-            f"does not match inferred total_frames ({total_frames})."
-        )
-    one_sec_frames = int(round(fps * 1.0))
-    if one_sec_frames <= 0:
-        raise ValueError(f"Computed one_sec_frames <= 0 for fps={fps}.")
 
-    ####################################
-    # Create segments and write to NPZ #
-    ####################################
-    for seg_idx, (start, end) in enumerate(ranges):
-        segment_dict: dict[str, np.ndarray] = {}
-        for key in data.files:
-            arr = data[key]
-            segment_dict[key] = arr[start:end]
-        
-        target_length = segment_dict["joint_pos"].shape[0] + one_sec_frames
-        
-        # extend segment_dict["joint_pos"] and segment_dict["joint_vel"] by one_sec_frames
-        if end + one_sec_frames > total_frames:
-            # concat the original motion frames
-            extended_pos = np.concatenate([segment_dict["joint_pos"], joint_pos_full[end:total_frames]], axis=0)
-            extended_vel = np.concatenate([segment_dict["joint_vel"], joint_vel_full[end:total_frames]], axis=0)
-            remaining = target_length - extended_pos.shape[0]
-            if remaining > 0:
-                # Pad with the last frame (repeat the final frame)
-                last_pos_frame = joint_pos_full[total_frames-1:total_frames]
-                last_vel_frame = joint_vel_full[total_frames-1:total_frames]
-                
-                pad_pos = np.repeat(last_pos_frame, remaining, axis=0)
-                pad_vel = np.repeat(last_vel_frame, remaining, axis=0)
-                
-                segment_dict["joint_pos"] = np.concatenate([extended_pos, pad_pos], axis=0)
-                segment_dict["joint_vel"] = np.concatenate([extended_vel, pad_vel], axis=0)
+def run_split_batch(args: argparse.Namespace) -> None:
+    input_dir = Path(args.input_dir).expanduser().resolve()
+    output_root = Path(args.output_dir).expanduser().resolve()
+    kept_path = Path(args.kept_list).expanduser().resolve()
+    if not input_dir.is_dir():
+        raise NotADirectoryError(f"Input directory not found: {input_dir}")
+    if not kept_path.is_file():
+        raise FileNotFoundError(f"Kept list not found: {kept_path}")
+
+    rels = load_kept_relative_paths(kept_path)
+    segment_seconds = float(args.segment_seconds)
+    overlap_ratio = float(args.overlap_ratio)
+    n_ok = 0
+    n_skip_missing = 0
+    n_skip_short = 0
+    with tqdm(
+        rels,
+        desc="Split-batch",
+        unit="file",
+        smoothing=0.05,
+    ) as pbar:
+        for rel in pbar:
+            in_path = (input_dir / rel).resolve()
+            if not in_path.is_file():
+                n_skip_missing += 1
+                tqdm.write(f"[skip missing] {input_dir / rel}")
             else:
-                segment_dict["joint_pos"] = extended_pos
-                segment_dict["joint_vel"] = extended_vel
-        else:
-            segment_dict["joint_pos"] = np.concatenate([segment_dict["joint_pos"], joint_pos_full[end:end+one_sec_frames]], axis=0)
-            segment_dict["joint_vel"] = np.concatenate([segment_dict["joint_vel"], joint_vel_full[end:end+one_sec_frames]], axis=0)
-
-        segment_dict["fps"] = np.array([fps])
-        out_path = out_dir / f"{in_path.stem}_seg{seg_idx:04d}.npz"
-        np.savez(out_path, **segment_dict)
-        print(f"Saved segment {seg_idx} to {out_path}")
+                out_dir = output_root / rel.parent
+                try:
+                    n_seg = split_npz_file(
+                        in_path,
+                        out_dir,
+                        segment_seconds=segment_seconds,
+                        overlap_ratio=overlap_ratio,
+                        verbose=False,
+                    )
+                except Exception as e:
+                    n_skip_short += 1
+                    tqdm.write(f"[skip] {rel}: {e}")
+                else:
+                    if n_seg == 0:
+                        n_skip_short += 1
+                        tqdm.write(f"[skip no segments] {rel}")
+                    else:
+                        n_ok += 1
+            pbar.set_postfix(ok=n_ok, miss=n_skip_missing, bad=n_skip_short)
+    print(
+        f"Batch split done: wrote segments for {n_ok} files, "
+        f"missing {n_skip_missing}, skipped_short_or_empty {n_skip_short}."
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -233,6 +334,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Overlap between consecutive segments, in [0, 1). 0 = no overlap, 0.5 = 50%% overlap (default: 0).",
     )
 
+    batch_p = subparsers.add_parser(
+        "split-batch",
+        help="Split NPZs under --input-dir whose relative paths appear in --kept-list.",
+    )
+    batch_p.add_argument(
+        "--input-dir",
+        type=str,
+        required=True,
+        help="Root directory containing motion NPZs (e.g. assets/roban_motions).",
+    )
+    batch_p.add_argument(
+        "--kept-list",
+        type=str,
+        required=True,
+        help="Text file: one relative path per line (relative to --input-dir), e.g. kept_and_passed_motions.txt.",
+    )
+    batch_p.add_argument(
+        "--output-dir",
+        type=str,
+        required=True,
+        help="Root output directory; subfolders mirror each kept path's parent (e.g. assets/roban_motions_bins_50).",
+    )
+    batch_p.add_argument(
+        "--segment-seconds",
+        type=float,
+        default=4.0,
+        help="Target segment duration in seconds (default: 4.0, common for roban_motions_bins_50).",
+    )
+    batch_p.add_argument(
+        "--overlap-ratio",
+        type=float,
+        default=0.5,
+        help="Overlap fraction in [0, 1). Default 0.5 (50%%) matches typical *_bins_50 usage.",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -253,7 +389,12 @@ DEBUG_SPLIT_ARGS: list[str] = [
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    run_split(args)
+    if args.command == "split":
+        run_split(args)
+    elif args.command == "split-batch":
+        run_split_batch(args)
+    else:
+        raise RuntimeError(f"Unhandled command: {args.command!r}")
 
 
 if __name__ == "__main__":
