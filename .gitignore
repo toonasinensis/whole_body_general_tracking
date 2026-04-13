@@ -40,5 +40,4 @@ _build
 *.zarr
 *.npz
 
-**/assets/
 artifacts/
