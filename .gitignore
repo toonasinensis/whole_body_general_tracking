@@ -1,3 +1,7 @@
+data/
+assets/
+v_stack/
+
 # Omniverse
 **/*.dmp
 **/.thumbs
