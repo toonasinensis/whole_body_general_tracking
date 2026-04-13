@@ -39,10 +39,10 @@ _repo
 _build
 .lastformat
 
-# *.csv
+*.csv
 *.pkl
 *.zarr
-# *.npz
+*.npz
 
 # **/assets/
 artifacts/
