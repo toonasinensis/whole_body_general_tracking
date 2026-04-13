@@ -37,6 +37,26 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+def _build_joint_mapping(lab_joint_names: list, npz_joint_names: list):
+    """
+    根据机器人实际关节顺序动态计算 NPZ <-> Isaac Lab 双向映射索引，
+    无需任何硬编码，适用于任意机器人。
+
+    Args:
+        lab_joint_names: Isaac Lab 内部 BFS 顺序（来自 robot.joint_names）
+        npz_joint_names: NPZ 文件中的 DFS/gym 顺序
+
+    Returns:
+        npz_to_isaac: result[i] = lab[i] 对应的 npz 位置索引
+        isaac_to_npz: result[i] = npz[i] 对应的 lab 位置索引
+    """
+    npz_idx = {n: i for i, n in enumerate(npz_joint_names)}
+    lab_idx = {n: i for i, n in enumerate(lab_joint_names)}
+    npz_to_isaac = [npz_idx[lab_joint_names[i]] for i in range(len(lab_joint_names))]
+    isaac_to_npz = [lab_idx[npz_joint_names[i]] for i in range(len(npz_joint_names))]
+    return npz_to_isaac, isaac_to_npz
+
+
 class MotionLoader:
     def __init__(
         self,
@@ -270,6 +290,7 @@ class MotionCommand(CommandTerm):
         self.body_indexes = torch.tensor(
             self.robot.find_bodies(self.cfg.body_names, preserve_order=True)[0], dtype=torch.long, device=self.device
         )
+
         self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         self.motion = MotionLoader(self.cfg, self.body_indexes, self.motion_anchor_body_index, device=self.device)
@@ -328,20 +349,6 @@ class MotionCommand(CommandTerm):
     def anchor_6d_rotation(self) -> torch.Tensor:
         six_d_rotation = quat_to_6d(self.anchor_quat_w)
         return six_d_rotation
-
-    # # joint 系列
-    # @future_motion_property("joint_pos", has_body_dim=False)
-    # def future_joint_pos(self):
-    #     pass
-
-    # @future_motion_property("joint_vel", has_body_dim=False)
-    # def future_joint_vel(self):
-    #     pass
-
-    # body_z系列
-    # @future_motion_property("body_pos_z", has_body_dim=True)
-    # def future_body_pos_z(self):
-    #     pass
 
     @property
     def joint_pos(self) -> torch.Tensor:

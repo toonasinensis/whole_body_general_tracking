@@ -1,5 +1,5 @@
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg  # noqa: F401
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 
 @configclass
@@ -21,11 +21,11 @@ class CriticCfg:
 
 
 @configclass
-class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+class RobanS22FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000000000000000
     save_interval = 500
-    experiment_name = "g1_flat"
+    experiment_name = "roban_flat"
     empirical_normalization = True
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -45,12 +45,6 @@ class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     actor = ActorCfg()
 
     critic = CriticCfg()
-    # critic:
-    # class_name: MLPModel
-    # hidden_dims: [512, 256, 128]
-    # activation: elu
-    # obs_normalization: true
-    # distribution_cfg: null
 
     obs_groups = {
         "actor": ["policy"],
@@ -62,7 +56,7 @@ LOW_FREQ_SCALE = 0.5
 
 
 @configclass
-class G1FlatLowFreqPPORunnerCfg(G1FlatPPORunnerCfg):
+class RobanS22FlatLowFreqPPORunnerCfg(RobanS22FlatPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.num_steps_per_env = round(self.num_steps_per_env * LOW_FREQ_SCALE)

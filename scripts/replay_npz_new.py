@@ -13,8 +13,71 @@ import torch
 
 from isaaclab.app import AppLauncher
 
+G1_MOTION_FILE = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/lafan"
+G1_ANCHOR_BODY_NAMES = "pelvis"
+G1_BODY_NAMES = [
+    "pelvis",
+    "left_hip_roll_link",
+    "left_knee_link",
+    "left_ankle_roll_link",
+    "right_hip_roll_link",
+    "right_knee_link",
+    "right_ankle_roll_link",
+    "torso_link",
+    "left_shoulder_roll_link",
+    "left_elbow_link",
+    "left_wrist_yaw_link",
+    "right_shoulder_roll_link",
+    "right_elbow_link",
+    "right_wrist_yaw_link",
+]
+
+ROBAN_MOTION_FILE = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/roban/roban2"
+ROBAN_ANCHOR_BODY_NAMES = "pelvis"
+ROBAN_BODY_NAMES = [
+    "base_link",
+    "waist_yaw_link",
+    "leg_l2_link",
+    "leg_l4_link",
+    "leg_l6_link",
+    "leg_r2_link",
+    "leg_r4_link",
+    "leg_r6_link",
+    "zarm_l2_link",
+    "zarm_l4_link",
+    "zarm_r2_link",
+    "zarm_r4_link",
+]
+
+
+def _parse_body_names(arg: str) -> list[str]:
+    return [name.strip() for name in arg.split(",") if name.strip()]
+
+
+ROBOT_PRESETS = {
+    "g1": {
+        "anchor_body_name": G1_ANCHOR_BODY_NAMES,
+        "body_names": G1_BODY_NAMES,
+        "default_motion_file": G1_MOTION_FILE,
+    },
+    "roban": {
+        "anchor_body_name": ROBAN_ANCHOR_BODY_NAMES,
+        "body_names": ROBAN_BODY_NAMES,
+        "default_motion_file": ROBAN_MOTION_FILE,
+    },
+}
+
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Replay converted motions.")
+
+parser.add_argument(
+    "--robot_cfg",
+    type=str,
+    default="g1",
+    choices=["g1", "roban"],
+    help="Robot preset: g1 or roban.",
+)
 # parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
 
 # append AppLauncher cli args
@@ -37,12 +100,13 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
+from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
 
 ##
 # Pre-defined configs
 ##
 from whole_body_tracking.tasks.tracking.mdp import MotionCommandCfg, MotionLoader
-from whole_body_tracking.terrains.config import GRAVEL_TERRAINS_CFG, STL_PLATFORM_TERRAINS_CFG  # noqa: F401
+from whole_body_tracking.terrains.config import GRAVEL_TERRAINS_CFG  # noqa: F401
 
 VELOCITY_BORN_RANGE = {
     "x": (-0.0, 0.0),
@@ -112,27 +176,17 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
     # motion_file = "/home/ubuntu/mgg_worspace/project/dataset/amass_cr1s/cr1s/hard_tracking_npz" # TODO
-    motion_file = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/eye"
+    preset = ROBOT_PRESETS[args_cli.robot_cfg]
+    motion_file = preset["default_motion_file"]
+    body_names = list(preset["body_names"])
+    if len(body_names) == 0:
+        raise ValueError("--body-names must contain at least one body name")
+    anchor_body_name = preset["anchor_body_name"]
 
     cfg = MotionCommandCfg(
-        anchor_body_name="pelvis",
+        anchor_body_name=anchor_body_name,
         motion_file=motion_file,
-        body_names=[
-            "pelvis",  # 0
-            "left_hip_roll_link",  # 1
-            "left_knee_link",  # 2
-            "left_ankle_roll_link",  # 3
-            "right_hip_roll_link",  # 4
-            "right_knee_link",  # 5
-            "right_ankle_roll_link",  # 6
-            "torso_link",  # 7
-            "left_shoulder_roll_link",
-            "left_elbow_link",
-            "left_wrist_yaw_link",
-            "right_shoulder_roll_link",
-            "right_elbow_link",
-            "right_wrist_yaw_link",
-        ],
+        body_names=body_names,
         asset_name="robot",
         max_motion_num=num_motion,
         resampling_time_range=(1.0e9, 1.0e9),  # isaaclab自带的不想用
@@ -153,9 +207,10 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # motion_file = "/home/ubuntu/mgg_worspace/project/mgg_wbc/whole_body_tracking/to_real_data/getup2_test/tracking_npz_data"
 
     motion = MotionLoader(
-        cfg,
-        12345,  # 占位
-        sim.device,
+        cfg=cfg,
+        body_indexes=[0],
+        motion_anchor_body_index=0,
+        device=sim.device,
     )
     motion.resample_motionloader(sim.device)
     time_steps = torch.zeros(scene.num_envs, dtype=torch.long, device=sim.device)
@@ -187,7 +242,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         root_states = robot.data.default_root_state.clone()
 
         # 获取 motion 中的 base pos（动作录制时的原始位置）
-        base_pos = motion._body_pos_w[time_steps][:, 0].clone()  # [num_envs, 3]
+        base_pos = motion.body_pos_w[time_steps][:, 0].clone()  # [num_envs, 3]
         # import ipdb; ipdb.set_trace()
         # 根据 motion_id 添加位置偏移，实现不同动作在不同地形行
         # terrain_origins 形状通常为 [num_levels, num_rows, 3]，先展平再按 motion_id 映射
@@ -197,9 +252,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         # base_pos[:, 1] += motion_id_offset * row_spacing  - ( row_spacing * (STL_PLATFORM_TERRAINS_CFG.num_cols - 1)) / 2  # 居中排列
 
         root_states[:, :3] = base_pos
-        root_states[:, 3:7] = motion._body_quat_w[time_steps][:, 0]
-        root_states[:, 7:10] = motion._body_lin_vel_w[time_steps][:, 0]
-        root_states[:, 10:] = motion._body_ang_vel_w[time_steps][:, 0]
+        root_states[:, 3:7] = motion.body_quat_w[time_steps][:, 0]
+        root_states[:, 7:10] = motion.body_lin_vel_w[time_steps][:, 0]
+        root_states[:, 10:] = motion.body_ang_vel_w[time_steps][:, 0]
 
         robot.write_root_state_to_sim(root_states)
         robot.write_joint_state_to_sim(motion.joint_pos[time_steps], motion.joint_vel[time_steps])
@@ -220,6 +275,11 @@ def main():
     sim = SimulationContext(sim_cfg)
 
     scene_cfg = ReplayMotionsSceneCfg(num_envs=num_motion, env_spacing=2.0)
+    robot_cfg_map = {
+        "g1": G1_CYLINDER_CFG,
+        "roban": RobanS22_CYLINDER_CFG,
+    }
+    scene_cfg.robot = robot_cfg_map[args_cli.robot_cfg].replace(prim_path="{ENV_REGEX_NS}/Robot")
     scene = InteractiveScene(scene_cfg)
     sim.reset()
     # Run the simulator
