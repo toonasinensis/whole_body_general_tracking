@@ -227,7 +227,7 @@ class MotionLoader:
                     self.data_joint_order = data["data_joint_names"]
                     data_list.append(data)
 
-            max_frame = max(len(data["dof_pos"]) for data in data_list)
+            # max_frame = max(len(data["dof_pos"]) for data in data_list)
 
             for data in data_list:
                 j_pos = torch.tensor(data["dof_pos"], dtype=torch.float32, device=self.device)  # (num_frame, dof)
@@ -314,8 +314,7 @@ class MotionLoader:
                     "right_wrist_yaw_joint",
                 ]
                 data_list.append(data)
-            # import ipdb;ipdb.set_trace()
-            max_frame = max(data["joint_pos"].shape[0] for data in data_list)  # noqa: F841
+            # max_frame = max(data["joint_pos"].shape[0] for data in data_list)
 
             for data in data_list:
 
@@ -525,7 +524,7 @@ def run_simulator(
         # pos_lookat = root_states[0, :3].cpu().numpy()
         # sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
 
-        _mask = ~finish_flag  # noqa: F841
+        mask = ~finish_flag  # noqa: F841
 
         motion_log = {
             "joint_pos": robot.data.joint_pos[:].cpu().numpy().copy(),  # (num_motion, num_frame, dof)

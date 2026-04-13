@@ -112,7 +112,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
     # motion_file = "/home/ubuntu/mgg_worspace/project/dataset/amass_cr1s/cr1s/hard_tracking_npz" # TODO
-    motion_file = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/lafan"
+    motion_file = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/eye"
 
     cfg = MotionCommandCfg(
         anchor_body_name="pelvis",

@@ -20,6 +20,7 @@ python -m torch.distributed.run \
   --task=Tracking-Flat-G1-v0 \
   --headless \
   --distributed \
-  --num_envs="${NUM_ENVS}"
-#  --resume=true \
-#  --resume_path="/home/xiechunyang/wt_ws/wt_wbc/wbc_parkour/wbc_parkour/whole_body_tracking/logs/model_2000.pt"
+  --num_envs="${NUM_ENVS}" \
+  --motion_file=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/分类评估/fall \
+ --resume=true \
+ --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"

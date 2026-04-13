@@ -8,8 +8,8 @@ cd /home/thl/wt_wbc/wbc_parkour/whole_body_tracking
 # source setup_conda_env.sh
 
 # 3) 配置
-INPUT_DIR="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/AMASS_single_motion"      # 例如: /home/thl/.../AMASS_single_motion
-BATCH_SIZE=4000
+INPUT_DIR="/home/thl/wt_wbc/dataset/data/amass_single_motion"      # 例如: /home/thl/.../AMASS_single_motion
+BATCH_SIZE=2000
 
 # 4) 统计 npz 文件数（dataset_2_npz.py 当前按 npz 读取）
 TOTAL_FILES=$(find "$INPUT_DIR" -type f -name "*.npz" | wc -l)
