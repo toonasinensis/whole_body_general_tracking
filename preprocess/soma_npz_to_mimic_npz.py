@@ -4,7 +4,7 @@
 
 # Usage
     python preprocess/soma_npz_to_mimic_npz.py \
-    --input_dir "assets/roban_soma_motions" \
+    --input_dir "data/roban_soma_motions" \
     --pattern "*.npz" \
     --output_fps 50 \
     --num_envs 64 \
@@ -12,7 +12,7 @@
     --device cuda:0 \
     --overwrite \
     --no_wandb \
-    --output_dir "./assets/roban_motions"
+    --output_dir "./data/roban_motions"
 """
 
 """Launch Isaac Sim Simulator first."""

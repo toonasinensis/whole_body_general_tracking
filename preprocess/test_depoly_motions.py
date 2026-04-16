@@ -142,7 +142,7 @@ def main() -> None:
     p.add_argument(
         "--motion",
         type=Path,
-        default=_REPO_ROOT / "assets/roban_deploy_motions/newdance_03_Skeleton.csv",
+        default=_REPO_ROOT / "data/roban_deploy_motions/newdance_03_Skeleton.csv",
         help="Tab-separated motion CSV (body pose + joint_posNN + joint_vel_NN).",
     )
     p.add_argument(

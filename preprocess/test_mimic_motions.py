@@ -30,7 +30,7 @@ G1_BODY_NAMES = [
     "right_wrist_yaw_link",
 ]
 
-ROBAN_MOTION_FILE = "assets/roban_motions/210531"
+ROBAN_MOTION_FILE = "data/roban_motions/210531"
 ROBAN_ANCHOR_BODY_NAMES = "waist_yaw_link"
 ROBAN_BODY_NAMES = [
     "base_link",

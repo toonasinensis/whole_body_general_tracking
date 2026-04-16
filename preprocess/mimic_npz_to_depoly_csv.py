@@ -1,7 +1,7 @@
 """
 Convert mimic / tracking NPZ motions to tab-separated deploy CSV (MuJoCo / hardware replay).
 
-NPZ layout (this repo’s Roban mimic exports, e.g. ``assets/roban_motions/...``)
+NPZ layout (this repo’s Roban mimic exports, e.g. ``data/roban_motions/...``)
 ----------------------------------------------------------------------------
 Arrays (typical shapes):
 
@@ -196,13 +196,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=_REPO_ROOT / "assets/roban_motions/210531/jump_and_land_heavy_001__A001_M.npz",
+        default=_REPO_ROOT / "data/roban_motions/210531/jump_and_land_heavy_001__A001_M.npz",
         help="Input .npz file.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=_REPO_ROOT / "assets/roban_deploy_motions/jump_and_land_heavy_001__A001_M.csv",
+        default=_REPO_ROOT / "data/roban_deploy_motions/jump_and_land_heavy_001__A001_M.csv",
         help="Output .csv path.",
     )
     parser.add_argument(

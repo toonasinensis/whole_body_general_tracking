@@ -21,6 +21,6 @@ python -m torch.distributed.run \
   --headless \
   --distributed \
   --num_envs="${NUM_ENVS}" \
-  --motion_file=assets/roban_motions/210531 \
+  --motion_file=data/roban_motions/210531 \
 #  --resume=true \
 #  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"
