@@ -19,6 +19,7 @@ python -m torch.distributed.run \
   --registry_name=test1 \
   --task=Tracking-Flat-RobanS22-v0 \
   --headless \
+  --kit_args="--/physics/collisionApproximateCylinders=true" \
   --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/roban/roban2 \

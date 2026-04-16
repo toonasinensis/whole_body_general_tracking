@@ -881,7 +881,7 @@
   </link>
   <joint name="zhead_1_joint" type="fixed">
     <origin xyz="0.0042 0 0.35369" rpy="0 0 0" />
-    <parent link="waist_yaw_link" />
+    <parent link="base_link" />
     <child link="zhead_1_link" />
     <axis xyz="0 0 1" />
     <limit lower="-1.5707963267949" upper="1.5707963267949" effort="1.5" velocity="5.23" />

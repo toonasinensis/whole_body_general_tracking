@@ -17,7 +17,11 @@ from typing import TYPE_CHECKING
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from isaaclab.markers.config import FRAME_MARKER_CFG
+from isaaclab.markers.config import (  # RED_ARROW_X_MARKER_CFG,
+    BLUE_ARROW_X_MARKER_CFG,
+    FRAME_MARKER_CFG,
+    GREEN_ARROW_X_MARKER_CFG,
+)
 from isaaclab.utils import configclass
 from isaaclab.utils.math import euler_xyz_from_quat  # noqa: F401
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
@@ -35,26 +39,6 @@ from .math_utils import quat_to_6d
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-
-
-def _build_joint_mapping(lab_joint_names: list, npz_joint_names: list):
-    """
-    根据机器人实际关节顺序动态计算 NPZ <-> Isaac Lab 双向映射索引，
-    无需任何硬编码，适用于任意机器人。
-
-    Args:
-        lab_joint_names: Isaac Lab 内部 BFS 顺序（来自 robot.joint_names）
-        npz_joint_names: NPZ 文件中的 DFS/gym 顺序
-
-    Returns:
-        npz_to_isaac: result[i] = lab[i] 对应的 npz 位置索引
-        isaac_to_npz: result[i] = npz[i] 对应的 lab 位置索引
-    """
-    npz_idx = {n: i for i, n in enumerate(npz_joint_names)}
-    lab_idx = {n: i for i, n in enumerate(lab_joint_names)}
-    npz_to_isaac = [npz_idx[lab_joint_names[i]] for i in range(len(lab_joint_names))]
-    isaac_to_npz = [lab_idx[npz_joint_names[i]] for i in range(len(npz_joint_names))]
-    return npz_to_isaac, isaac_to_npz
 
 
 class MotionLoader:
@@ -484,6 +468,7 @@ class MotionCommand(CommandTerm):
         self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
         self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
         self.metrics["error_anchor_lin_vel"] = torch.norm(self.anchor_lin_vel_w - self.robot_anchor_lin_vel_w, dim=-1)
+        # print("anchor_lin_vel_w: ",self.metrics["error_anchor_lin_vel"] )
         self.metrics["error_anchor_ang_vel"] = torch.norm(self.anchor_ang_vel_w - self.robot_anchor_ang_vel_w, dim=-1)
 
         self.metrics["error_body_pos"] = torch.norm(self.body_pos_relative_w - self.robot_body_pos_w, dim=-1).mean(
@@ -541,11 +526,6 @@ class MotionCommand(CommandTerm):
             / self.bin_count
             * (self.motion.time_step_total - 1)
         ).long()
-        # self.time_steps[env_ids] = (
-        #     sampled_bins
-        #     / self.bin_count
-        #     * (self.motion.time_step_total - 1)
-        # ).long()
 
         mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
         nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
@@ -609,7 +589,7 @@ class MotionCommand(CommandTerm):
 
     def _update_command(self):
         self.time_steps += 1
-        env_ids = torch.where(self.time_steps >= self.frame_end_per_env)[0]
+        env_ids = torch.where(self.time_steps >= self.frame_end_per_env - 10)[0]  # 到达数据末尾
         if self.cfg.resample_interval != -1:
             self.resample_time += 1
             if self.resample_time >= self.cfg.resample_interval:
@@ -645,6 +625,14 @@ class MotionCommand(CommandTerm):
                     self.cfg.anchor_visualizer_cfg.replace(prim_path="/Visuals/Command/goal/anchor")
                 )
 
+                if self.cfg.debug_anchor_speed:
+                    self.current_anchor_lin_vel_visualizer = VisualizationMarkers(
+                        self.cfg.current_anchor_lin_vel_visualizer_cfg
+                    )
+                    self.goal_anchor_lin_vel_visualizer = VisualizationMarkers(
+                        self.cfg.goal_anchor_lin_vel_visualizer_cfg
+                    )
+
                 self.current_body_visualizers = []
                 self.goal_body_visualizers = []
                 for name in self.cfg.body_names:
@@ -661,6 +649,10 @@ class MotionCommand(CommandTerm):
 
             self.current_anchor_visualizer.set_visibility(True)
             self.goal_anchor_visualizer.set_visibility(True)
+            if self.cfg.debug_anchor_speed:
+                self.current_anchor_lin_vel_visualizer.set_visibility(True)
+                self.goal_anchor_lin_vel_visualizer.set_visibility(True)
+
             for i in range(len(self.cfg.body_names)):
                 self.current_body_visualizers[i].set_visibility(True)
                 self.goal_body_visualizers[i].set_visibility(True)
@@ -669,16 +661,83 @@ class MotionCommand(CommandTerm):
             if hasattr(self, "current_anchor_visualizer"):
                 self.current_anchor_visualizer.set_visibility(False)
                 self.goal_anchor_visualizer.set_visibility(False)
+                if self.cfg.debug_anchor_speed:
+                    self.current_anchor_lin_vel_visualizer.set_visibility(False)
+                    self.goal_anchor_lin_vel_visualizer.set_visibility(False)
+
                 for i in range(len(self.cfg.body_names)):
                     self.current_body_visualizers[i].set_visibility(False)
                     self.goal_body_visualizers[i].set_visibility(False)
+
+    def _resolve_velocity_to_arrow(
+        self,
+        velocity_w: torch.Tensor,
+        default_scale: tuple[float, float, float],
+        speed_scale: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Convert 3D world velocity to arrow scale and world quaternion."""
+        speed = torch.linalg.norm(velocity_w, dim=1)
+        arrow_scale = torch.tensor(default_scale, device=self.device).repeat(velocity_w.shape[0], 1)
+        arrow_scale[:, 0] *= speed * speed_scale
+
+        # Rotate arrow local +X axis to velocity direction in world frame.
+        eps = 1.0e-8
+        direction = velocity_w / speed.unsqueeze(-1).clamp(min=eps)
+        x_axis = torch.zeros_like(direction)
+        x_axis[:, 0] = 1.0
+
+        cross = torch.cross(x_axis, direction, dim=1)
+        dot = torch.sum(x_axis * direction, dim=1).clamp(-1.0, 1.0)
+
+        w = torch.sqrt(((1.0 + dot).clamp(min=0.0)) * 0.5)
+        xyz = cross / (2.0 * w.unsqueeze(-1).clamp(min=eps))
+        arrow_quat_w = torch.cat([w.unsqueeze(-1), xyz], dim=1)
+
+        # Handle opposite direction (dot=-1): 180 deg around +Y axis.
+        opposite = dot < (-1.0 + 1.0e-6)
+        if torch.any(opposite):
+            arrow_quat_w[opposite] = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.device)
+
+        # For near-zero velocity, keep identity orientation.
+        stationary = speed < 1.0e-6
+        if torch.any(stationary):
+            arrow_quat_w[stationary] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device)
+
+        arrow_quat_w = torch.nn.functional.normalize(arrow_quat_w, dim=1)
+        return arrow_scale, arrow_quat_w
 
     def _debug_vis_callback(self, event):
         if not self.robot.is_initialized:
             return
 
-        self.current_anchor_visualizer.visualize(self.robot_anchor_pos_w, self.robot_anchor_quat_w)
-        self.goal_anchor_visualizer.visualize(self.anchor_pos_w, self.anchor_quat_w)
+        # self.current_anchor_visualizer.visualize(self.robot_anchor_pos_w, self.robot_anchor_quat_w)
+        # self.goal_anchor_visualizer.visualize(self.anchor_pos_w, self.anchor_quat_w)
+
+        if self.cfg.debug_anchor_speed:
+            current_lin_vel_scale, current_lin_vel_quat = self._resolve_velocity_to_arrow(
+                self.robot_anchor_lin_vel_w,
+                self.current_anchor_lin_vel_visualizer.cfg.markers["arrow"].scale,
+                self.cfg.debug_anchor_speed_scale,
+            )
+            goal_lin_vel_scale, goal_lin_vel_quat = self._resolve_velocity_to_arrow(
+                self.anchor_lin_vel_w,
+                self.goal_anchor_lin_vel_visualizer.cfg.markers["arrow"].scale,
+                self.cfg.debug_anchor_speed_scale,
+            )
+
+            current_lin_vel_pos = self.robot_anchor_pos_w
+            goal_lin_vel_pos = self.anchor_pos_w
+
+            self.current_anchor_lin_vel_visualizer.visualize(
+                current_lin_vel_pos,
+                current_lin_vel_quat,
+                current_lin_vel_scale,
+            )
+            self.goal_anchor_lin_vel_visualizer.visualize(
+                goal_lin_vel_pos,
+                goal_lin_vel_quat,
+                goal_lin_vel_scale,
+            )
 
         for i in range(len(self.cfg.body_names)):
             self.current_body_visualizers[i].visualize(self.robot_body_pos_w[:, i], self.robot_body_quat_w[:, i])
@@ -723,6 +782,19 @@ class MotionCommandCfg(CommandTermCfg):
 
     body_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
     body_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+
+    current_anchor_lin_vel_visualizer_cfg: VisualizationMarkersCfg = BLUE_ARROW_X_MARKER_CFG.replace(
+        prim_path="/Visuals/Command/current/anchor_lin_vel"
+    )
+    goal_anchor_lin_vel_visualizer_cfg: VisualizationMarkersCfg = GREEN_ARROW_X_MARKER_CFG.replace(
+        prim_path="/Visuals/Command/goal/anchor_lin_vel"
+    )
+    current_anchor_lin_vel_visualizer_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+    goal_anchor_lin_vel_visualizer_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+
+    # Debug printing for anchor velocity in _debug_vis_callback.
+    debug_anchor_speed: bool = True
+    debug_anchor_speed_scale: float = 1.0
 
     # 为了分布式训练
     distributed: bool = False

@@ -5,7 +5,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 @configclass
 class ActorCfg:
     class_name: str = "MLPModel"
-    hidden_dims: list = [4096, 2048, 1024, 512, 256]
+    hidden_dims: list = [1024, 512, 256]
     activation: str = "elu"
     obs_normalization: bool = True
     distribution_cfg: dict = {"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar"}
@@ -14,7 +14,7 @@ class ActorCfg:
 @configclass
 class CriticCfg:
     class_name: str = "MLPModel"
-    hidden_dims: list = [4096, 2048, 1024, 512, 256]
+    hidden_dims: list = [1024, 512, 256]
     activation: str = "elu"
     obs_normalization: bool = True
     distribution_cfg: dict = None
@@ -24,7 +24,7 @@ class CriticCfg:
 class RobanS22FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000000000000000
-    save_interval = 500
+    save_interval = 100
     experiment_name = "roban_flat"
     empirical_normalization = True
 
@@ -50,15 +50,3 @@ class RobanS22FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         "actor": ["policy"],
         "critic": ["critic"],
     }
-
-
-LOW_FREQ_SCALE = 0.5
-
-
-@configclass
-class RobanS22FlatLowFreqPPORunnerCfg(RobanS22FlatPPORunnerCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        self.num_steps_per_env = round(self.num_steps_per_env * LOW_FREQ_SCALE)
-        self.algorithm.gamma = self.algorithm.gamma ** (1 / LOW_FREQ_SCALE)
-        self.algorithm.lam = self.algorithm.lam ** (1 / LOW_FREQ_SCALE)
