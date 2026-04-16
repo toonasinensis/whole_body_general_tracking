@@ -1,6 +1,10 @@
 data/
-assets/
+
+# Qiqi in Dev Folders
 v_stack/
+v_rsl_rl/
+.vscode/*
+utilities/*
 
 # Omniverse
 **/*.dmp

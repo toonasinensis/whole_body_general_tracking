@@ -3,6 +3,7 @@ import re
 import isaaclab.sim as sim_utils
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.actuators import DelayedPDActuatorCfg
 
 from whole_body_tracking.actuators.actuator_cfg import DelayedPDActuatorCfg_RobanS22
 from whole_body_tracking.assets import ASSET_DIR
@@ -23,35 +24,7 @@ from whole_body_tracking.assets import ASSET_DIR
 #   - 12N  motor   (zhead_2):        Head pitch
 #   - 1.5N motor   (zhead_1):        Head yaw
 # ============================================================
-
-PRESERVE_JOINT_ORDER_ASSET_CFG = SceneEntityCfg(
-    "robot",
-    joint_names=[
-        "waist_yaw_joint",
-        "leg_l1_joint",
-        "leg_l2_joint",
-        "leg_l3_joint",
-        "leg_l4_joint",
-        "leg_l5_joint",
-        "leg_l6_joint",
-        "leg_r1_joint",
-        "leg_r2_joint",
-        "leg_r3_joint",
-        "leg_r4_joint",
-        "leg_r5_joint",
-        "leg_r6_joint",
-        "zarm_l1_joint",
-        "zarm_l2_joint",
-        "zarm_l3_joint",
-        "zarm_l4_joint",
-        "zarm_r1_joint",
-        "zarm_r2_joint",
-        "zarm_r3_joint",
-        "zarm_r4_joint",
-    ],
-    preserve_order=True,
-)
-
+ 
 
 # RobanS22_CYLINDER_CFG is the configuration for the RobanS22 robot.
 # It contains:
@@ -62,8 +35,9 @@ PRESERVE_JOINT_ORDER_ASSET_CFG = SceneEntityCfg(
 RobanS22_CYLINDER_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
-        replace_cylinders_with_capsules=True,
-        asset_path=f"{ASSET_DIR}/roban_s22/urdf/biped_s17.urdf",
+        merge_fixed_joints=False,
+        replace_cylinders_with_capsules=False,
+        asset_path=f"{ASSET_DIR}/roban_s22/urdf/biped_s17_hands.urdf",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -218,38 +192,38 @@ RobanS22_CYLINDER_CFG = ArticulationCfg(
 )
 
 
-# Compute the action scale for joints of roban_s22 robot
-RobanS22_ACTION_SCALE = {}
-for a in RobanS22_CYLINDER_CFG.actuators.values():
-    e_cfg = a.effort_limit_sim
-    e_rated_cfg = a.effort_limit_rated
-    s_cfg = a.stiffness
-    name_patterns = a.joint_names_expr
+# # Compute the action scale for joints of roban_s22 robot
+# RobanS22_ACTION_SCALE = {}
+# for a in RobanS22_CYLINDER_CFG.actuators.values():
+#     e_cfg = a.effort_limit_sim
+#     e_rated_cfg = a.effort_limit_rated
+#     s_cfg = a.stiffness
+#     name_patterns = a.joint_names_expr
 
-    if not name_patterns:
-        continue
+#     if not name_patterns:
+#         continue
 
-    candidate_joint_names = []
-    joint_names_list = PRESERVE_JOINT_ORDER_ASSET_CFG.joint_names or []
-    for jn in joint_names_list:
-        for pat in name_patterns:
-            if re.fullmatch(pat, jn):
-                candidate_joint_names.append(jn)
-                break
+#     candidate_joint_names = []
+#     joint_names_list = PRESERVE_JOINT_ORDER_ASSET_CFG.joint_names or []
+#     for jn in joint_names_list:
+#         for pat in name_patterns:
+#             if re.fullmatch(pat, jn):
+#                 candidate_joint_names.append(jn)
+#                 break
 
-    def _resolve_value(joint_name, cfg_value):
-        if isinstance(cfg_value, dict):
-            for pat, val in cfg_value.items():
-                if re.fullmatch(pat, joint_name):
-                    return val
-            return None
-        else:
-            return cfg_value
+#     def _resolve_value(joint_name, cfg_value):
+#         if isinstance(cfg_value, dict):
+#             for pat, val in cfg_value.items():
+#                 if re.fullmatch(pat, joint_name):
+#                     return val
+#             return None
+#         else:
+#             return cfg_value
 
-    for joint_name in candidate_joint_names:
-        e_val = _resolve_value(joint_name, e_cfg)
-        s_val = _resolve_value(joint_name, s_cfg)
-        e_rated_val = _resolve_value(joint_name, e_rated_cfg)
-        if e_val is None or e_rated_val is None or s_val in (None, 0):
-            continue
-        RobanS22_ACTION_SCALE[joint_name] = 0.25 * float(e_rated_val * 0.6) / float(s_val)
+#     for joint_name in candidate_joint_names:
+#         e_val = _resolve_value(joint_name, e_cfg)
+#         s_val = _resolve_value(joint_name, s_cfg)
+#         e_rated_val = _resolve_value(joint_name, e_rated_cfg)
+#         if e_val is None or e_rated_val is None or s_val in (None, 0):
+#             continue
+#         RobanS22_ACTION_SCALE[joint_name] = 0.25 * float(e_rated_val * 0.6) / float(s_val)

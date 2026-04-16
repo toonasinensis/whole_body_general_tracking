@@ -2,9 +2,10 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 
 import whole_body_tracking.tasks.tracking.mdp as mdp
-from whole_body_tracking.robots.roban_s22 import RobanS22_ACTION_SCALE, RobanS22_CYLINDER_CFG
+from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
 
 ROBAN_S22_MOTION_ANCHOR_BODY_NAME = "waist_yaw_link"
@@ -19,8 +20,10 @@ ROBAN_S22_MOTION_BODY_NAMES = [
     "leg_r6_link",
     "zarm_l2_link",
     "zarm_l4_link",
+    "zarm_l5_link",
     "zarm_r2_link",
     "zarm_r4_link",
+    "zarm_r5_link",
 ]
 
 
@@ -56,7 +59,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
-            "pos_distribution_params": (-0.1, 0.1),
+            "pos_distribution_params": (-0.03, 0.03),
             "operation": "add",
         },
     )
@@ -198,52 +201,48 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
     )
 
-    joint_vel_limits = RewTerm(
-        func=mdp.joint_vel_limits,
-        weight=-5.0,
-        params={"soft_ratio": 1, "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
-    )
+ 
 
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-1.0,
+        weight=-0.010,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
-                body_names=[r"^(?!leg_l6_link$)(?!leg_r6_link$).+$"],
+                body_names=[r"^(?!leg_l6_link$)(?!leg_r6_link$)(?!zarm_l4_link$)(?!zarm_r4_link$).+$"],
             ),
             "threshold": 1.0,
         },
     )
 
-    motion_hand_vel = RewTerm(
-        func=mdp.motion_global_body_linear_velocity_error_exp,
-        weight=2.0,
-        params={"command_name": "motion", "std": 1.0, "body_names": ["zarm_l4_link", "zarm_r4_link"]},
-    )
+ 
 
-    motion_knee_vel = RewTerm(
-        func=mdp.motion_global_body_linear_velocity_error_exp,
-        weight=1.2,
-        params={"command_name": "motion", "std": 1.0, "body_names": ["leg_l4_link", "leg_r4_link"]},
-    )
+@configclass
+class TerminationsCfg:
+    """Termination terms for the MDP."""
 
-    motion_knee_ori = RewTerm(
-        func=mdp.motion_relative_body_orientation_error_exp,
-        weight=0.8,
-        params={"command_name": "motion", "std": 0.4, "body_names": ["leg_l4_link", "leg_r4_link"]},
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    anchor_pos = DoneTerm(
+        func=mdp.bad_anchor_pos_z_only,
+        params={"command_name": "motion", "threshold": 0.4},
     )
-
-    motion_knee_ang_vel = RewTerm(
-        func=mdp.motion_global_body_angular_velocity_error_exp,
-        weight=1.2,
-        params={"command_name": "motion", "std": 3.14, "body_names": ["leg_l4_link", "leg_r4_link"]},
+    anchor_ori = DoneTerm(
+        func=mdp.bad_anchor_ori,
+        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 1.0},
     )
-
-    motion_feet_vel = RewTerm(
-        func=mdp.motion_global_body_linear_velocity_error_exp,
-        weight=0.5,
-        params={"command_name": "motion", "std": 1.0, "body_names": ["leg_l6_link", "leg_r6_link"]},
+    ee_body_pos = DoneTerm(
+        func=mdp.bad_motion_body_pos_z_only,
+        params={
+            "command_name": "motion",
+            "threshold": 0.4,
+            # NOTE use zarm_[l,r]5_link as the termination ee bodies ?
+            "body_names": [
+                "leg_l6_link",
+                "leg_r6_link",
+                "zarm_l4_link",
+                "zarm_r4_link",
+            ],
+        },
     )
 
 
@@ -254,9 +253,9 @@ class RobanS22FlatEnvCfg(TrackingEnvCfg):
 
         self.events = EventCfg()
         self.rewards = RewardsCfg()
-
+        self.terminations = TerminationsCfg()
         self.scene.robot = RobanS22_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-        self.actions.joint_pos.scale = RobanS22_ACTION_SCALE
+        self.actions.joint_pos.scale = 0.25
         # Migration note:
         # In s17 URDF, torso/pelvis naming swaps compared with s14.
         # Use waist_yaw_link as the motion anchor to preserve previous "torso anchor" semantics.
