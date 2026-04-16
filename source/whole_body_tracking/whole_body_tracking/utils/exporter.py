@@ -5,75 +5,104 @@
 
 import os
 import torch
+from typing import cast
 
 import onnx
 
 from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
-
-from whole_body_tracking.tasks.tracking.mdp import MotionCommand
-
+from rsl_rl.models.mlp_model import MLPModel
 
 def export_motion_policy_as_onnx(
     env: ManagerBasedRLEnv,
-    actor_critic: object,
+    actor: MLPModel,
     path: str,
-    normalizer: object | None = None,
     filename="policy.onnx",
     verbose=False,
 ):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
-    policy_exporter = _OnnxMotionPolicyExporter(env, actor_critic, normalizer, verbose)
+    policy_exporter = _OnnxMotionPolicyExporter(env, actor, verbose)
     policy_exporter.export(path, filename)
 
 
-class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
-    def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
-        super().__init__(actor_critic, normalizer, verbose)
-        cmd: MotionCommand = env.command_manager.get_term("motion")
+# class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
+#     # OnnxExporter can merge multiple NNs through defining the forward function in the class
+#     def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
+#         super().__init__(actor_critic, normalizer, verbose)
+#         cmd = env.command_manager.get_term("motion")
+#         # Support both single-motion (MotionCommand/MotionCommandSonic) and multi-motion (MultiMotionCommand)
+#         if hasattr(cmd, "motion"):
+#             self.time_step_total = cmd.motion.time_step_total
+#         elif hasattr(cmd, "dataloader"):
+#             self.time_step_total = cmd.dataloader.time_step_total
+#         else:
+#             self.time_step_total = 0
 
-        self.joint_pos = cmd.motion.joint_pos.to("cpu")
-        self.joint_vel = cmd.motion.joint_vel.to("cpu")
-        self.body_pos_w = cmd.motion.body_pos_w.to("cpu")
-        self.body_quat_w = cmd.motion.body_quat_w.to("cpu")
-        self.body_lin_vel_w = cmd.motion.body_lin_vel_w.to("cpu")
-        self.body_ang_vel_w = cmd.motion.body_ang_vel_w.to("cpu")
-        self.time_step_total = self.joint_pos.shape[0]
+#     def forward(self, x):
+#         # 只返回actions输出
+#         return self.actor(self.normalizer(x))
 
-    def forward(self, x, time_step):
-        time_step_clamped = torch.clamp(time_step.long().squeeze(-1), max=self.time_step_total - 1)
-        return (
-            self.actor(x),
-            self.joint_pos[time_step_clamped],
-            self.joint_vel[time_step_clamped],
-            self.body_pos_w[time_step_clamped],
-            self.body_quat_w[time_step_clamped],
-            self.body_lin_vel_w[time_step_clamped],
-            self.body_ang_vel_w[time_step_clamped],
-        )
+#     def _get_actor_obs_dim(self):
+#         """Observation dim for ONNX export: support Sequential actor or custom (e.g. Actor_FSQVAE)."""
+#         if hasattr(self.actor, "num_actor_obs"):
+#             return self.actor.num_actor_obs
+#         return self.actor[0].in_features
+
+#     def export(self, path, filename):
+#         self.to("cpu")
+#         obs = torch.zeros(1, self._get_actor_obs_dim())
+#         torch.onnx.export(
+#             self,
+#             obs,
+#             os.path.join(path, filename),
+#             export_params=True,
+#             opset_version=11,
+#             verbose=self.verbose,
+#             input_names=["obs"],
+#             output_names=["actions"],
+#             dynamic_axes={},
+#         )
+
+class _OnnxMotionPolicyExporter(torch.nn.Module):
+    # OnnxExporter can merge multiple NNs through defining the forward function in the class
+    # more details can refer to isaaclab_rl.rsl_rl.exporter._OnnxPolicyExporter in your IsaacLab dir
+    def __init__(self, env: ManagerBasedRLEnv, actor: MLPModel, verbose=False):
+        # the actor details can be seen in rsl_rl.models.mlp_model.MLPModel in your conda environment
+        super().__init__()
+        assert not actor.is_recurrent, "The actor is recurrent, which is not supported for this ONNX export"
+        self.actor = actor
+        self.normalizer = actor.obs_normalizer
+        self.mlp = actor.mlp
+        self.verbose = verbose
+
+    def forward(self, x):
+        # the path from observation to actions
+        return self.mlp(self.normalizer(x))
+
+    def _get_actor_obs_dim(self) -> int:
+        """Observation dim for ONNX export: support Sequential actor or custom (e.g. Actor_FSQVAE)."""
+        dim = getattr(self.actor, "obs_dim", None)
+        if dim is None:
+            dim = self.actor.mlp[0].in_features
+        # Some upstream types are loosely annotated; coerce to a concrete int for torch.zeros().
+        if isinstance(dim, torch.Tensor):
+            return int(dim.item())
+        if isinstance(dim, torch.nn.Module):
+            raise TypeError(f"Invalid obs_dim type: {type(dim)!r}")
+        return int(cast(int, dim))
 
     def export(self, path, filename):
         self.to("cpu")
-        obs = torch.zeros(1, self.actor[0].in_features)
-        time_step = torch.zeros(1, 1)
+        obs = torch.zeros((1, self._get_actor_obs_dim()))
         torch.onnx.export(
             self,
-            (obs, time_step),
+            (obs,),
             os.path.join(path, filename),
             export_params=True,
             opset_version=11,
             verbose=self.verbose,
-            input_names=["obs", "time_step"],
-            output_names=[
-                "actions",
-                "joint_pos",
-                "joint_vel",
-                "body_pos_w",
-                "body_quat_w",
-                "body_lin_vel_w",
-                "body_ang_vel_w",
-            ],
+            input_names=["obs"],
+            output_names=["actions"],
             dynamic_axes={},
         )
 
@@ -87,17 +116,18 @@ def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
 
 def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filename="policy.onnx") -> None:
     onnx_path = os.path.join(path, filename)
-
-    observation_names = env.observation_manager.active_terms["policy"]
-    observation_history_lengths: list[int] = []
-
-    if env.observation_manager.cfg.policy.history_length is not None:
-        observation_history_lengths = [env.observation_manager.cfg.policy.history_length] * len(observation_names)
+    
+    # IsaacLab terms sometimes store scalars as plain floats; normalize to a JSON/CSV-friendly value.
+    joint_pos_term = env.action_manager.get_term("joint_pos")
+    action_scale = getattr(joint_pos_term, "_scale", None)
+    if isinstance(action_scale, torch.Tensor):
+        action_scale_value = action_scale[0].cpu().tolist() if action_scale.ndim > 0 else action_scale.item()
+    elif isinstance(action_scale, (list, tuple)):
+        action_scale_value = action_scale[0] if len(action_scale) > 0 else 0.0
+    elif action_scale is None:
+        action_scale_value = 0.0
     else:
-        for name in observation_names:
-            term_cfg = env.observation_manager.cfg.policy.to_dict()[name]
-            history_length = term_cfg["history_length"]
-            observation_history_lengths.append(1 if history_length == 0 else history_length)
+        action_scale_value = float(action_scale)
 
     metadata = {
         "run_path": run_path,
@@ -106,11 +136,8 @@ def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filen
         "joint_damping": env.scene["robot"].data.joint_damping[0].cpu().tolist(),
         "default_joint_pos": env.scene["robot"].data.default_joint_pos_nominal.cpu().tolist(),
         "command_names": env.command_manager.active_terms,
-        "observation_names": observation_names,
-        "observation_history_lengths": observation_history_lengths,
-        "action_scale": env.action_manager.get_term("joint_pos")._scale[0].cpu().tolist(),
-        "anchor_body_name": env.command_manager.get_term("motion").cfg.anchor_body_name,
-        "body_names": env.command_manager.get_term("motion").cfg.body_names,
+        "observation_names": env.observation_manager.active_terms["policy"],
+        "action_scale": action_scale_value,
     }
 
     model = onnx.load(onnx_path)

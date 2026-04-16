@@ -14,12 +14,14 @@ inherit from ``isaaclab.terrains.terrains_cfg.TerrainConfig`` and define the fol
 
 from __future__ import annotations
 
-from dataclasses import MISSING
-from typing import Literal
+from dataclasses import MISSING  # noqa: F401
+from typing import Literal  # noqa: F401
 
-from isaaclab.utils import configclass
 from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
+from isaaclab.utils import configclass
+
 from .stl_terrain_generator import STLTerrainGenerator
+
 
 @configclass
 class STLTerrainGeneratorCfg(TerrainGeneratorCfg):

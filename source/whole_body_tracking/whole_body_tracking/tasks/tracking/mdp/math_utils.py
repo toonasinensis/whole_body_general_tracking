@@ -1,5 +1,7 @@
-from isaaclab.utils.math import matrix_from_quat
 import torch
+
+from isaaclab.utils.math import matrix_from_quat
+
 
 @torch.jit.script
 def quat_to_6d(quaternions: torch.Tensor) -> torch.Tensor:

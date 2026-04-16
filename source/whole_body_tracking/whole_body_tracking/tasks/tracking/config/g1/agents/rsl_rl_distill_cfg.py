@@ -1,7 +1,5 @@
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
-
-
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg  # noqa: F401
 
 
 @configclass
@@ -10,11 +8,8 @@ class ActorCfg:
     hidden_dims: list = [512, 256, 128]
     activation: str = "elu"
     obs_normalization: bool = True
-    distribution_cfg: dict = {
-        "class_name": "GaussianDistribution",
-        "init_std": 1.0,
-        "std_type": "scalar"
-    }
+    distribution_cfg: dict = {"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar"}
+
 
 @configclass
 class CriticCfg:
@@ -25,14 +20,13 @@ class CriticCfg:
     distribution_cfg: dict = None
 
 
-
-
 @configclass
 class RslRlDistillAlgorithmCfg:
     class_name: str = "Distillation"
-    num_learning_epochs=5,
-    learning_rate=1.0e-3,
-    max_grad_norm=1.0,
+    num_learning_epochs = (5,)
+    learning_rate = (1.0e-3,)
+    max_grad_norm = (1.0,)
+
 
 # def __init__(
 #         self,
@@ -51,6 +45,7 @@ class RslRlDistillAlgorithmCfg:
 #         **kwargs: dict,  # handle unused config parameters
 #     ) -> None:
 
+
 @configclass
 class RslRlDistillRunnerCfg:
     num_steps_per_env = 50
@@ -58,7 +53,7 @@ class RslRlDistillRunnerCfg:
     save_interval = 500
     experiment_name = "g1_flat"
     empirical_normalization = True
-     
+
     algorithm = RslRlDistillAlgorithmCfg(
         num_learning_epochs=5,
         learning_rate=1.0e-3,
@@ -75,7 +70,3 @@ class RslRlDistillRunnerCfg:
         "student": ["policy"],
         "teacher": ["policy"],
     }
- 
-
-
- 

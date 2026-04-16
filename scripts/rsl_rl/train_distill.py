@@ -8,7 +8,6 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-from ast import arg
 import os
 import sys
 
@@ -29,7 +28,9 @@ parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy 
 parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
 parser.add_argument("--resume_teacher_path", type=str, default=None, help="Path to the teacher model file.")
 parser.add_argument("--resume_student_path", type=str, default=None, help="Path to the student model file.")
-parser.add_argument("--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes.")
+parser.add_argument(
+    "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -68,9 +69,7 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import  dump_yaml
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
@@ -115,14 +114,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     registry_name = args_cli.registry_name
     if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
         registry_name += ":latest"
-    import pathlib
 
     # import wandb
-
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
     # env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
-
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)

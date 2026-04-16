@@ -1,4 +1,3 @@
-
 # Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
 #
@@ -30,11 +29,11 @@ from .hf_terrains_cfg import (
     HfDiscreteObstaclesTerrainCfg,
     HfInvertedPyramidSlopedTerrainCfg,
     HfInvertedPyramidStairsTerrainCfg,
+    HfObstacleCfg,
     HfPyramidSlopedTerrainCfg,
     HfPyramidStairsTerrainCfg,
     HfRandomUniformTerrainCfg,
     HfSteppingStonesTerrainCfg,
     HfTerrainBaseCfg,
     HfWaveTerrainCfg,
-    HfObstacleCfg,
 )

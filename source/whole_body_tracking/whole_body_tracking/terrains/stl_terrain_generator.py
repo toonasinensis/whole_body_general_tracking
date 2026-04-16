@@ -6,27 +6,25 @@
 from __future__ import annotations
 
 import numpy as np
-import os
 import torch
 import trimesh
 from typing import TYPE_CHECKING
 
 import omni.log
 
-from isaaclab.utils.dict import dict_to_md5_hash
-from isaaclab.utils.io import dump_yaml
-from isaaclab.utils.timer import Timer
-from isaaclab.utils.warp import convert_to_warp_mesh
-
-from isaaclab.terrains.trimesh.utils import make_border
-from isaaclab.terrains.utils import color_meshes_by_height, find_flat_patches
 from isaaclab.terrains.terrain_generator import TerrainGenerator
-import trimesh
+from isaaclab.terrains.trimesh.utils import make_border  # noqa: F401
+from isaaclab.terrains.utils import color_meshes_by_height, find_flat_patches  # noqa: F401
+from isaaclab.utils.dict import dict_to_md5_hash  # noqa: F401
+from isaaclab.utils.io import dump_yaml  # noqa: F401
+from isaaclab.utils.timer import Timer
+from isaaclab.utils.warp import convert_to_warp_mesh  # noqa: F401
 
 if TYPE_CHECKING:
-    from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg
+    from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg  # noqa: F401
+
     from .stl_terrain_generator_cfg import STLTerrainGeneratorCfg
-    from .stl_trimesh_cfg import  TrimeshPlatformCfg
+    from .stl_trimesh_cfg import TrimeshPlatformCfg
 
 
 class STLTerrainGenerator(TerrainGenerator):
@@ -124,7 +122,7 @@ class STLTerrainGenerator(TerrainGenerator):
         sub_terrains_cfgs = list(self.cfg.sub_terrains.values())
         if len(sub_terrains_cfgs) == 0:
             raise ValueError("No STL sub-terrains available for deterministic placement.")
-        
+
         # fill terrain grid in row-major order with deterministic mapping:
         # index -> sub_index (with wrap-around if grid is larger than sub-terrain count)
         for index in range(self.cfg.num_rows * self.cfg.num_cols):
@@ -157,11 +155,8 @@ class STLTerrainGenerator(TerrainGenerator):
         self.terrain_meshes.append(mesh)
         # add origin to the list
         self.terrain_origins[row, col] = origin + transform[:3, -1]
-    
+
     def _get_terrain_mesh(self, cfg: TrimeshPlatformCfg) -> tuple[trimesh.Trimesh, np.ndarray]:
         mesh = trimesh.load(cfg.stl_file_path).copy()
-        origin = np.array([0.0, 0.0, 0.0]) # 这个origin是复活点不是mesh位置
+        origin = np.array([0.0, 0.0, 0.0])  # 这个origin是复活点不是mesh位置
         return mesh, origin
-
-
- 

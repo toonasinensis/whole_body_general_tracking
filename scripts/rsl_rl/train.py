@@ -27,7 +27,11 @@ parser.add_argument("--seed", type=int, default=None, help="Seed used for the en
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
-parser.add_argument("--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes.")
+parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+
+parser.add_argument(
+    "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -66,9 +70,7 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import  dump_yaml
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
@@ -93,9 +95,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.distributed:
         env_cfg.sim.device = args_cli.device
 
-        # env_cfg.commands.motion.distributed = True
-        # env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
-        # env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
+        env_cfg.commands.motion.distributed = True
+        env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
+        env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
 
         agent_cfg.device = args_cli.device
         # set seed to have diversity in different threads
@@ -113,14 +115,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     registry_name = args_cli.registry_name
     if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
         registry_name += ":latest"
-    import pathlib
 
     # import wandb
-
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
-    # env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
-
+    env_cfg.commands.motion.motion_file = args_cli.motion_file
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -159,12 +158,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # save resume path before creating a new log_dir
-    if agent_cfg.resume:
+    if args_cli.resume:
         # get path to previous checkpoint
         resume_path = args_cli.resume_path
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
+    # runner.load("/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_3500.pt")
 
     # dump the configuration into log-directory
     # dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
