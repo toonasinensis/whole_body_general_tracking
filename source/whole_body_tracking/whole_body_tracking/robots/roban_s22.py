@@ -6,6 +6,12 @@ from isaaclab.assets.articulation import ArticulationCfg
 from whole_body_tracking.actuators.actuator_cfg import DelayedPDActuatorCfg_RobanS22
 from whole_body_tracking.assets import ASSET_DIR
 
+# from isaaclab.actuators import DelayedPDActuatorCfg
+
+
+# from isaaclab.managers import SceneEntityCfg
+
+
 # from isaaclab.managers import SceneEntityCfg
 
 
@@ -36,8 +42,9 @@ from whole_body_tracking.assets import ASSET_DIR
 RobanS22_CYLINDER_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
+        merge_fixed_joints=False,
         replace_cylinders_with_capsules=False,
-        asset_path=f"{ASSET_DIR}/roban_s22/urdf/biped_s17.urdf",
+        asset_path=f"{ASSET_DIR}/roban_s22/urdf/biped_s17_hands.urdf",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,

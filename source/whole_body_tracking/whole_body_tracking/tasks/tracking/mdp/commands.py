@@ -192,10 +192,7 @@ class MotionLoader:
         # print("Loaded motions with total frames:", sum(frame_list), frame_list)
         if device != "cpu":
             print(f"[data_dict] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-
-        print(" ")
-        print(" ")
-        print(" ")
+        print(" \n \n \n")
 
         self.time_step_total = sum(frame_list)  # self.joint_pos.shape[0]
         self.file_names = file_names
@@ -248,9 +245,12 @@ class MotionLoader:
 
     def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
         """Map global frame timestamps to motion ids.
-
         The global timestamps index the concatenated motion tensor. This function returns
         the corresponding motion id for each timestamp based on ``time_step_end_idx``.
+        Args
+            timestamps: (num_envs, ) global frame timestamps for each environment
+        Returns
+            (num_envs, ) corresponding motion ids for each environment
         """
         if self.time_step_end_idx is None:
             raise RuntimeError("MotionLoader is not initialized. Call resample_motionloader first.")
@@ -282,15 +282,12 @@ class MotionCommand(CommandTerm):
         self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.resample_motion_files(self.env)
-
         # self.motion.update_last_motion_data()  # when init , init last motion data
 
         self.frame_end_per_env = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-
         self.body_pos_relative_w = torch.zeros(self.num_envs, len(cfg.body_names), 3, device=self.device)
         self.body_quat_relative_w = torch.zeros(self.num_envs, len(cfg.body_names), 4, device=self.device)
         self.body_quat_relative_w[:, :, 0] = 1.0
-
         self.history_success_rate_dict = {}
 
         self.metrics["error_anchor_pos"] = torch.zeros(self.num_envs, device=self.device)
@@ -320,6 +317,7 @@ class MotionCommand(CommandTerm):
             dim=1,
         )
 
+    # region normal property
     @property
     def anchor_pos_z(self):
         return self.anchor_pos_w[:, 2:3]
@@ -336,7 +334,7 @@ class MotionCommand(CommandTerm):
 
     @property
     def joint_pos(self) -> torch.Tensor:
-        return self.motion.joint_pos[self.time_steps]
+        return self.motion.joint_pos[self.time_steps]  # (num_envs, num_joints, 3)
 
     @property
     def joint_vel(self) -> torch.Tensor:
@@ -449,18 +447,21 @@ class MotionCommand(CommandTerm):
     def robot_anchor_ang_vel_w(self) -> torch.Tensor:
         return self.robot.data.body_ang_vel_w[:, self.robot_anchor_body_index]
 
+    # endregion normal property
+
     def resample_motion_files(self, env):
         self.motion.resample_motionloader(device=self.device)
         self.use_new_motion_pre_env[:] = False
-
-        self.bin_count = int(self.motion.time_step_total // (1 / (env.cfg.decimation * env.cfg.sim.dt))) + 1
+        self.bin_count = (
+            int(self.motion.time_step_total // (1 / (env.cfg.decimation * env.cfg.sim.dt))) + 1
+        )  # 1s motion frames for each bin
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
+        # NOTE self.kernel is not used in this script
         self.kernel = torch.tensor(
             [self.cfg.adaptive_lambda**i for i in range(self.cfg.adaptive_kernel_size)], device=self.device
         )
         self.kernel = self.kernel / self.kernel.sum()
-
         self.resample_time = 0
         self.success_motion = torch.zeros(self.motion.motion_num, dtype=torch.float32, device=self.device)
 
@@ -470,30 +471,37 @@ class MotionCommand(CommandTerm):
         self.metrics["error_anchor_lin_vel"] = torch.norm(self.anchor_lin_vel_w - self.robot_anchor_lin_vel_w, dim=-1)
         # print("anchor_lin_vel_w: ",self.metrics["error_anchor_lin_vel"] )
         self.metrics["error_anchor_ang_vel"] = torch.norm(self.anchor_ang_vel_w - self.robot_anchor_ang_vel_w, dim=-1)
-
         self.metrics["error_body_pos"] = torch.norm(self.body_pos_relative_w - self.robot_body_pos_w, dim=-1).mean(
             dim=-1
         )
         self.metrics["error_body_rot"] = quat_error_magnitude(self.body_quat_relative_w, self.robot_body_quat_w).mean(
             dim=-1
         )
-
         self.metrics["error_body_lin_vel"] = torch.norm(self.body_lin_vel_w - self.robot_body_lin_vel_w, dim=-1).mean(
             dim=-1
         )
         self.metrics["error_body_ang_vel"] = torch.norm(self.body_ang_vel_w - self.robot_body_ang_vel_w, dim=-1).mean(
             dim=-1
         )
-
         self.metrics["error_joint_pos"] = torch.mean(torch.abs(self.joint_pos - self.robot_joint_pos), dim=-1)
         self.metrics["error_joint_vel"] = torch.mean(torch.abs(self.joint_vel - self.robot_joint_vel), dim=-1)
 
     def _adaptive_sampling(self, env_ids: Sequence[int]):
+        """
+        1. update bin failed history
+        2. compute sampling probability and sample bins accordingly
+        3. compute metrics
+        """
+        # NOTE there shall be a logic to justify
+        # whether the env_ids are out of time, out of motion range, or failed (early termination)
+        # if early termination, add to self._current_bin_failed
+        # else no change
         episode_failed = self._env.termination_manager.terminated[env_ids]
         if torch.any(episode_failed):
-            current_bin_index = torch.clamp(
+            current_bin_index = torch.clamp(  #
                 (self.time_steps * self.bin_count) // max(self.motion.time_step_total, 1), 0, self.bin_count - 1
             )
+            # NOTE terminated envs are early terminated or out of motion range ?
             fail_bins = current_bin_index[env_ids][episode_failed]
             self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
 
@@ -520,16 +528,22 @@ class MotionCommand(CommandTerm):
         ) / float(self.bin_count)
 
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
-
         self.time_steps[env_ids] = (
             (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device))
             / self.bin_count
             * (self.motion.time_step_total - 1)
         ).long()
+        # self.time_steps[env_ids] = (
+        #     sampled_bins
+        #     / self.bin_count
+        #     * (self.motion.time_step_total - 1)
+        # ).long()
+        # endregion Adaptive sampling
 
+        # find the nearest end index for checking motion clip boundary
+        # NOTE the logic is correct, but is this computing efficient ?
         mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
         nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
-        # 对应的结束帧
         self.frame_end_per_env[env_ids] = self.motion.time_step_end_idx[nearest_end_idx]  # [num_envs]
         if self.cfg.eval_mode:
             self.time_steps[env_ids] = self.motion.time_step_start_idx[
@@ -544,6 +558,12 @@ class MotionCommand(CommandTerm):
         self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
 
     def _resample_command(self, env_ids: Sequence[int]):
+        """_resample_command will be called multiple times in each step
+        1. Called from _update_command
+        2. Called directly in the IsaacLab simulator
+        2.1. after check_termination()
+        2.2. after reset_all() maybe?
+        """
         if len(env_ids) == 0:
             return
         if self.cfg.adaptive_sample:
@@ -551,11 +571,13 @@ class MotionCommand(CommandTerm):
         else:
             raise NotImplementedError
             # self.use_new_motion_pre_env[env_ids] = True
+
+        # add noise to robot states when envs are reset
+        # add noise to root state
         root_pos = self.body_pos_w[:, 0].clone()
         root_ori = self.body_quat_w[:, 0].clone()
         root_lin_vel = self.body_lin_vel_w[:, 0].clone()
         root_ang_vel = self.body_ang_vel_w[:, 0].clone()
-
         range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
@@ -567,10 +589,9 @@ class MotionCommand(CommandTerm):
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
         root_lin_vel[env_ids] += rand_samples[:, :3]
         root_ang_vel[env_ids] += rand_samples[:, 3:]
-
+        # add noise to joint state
         joint_pos = self.joint_pos.clone()
         joint_vel = self.joint_vel.clone()
-
         joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
         soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
         joint_vel_limits = self.robot.data.joint_vel_limits[env_ids]
@@ -586,30 +607,35 @@ class MotionCommand(CommandTerm):
             env_ids=env_ids,
         )
         # TODO: 切换动作文件时是否需要清空历史Observation
+        # NOTE: what about the historical observation when resetting the environment?
 
     def _update_command(self):
+        """
+        Called every control step, update commands for envs that are out of time
+        """
         self.time_steps += 1
-        env_ids = torch.where(self.time_steps >= self.frame_end_per_env - 10)[0]  # 到达数据末尾
-        if self.cfg.resample_interval != -1:
+        env_ids = torch.where(self.time_steps >= self.frame_end_per_env)[0]
+        if self.cfg.resample_interval != -1:  # change the reference motion every resample_interval control steps
             self.resample_time += 1
             if self.resample_time >= self.cfg.resample_interval:
                 self.resample_motion_files(self.env)
         self._resample_command(env_ids)
 
+        # compute the metrics
         anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
         anchor_quat_w_repeat = self.anchor_quat_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
         robot_anchor_pos_w_repeat = self.robot_anchor_pos_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
         robot_anchor_quat_w_repeat = self.robot_anchor_quat_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
-
         delta_pos_w = robot_anchor_pos_w_repeat
         delta_pos_w[..., 2] = anchor_pos_w_repeat[..., 2]
         delta_ori_w = yaw_quat(quat_mul(robot_anchor_quat_w_repeat, quat_inv(anchor_quat_w_repeat)))
-
         self.body_quat_relative_w = quat_mul(delta_ori_w, self.body_quat_w)
         self.body_pos_relative_w = delta_pos_w + quat_apply(
             delta_ori_w, self.body_pos_w - anchor_pos_w_repeat
         )  # 把数据中xy yaw换成实际机器人的xy yaw
 
+        # MAE update the bin failed history
+        # NOTE we shall ensure that the _resample_command() function be called once before this function
         self.bin_failed_count = (
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )

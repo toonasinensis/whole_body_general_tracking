@@ -3,7 +3,6 @@
   <mujoco>
     <compiler meshdir="../meshes/" balanceinertia="true" discardvisual="false" />
   </mujoco>
-  <!-- <link name="dummy_link" /> -->
   <link name="base_link">
     <inertial>
       <origin xyz="-0.01005136 -0.00110498 0.14058574" rpy="0 0 0"/>
@@ -34,11 +33,6 @@
       </geometry>
     </collision>
   </link>
-  <!-- <joint name="dummy_to_base_link" type="fixed">
-    <origin xyz="0 0 0" rpy="0 0 0" />
-    <parent link="dummy_link" />
-    <child link="base_link" />
-  </joint> -->
   <link name="waist_yaw_link">
     <inertial>
       <origin xyz="0.00202324 -0.00003822 -0.12282710" rpy="0 0 0"/>
@@ -667,7 +661,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../meshes/l_forearm_hand.STL" />
+        <mesh filename="../meshes/l_forearm.STL" />
       </geometry>
       <material name="">
         <color rgba="1 1 1 1" />
@@ -698,6 +692,31 @@
     <child link="zarm_l4_link" />
     <axis xyz="0 1 0" />
     <limit lower="-2.26892802759263" upper="0.08726" effort="37" velocity="15.0" />
+    <dynamics damping="0.2" friction="0.1" />
+  </joint>
+  <!-- fake left hand -->
+  <link name="zarm_l5_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1e-4"/>
+      <inertia ixx="1e-12" ixy="0" ixz="0" iyy="1e-12" iyz="0" izz="1e-12"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.025" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="zarm_l5_joint" type="fixed">
+    <origin xyz="0 0 -0.2085" rpy="0 0 0" />
+    <parent link="zarm_l4_link" />
+    <child link="zarm_l5_link" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.001" upper="0.001" effort="1" velocity="1.0" />
     <dynamics damping="0.2" friction="0.1" />
   </joint>
   <link name="zarm_r1_link">
@@ -817,7 +836,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../meshes/r_forearm_hand.STL" />
+        <mesh filename="../meshes/r_forearm.STL" />
       </geometry>
       <material name="">
         <color rgba="1 1 1 1" />
@@ -850,6 +869,32 @@
     <limit lower="-2.26892802759263" upper="0.08726" effort="37.0" velocity="15.0" />
     <dynamics damping="0.2" friction="0.1" />
   </joint>
+  <!-- fake right hand -->
+  <link name="zarm_r5_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1e-4"/>
+      <inertia ixx="1e-12" ixy="0" ixz="0" iyy="1e-12" iyz="0" izz="1e-12"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.025" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="zarm_r5_joint" type="fixed">
+    <origin xyz="0 0 -0.2085" rpy="0 0 0" />
+    <parent link="zarm_r4_link" />
+    <child link="zarm_r5_link" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.001" upper="0.001" effort="1" velocity="1.0" />
+    <dynamics damping="0.2" friction="0.1" />
+  </joint>
+
   <link name="zhead_1_link">
     <inertial>
       <origin xyz="-0.00060270 0.00784136 0.01208017" rpy="0 0 0"/>
@@ -924,6 +969,7 @@
     <limit lower="-0.349065850398866" upper="0.785398163397448" effort="12.0" velocity="5.23" />
     <dynamics damping="0.2" friction="0.1" />
   </joint>
+
   <link name="camera_base">
     <inertial>
       <origin xyz="0.38847139 0.04592440 0.13202627" rpy="0 0 0"/>
@@ -946,15 +992,12 @@
       </material>
     </visual>
   </link>
-
-  <!-- Joint connecting head_pitch to head_camera_base -->
   <joint name="camera_base_joint" type="fixed">
     <origin xyz="0.047118 0 0.051192" rpy="0 0.27152 0"/>
     <parent link="zhead_2_link"/>
     <child link="camera_base"/>
   </joint>
 
-  <!-- head_radar link with updated inertial properties -->
   <link name="head_radar">
     <inertial>
       <origin xyz="-0.00018049 0.00000619 0.01744856" rpy="0 0 0"/>
@@ -977,8 +1020,6 @@
       </material>
     </visual>
   </link>
-
-  <!-- Joint connecting head_yaw to head_radar -->
   <joint name="head_radar_joint" type="fixed">
     <origin xyz="0 0 -0.026453" rpy="0 0 0"/>
     <parent link="zhead_1_link"/>

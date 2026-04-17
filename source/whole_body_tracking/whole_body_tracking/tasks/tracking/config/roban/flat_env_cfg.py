@@ -20,8 +20,10 @@ ROBAN_S22_MOTION_BODY_NAMES = [
     "leg_r6_link",
     "zarm_l2_link",
     "zarm_l4_link",
+    "zarm_l5_link",
     "zarm_r2_link",
     "zarm_r4_link",
+    "zarm_r5_link",
 ]
 
 
@@ -230,11 +232,12 @@ class TerminationsCfg:
         params={
             "command_name": "motion",
             "threshold": 0.4,
+            # NOTE use zarm_[l,r]5_link as the termination ee bodies ?
             "body_names": [
                 "leg_l6_link",
                 "leg_r6_link",
-                "zarm_l4_link",
-                "zarm_r4_link",
+                "zarm_l5_link",
+                "zarm_r5_link",
             ],
         },
     )
