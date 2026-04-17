@@ -10,20 +10,40 @@ set -euo pipefail
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
 NPROC_PER_NODE=1
+# PPO memory scales ~linearly with NUM_ENVS; 12288 is very likely to OOM on 24GB.
+# Override at runtime: NUM_ENVS=4096 bash scripts/qq_rsl_rl/train_roban.sh
 NUM_ENVS="${NUM_ENVS:-4096}"
+# Cap number of motions loaded to avoid dataset OOM (override if needed).
+MAX_MOTION_NUM="${MAX_MOTION_NUM:-8192}"
+
+# Reduce allocator fragmentation for long training runs.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# Preflight: avoid Isaac Sim startup failures when GPU is already full.
+if command -v nvidia-smi >/dev/null 2>&1; then
+  FREE_MB="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n 1 || echo "")"
+  if [[ -n "${FREE_MB}" ]] && [[ "${FREE_MB}" -lt 2048 ]]; then
+    echo "[ERROR] GPU free memory is too low (${FREE_MB} MiB). Isaac Sim may fail to create CUDA context."
+    echo "[INFO] Top GPU processes:"
+    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits | head -n 20 || true
+    echo ""
+    echo "Please stop the above process(es) or reboot, then rerun."
+    exit 1
+  fi
+fi
 
 python -m torch.distributed.run \
   --nnodes=1 \
   --nproc_per_node="${NPROC_PER_NODE}" \
-  scripts/v_rsl_rl/train.py \
+  scripts/qq_rsl_rl/train.py \
   --registry_name=test1 \
   --task=Tracking-Flat-RobanS22-v0 \
   --headless \
-  --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file=data/roban_motions \
-  --motion_file_txt=data/roban_motions_list/quick_test.txt \
-  # --logger wandb \
-  # --log_project_name=roban_flat
-#  --resume=true \
-#  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"
+  --motion_file_txt=data/roban_motions_list/motions_main_kept_500.txt \
+  --logger wandb \
+  --log_project_name=roban_flat \
+  --max_motion_num="${MAX_MOTION_NUM}" \
+  --distributed \
+  #  --resume=true \
+  #  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"

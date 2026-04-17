@@ -20,6 +20,18 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument(
+    "--motion_file_txt",
+    type=str,
+    default=None,
+    help="Optional txt file listing relative .npz paths under --motion_file (maps to commands.motion.dataset_txt).",
+)
+parser.add_argument(
+    "--max_motion_num",
+    type=int,
+    default=None,
+    help="Max number of motions to load into memory (maps to commands.motion.max_motion_num). Use -1 for all.",
+)
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
 
 # append RSL-RL cli arguments
@@ -63,7 +75,10 @@ from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_moti
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
+def main(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+    _agent_cfg: RslRlOnPolicyRunnerCfg,
+):
     """Play with RSL-RL agent."""
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
@@ -88,6 +103,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print(
                 f"[INFO]: Overriding motion file in the environment config with: {env_cfg.commands.motion.motion_file}"
             )
+        # Optional dataset list: MotionLoader uses cfg.dataset_txt to select a subset of npz files.
+        if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
+            env_cfg.commands.motion.dataset_txt = args_cli.motion_file_txt
+        # Avoid OOM by capping number of motions loaded.
+        if args_cli.max_motion_num is not None and hasattr(env_cfg.commands.motion, "max_motion_num"):
+            env_cfg.commands.motion.max_motion_num = args_cli.max_motion_num
 
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     env_cfg.episode_length_s = 9999
@@ -156,6 +177,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 if __name__ == "__main__":
     # run the main function
-    main()
+    main()  # pyright: ignore[reportCallIssue]
     # close sim app
     simulation_app.close()

@@ -5,7 +5,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 @configclass
 class ActorCfg:
     class_name: str = "MLPModel"
-    hidden_dims: list = [1024, 512, 256]
+    hidden_dims: list = [4096, 2048, 1024, 512, 256]
     activation: str = "elu"
     obs_normalization: bool = True
     distribution_cfg: dict = {"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar"}
@@ -14,7 +14,7 @@ class ActorCfg:
 @configclass
 class CriticCfg:
     class_name: str = "MLPModel"
-    hidden_dims: list = [1024, 512, 256]
+    hidden_dims: list = [4096, 2048, 1024, 512, 256]
     activation: str = "elu"
     obs_normalization: bool = True
     distribution_cfg: dict = None

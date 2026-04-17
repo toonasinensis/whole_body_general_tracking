@@ -34,6 +34,12 @@ parser.add_argument(
     default=None,
     help="Optional txt file listing relative .npz paths under --motion_file (maps to commands.motion.dataset_txt).",
 )
+parser.add_argument(
+    "--max_motion_num",
+    type=int,
+    default=None,
+    help="Max number of motions to load into memory (maps to commands.motion.max_motion_num). Use -1 for all.",
+)
 
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
@@ -142,6 +148,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Optional dataset list: MotionLoader uses cfg.dataset_txt to select a subset of npz files.
     if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
         env_cfg.commands.motion.dataset_txt = args_cli.motion_file_txt
+    # Avoid OOM by capping number of motions loaded.
+    if args_cli.max_motion_num is not None and hasattr(env_cfg.commands.motion, "max_motion_num"):
+        env_cfg.commands.motion.max_motion_num = args_cli.max_motion_num
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)

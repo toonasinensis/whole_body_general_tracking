@@ -48,3 +48,4 @@ _build
 *.npz
 
 artifacts/
+tea_debug.log
