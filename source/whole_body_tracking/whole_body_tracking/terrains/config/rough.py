@@ -30,8 +30,6 @@ GRAVEL_TERRAINS_CFG = TerrainGeneratorCfg(
 import glob
 import os
 
-from whole_body_tracking.assets import ASSET_DIR
-from whole_body_tracking.terrains.stl_terrain_generator_cfg import STLTerrainGeneratorCfg
 from whole_body_tracking.terrains.stl_trimesh_cfg import TrimeshPlatformCfg
 
 
@@ -55,17 +53,5 @@ def _build_stl_sub_terrains(terrain_dir: str) -> dict:
         for f in stl_files
     }
 
-
-_stl_sub_terrains = _build_stl_sub_terrains(f"{ASSET_DIR}/terrains")
-
-STL_PLATFORM_TERRAINS_CFG = STLTerrainGeneratorCfg(
-    curriculum=False,
-    size=(5.0, 5.0),
-    border_width=20.0,
-    num_rows=1,
-    num_cols=len(_stl_sub_terrains),
-    use_cache=True,
-    sub_terrains=_stl_sub_terrains,
-)
 
 # TODO: 有课程的STL platform terrains cfg

@@ -119,9 +119,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # import wandb
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
-    env_cfg.commands.motion.motion_file = (
-        args_cli.motion_file if args_cli.motion_file is not None else env_cfg.commands.motion.motion_file
-    )
+    env_cfg.commands.motion.motion_file = args_cli.motion_file
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)

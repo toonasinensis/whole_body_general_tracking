@@ -81,3 +81,48 @@ def motion_anchor_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor
     )
     mat = matrix_from_quat(ori)
     return mat[..., :2].reshape(mat.shape[0], -1)
+
+
+def motion_command(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return torch.cat(
+        [
+            command.joint_pos,
+            command.joint_vel,
+            command.anchor_lin_vel_b,
+            command.anchor_ang_vel_b,
+            command.anchor_project_gravity,
+            command.anchor_pos_z,
+        ],
+        dim=1,
+    )
+
+
+def motion_joint_pos(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.joint_pos
+
+
+def motion_joint_vel(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.joint_vel
+
+
+def motion_anchor_lin_vel_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.anchor_lin_vel_b
+
+
+def motion_anchor_ang_vel_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.anchor_ang_vel_b
+
+
+def motion_anchor_project_gravity(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.anchor_project_gravity
+
+
+def motion_anchor_pos_z(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.anchor_pos_z

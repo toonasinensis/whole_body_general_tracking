@@ -12,7 +12,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns  # noqa: F401
+from isaaclab.sensors import ContactSensorCfg  # noqa: F401
 from isaaclab.terrains import TerrainImporterCfg
 
 ##
@@ -22,7 +22,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 import whole_body_tracking.tasks.tracking.mdp as mdp
-from whole_body_tracking.terrains.config import GRAVEL_TERRAINS_CFG, STL_PLATFORM_TERRAINS_CFG  # noqa: F401
+from whole_body_tracking.terrains.config import GRAVEL_TERRAINS_CFG  # noqa: F401
 
 ##
 # Scene definition
@@ -43,11 +43,10 @@ class MySceneCfg(InteractiveSceneCfg):
     """Configuration for the terrain scene with a legged robot."""
 
     # ground terrain
+
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
-        terrain_type="generator",
-        terrain_generator=GRAVEL_TERRAINS_CFG,
-        max_init_terrain_level=5,
+        terrain_type="plane",
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -60,6 +59,24 @@ class MySceneCfg(InteractiveSceneCfg):
             project_uvw=True,
         ),
     )
+
+    # terrain = TerrainImporterCfg(
+    #     prim_path="/World/ground",
+    #     terrain_type="generator",
+    #     terrain_generator=GRAVEL_TERRAINS_CFG,
+    #     max_init_terrain_level=5,
+    #     collision_group=-1,
+    #     physics_material=sim_utils.RigidBodyMaterialCfg(
+    #         friction_combine_mode="multiply",
+    #         restitution_combine_mode="multiply",
+    #         static_friction=1.0,
+    #         dynamic_friction=1.0,
+    #     ),
+    #     visual_material=sim_utils.MdlFileCfg(
+    #         mdl_path="{NVIDIA_NUCLEUS_DIR}/Materials/Base/Architecture/Shingles_01.mdl",
+    #         project_uvw=True,
+    #     ),
+    # )
     # robots
     robot: ArticulationCfg = MISSING
     # lights
@@ -74,14 +91,6 @@ class MySceneCfg(InteractiveSceneCfg):
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True, force_threshold=10.0, debug_vis=True
     )
-    # height_scanner = RayCasterCfg(
-    #     prim_path="{ENV_REGEX_NS}/Robot/pelvis",
-    #     offset=RayCasterCfg.OffsetCfg(pos=(1.0, 0.0, 0.5)),
-    #     ray_alignment="yaw",
-    #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[2.5, 1.0]),
-    #     debug_vis=True,
-    #     mesh_prim_paths=["/World/ground"],
-    # }
 
 
 ##
@@ -102,7 +111,7 @@ class CommandsCfg:
         pose_range={
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
-            "z": (0.01, 0.02),
+            "z": (0.05, 0.1),
             "roll": (-0.0, 0.0),
             "pitch": (-0.0, 0.0),
             "yaw": (-0.0, 0.0),
@@ -129,21 +138,30 @@ class ObservationsCfg:
 
         # observation terms (order preserved)
         command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
-        # motion_anchor_pos_b = ObsTerm(
-        #     func=mdp.motion_anchor_pos_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.25, n_max=0.25)
-        # )
+
+        motion_anchor_pos_b = ObsTerm(func=mdp.motion_anchor_pos_b, params={"command_name": "motion"})
+        motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
+        body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})
+        body_ori = ObsTerm(func=mdp.robot_body_ori_b, params={"command_name": "motion"})
+
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        actions = ObsTerm(func=mdp.last_action)
+
+        # observation terms (order preserved)
+        # command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
+
         motion_anchor_ori_b = ObsTerm(
             func=mdp.motion_anchor_ori_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
         # base_lin_vel = ObsTerm(func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
-        # height_scan = ObsTerm(
-        #     func=mdp.height_scan,
-        #     params={"sensor_cfg": SceneEntityCfg("height_scanner")},
-        #     noise=Unoise(n_min=-0.02, n_max=0.02),
-        # )
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -162,7 +180,6 @@ class ObservationsCfg:
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        # height_scan = ObsTerm(func=mdp.height_scan, params={"sensor_cfg": SceneEntityCfg("height_scanner")})
         actions = ObsTerm(func=mdp.last_action)
 
     # observation groups
@@ -277,25 +294,25 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     anchor_pos = DoneTerm(
         func=mdp.bad_anchor_pos_z_only,
-        params={"command_name": "motion", "threshold": 0.25},
+        params={"command_name": "motion", "threshold": 0.4},
     )
     anchor_ori = DoneTerm(
         func=mdp.bad_anchor_ori,
-        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 0.8},
+        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 1.0},
     )
-    # ee_body_pos = DoneTerm(
-    #     func=mdp.bad_motion_body_pos_z_only,
-    #     params={
-    #         "command_name": "motion",
-    #         "threshold": 0.25,
-    #         "body_names": [
-    #             "left_ankle_roll_link",
-    #             "right_ankle_roll_link",
-    #             "left_wrist_yaw_link",
-    #             "right_wrist_yaw_link",
-    #         ],
-    #     },
-    # )
+    ee_body_pos = DoneTerm(
+        func=mdp.bad_motion_body_pos_z_only,
+        params={
+            "command_name": "motion",
+            "threshold": 0.4,
+            "body_names": [
+                "left_ankle_roll_link",
+                "right_ankle_roll_link",
+                "left_wrist_yaw_link",
+                "right_wrist_yaw_link",
+            ],
+        },
+    )
 
 
 @configclass
