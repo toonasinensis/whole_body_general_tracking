@@ -9,10 +9,10 @@ set -euo pipefail
 
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
-NPROC_PER_NODE=1
+NPROC_PER_NODE=4
 # PPO memory scales ~linearly with NUM_ENVS; 12288 is very likely to OOM on 24GB.
 # Override at runtime: NUM_ENVS=4096 bash scripts/qq_rsl_rl/train_roban.sh
-NUM_ENVS="${NUM_ENVS:-4096}"
+NUM_ENVS="${NUM_ENVS:-8192}"
 # Cap number of motions loaded to avoid dataset OOM (override if needed).
 MAX_MOTION_NUM="${MAX_MOTION_NUM:-8192}"
 
@@ -40,7 +40,7 @@ python -m torch.distributed.run \
   --headless \
   --num_envs="${NUM_ENVS}" \
   --motion_file=data/roban_motions \
-  --motion_file_txt=data/roban_motions_list/motions_main_kept_500.txt \
+  --motion_file_txt=data/roban_motions_list/motions_main_kept_40000.txt \
   --logger wandb \
   --log_project_name=roban_flat \
   --max_motion_num="${MAX_MOTION_NUM}" \

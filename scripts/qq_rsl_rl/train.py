@@ -100,6 +100,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+
+    # ---------------------------------------------------------------------
+    # Multi-process (torchrun) training: ensure W&B runs only on global rank 0
+    #
+    # IsaacLab/RSL-RL initializes the selected logger inside the runner. When
+    # multiple processes all use logger="wandb", each process creates a run.
+    # We gate it here by forcing non-zero ranks to disable W&B.
+    # ---------------------------------------------------------------------
+    if args_cli.distributed:
+        global_rank = int(os.getenv("RANK", "0"))
+        if global_rank != 0 and getattr(agent_cfg, "logger", None) is not None and str(agent_cfg.logger).lower() == "wandb":
+            # Safety net in case downstream imports wandb anyway.
+            os.environ.setdefault("WANDB_MODE", "disabled")
+            os.environ.setdefault("WANDB_DISABLED", "true")
+            # Disable the wandb logger on non-main ranks (runner will skip it).
+            agent_cfg.logger = None
     
     # Ensure Weights & Biases has the required config key.
     # custom_rsl_rl's WandbSummaryWriter expects cfg["wandb_project"] to exist when logger=="wandb".
