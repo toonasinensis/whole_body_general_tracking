@@ -15,11 +15,13 @@ Note: In the current implementation of `MotionCommand`, bins are defined over th
 *concatenated global timeline* of all loaded motions, not per-motion.
 
 python scripts/eval/eval_adaptive_bins.py \
-  --task Tracking-Flat-G1-v0 \
-  --resume_path logs/rsl_rl/g1_flat/2026-04-13_18-28-16_g1_single_gpu/model_1500.pt \
-  --motions data/g1_eval_motions/main \
-  --steps 2000 \
-  --out data/eval_results/adaptive_bins_main.json \
+  --task Tracking-Flat-RobanS22-v0 \
+  --resume_path logs/rsl_rl/roban_flat/2026-04-17_21-27-35/model_25600.pt \
+  --motion_file data/roban_motions \
+  --motion_file_txt data/roban_motions_list/motions_main_kept_500.txt \
+  --max_motion_num 5000 \
+  --steps 10000 \
+  --out data/eval_results/adaptive_bins_roban.json \
   --device cuda:0 \
   --headless
 """
@@ -73,7 +75,18 @@ class RunningStats:
 parser = argparse.ArgumentParser(description="Evaluate adaptive sampling bins and dump probabilities.")
 parser.add_argument("--task", type=str, required=True, help="IsaacLab task name (Hydra registry key).")
 parser.add_argument("--resume_path", type=str, required=True, help="Path to the trained model checkpoint.")
-parser.add_argument("--motions", type=str, required=True, help="Directory containing tracking-format .npz motions.")
+parser.add_argument(
+    "--motion_file",
+    type=str,
+    required=True,
+    help="Motion dataset root (directory of .npz or layout expected by MotionLoader); same as train.py --motion_file.",
+)
+parser.add_argument(
+    "--motion_file_txt",
+    type=str,
+    default=None,
+    help="Optional txt listing relative .npz paths under --motion_file (maps to commands.motion.dataset_txt), same as train.py.",
+)
 parser.add_argument("--steps", type=int, default=20000, help="Number of env steps to run before dumping bins.")
 parser.add_argument(
     "--warmup_steps",
@@ -82,12 +95,26 @@ parser.add_argument(
     help="Steps to skip before accumulating metrics (default: 500).",
 )
 parser.add_argument("--seed", type=int, default=42, help="Seed (passed to agent config).")
-parser.add_argument("--max_motions", type=int, default=-1, help="Limit number of motions loaded (-1 = all).")
+parser.add_argument(
+    "--max_motion_num",
+    type=int,
+    default=-1,
+    help="Cap motions loaded into memory (commands.motion.max_motion_num). Use -1 for all; same semantics as train.py.",
+)
 parser.add_argument(
     "--out",
     type=str,
     default="assets/eval_results/adaptive_bins.json",
     help="Output JSON path.",
+)
+parser.add_argument(
+    "--out_txt",
+    type=str,
+    default=None,
+    help=(
+        "Optional output TXT path (quick_test.txt format: one motion file per line). "
+        "If omitted, writes next to --out as '<stem>_motions_sorted.txt'."
+    ),
 )
 parser.add_argument(
     "--disable_noise",
@@ -145,9 +172,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     agent_cfg.seed = args_cli.seed
 
-    motions_dir = os.path.abspath(os.path.expanduser(args_cli.motions))
-    env_cfg.commands.motion.motion_file = motions_dir
-    env_cfg.commands.motion.max_motion_num = int(args_cli.max_motions)
+    motion_root = os.path.abspath(os.path.expanduser(args_cli.motion_file))
+    env_cfg.commands.motion.motion_file = motion_root
+    # Optional dataset list (same as scripts/qq_rsl_rl/train.py).
+    if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
+        env_cfg.commands.motion.dataset_txt = os.path.abspath(os.path.expanduser(args_cli.motion_file_txt))
+    # Cap loaded motions (-1 = all in MotionLoader._find_npz_files).
+    env_cfg.commands.motion.max_motion_num = int(args_cli.max_motion_num)
 
     # Keep adaptive sampling enabled (same as training).
     env_cfg.commands.motion.adaptive_sample = True
@@ -178,7 +209,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     warmup = int(args_cli.warmup_steps)
 
     print(f"[INFO] Running adaptive sampling eval: steps={steps}, num_envs={base_env.num_envs}")
-    print(f"[INFO] Motions: {motions_dir}")
+    print(f"[INFO] motion_file: {motion_root}")
+    if args_cli.motion_file_txt is not None:
+        print(f"[INFO] motion_file_txt -> dataset_txt: {getattr(env_cfg.commands.motion, 'dataset_txt', None)}")
+    print(f"[INFO] max_motion_num: {env_cfg.commands.motion.max_motion_num}")
     print(f"[INFO] Checkpoint: {resume_path}")
 
     # Metrics to average (match commands.py _update_metrics)
@@ -283,7 +317,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     }
     payload = {
         "meta": {
-            "motions_dir": motions_dir,
+            "motion_file": motion_root,
+            "motion_file_txt": getattr(env_cfg.commands.motion, "dataset_txt", None),
+            "max_motion_num": int(env_cfg.commands.motion.max_motion_num),
             "checkpoint": resume_path,
             "steps": steps,
             "warmup_steps": warmup,
@@ -294,6 +330,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     }
     out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"[INFO] Wrote: {out_path}")
+
+    # Also write a quick_test.txt-style file list sorted by probability mass per motion.
+    motion_scores: dict[str, float] = {}
+    for b in bins_sorted:
+        mf = str(b["motion_file"])
+        motion_scores[mf] = motion_scores.get(mf, 0.0) + float(b["sampling_probability"])
+    motions_sorted = sorted(motion_scores.items(), key=lambda kv: kv[1], reverse=True)
+    out_txt = args_cli.out_txt
+    if out_txt is None:
+        out_txt_path = out_path.with_name(out_path.stem + "_motions_sorted.txt")
+    else:
+        out_txt_path = Path(out_txt).expanduser().resolve()
+    out_txt_path.parent.mkdir(parents=True, exist_ok=True)
+    out_txt_path.write_text("".join(f"{mf}\n" for mf, _ in motions_sorted), encoding="utf-8")
+    print(f"[INFO] Wrote: {out_txt_path}")
 
     vec_env.close()
 

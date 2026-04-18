@@ -1,10 +1,3 @@
-"""Package containing paths to local asset files."""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-# Absolute path to this package's directory.
-ASSET_DIR: Path = Path(__file__).resolve().parent
-
-__all__ = ["ASSET_DIR"]
+version https://git-lfs.github.com/spec/v1
+oid sha256:751857d67513ea7008c0329e393020a5e0730fb682938d7da6773a29f6e22ab7
+size 371
