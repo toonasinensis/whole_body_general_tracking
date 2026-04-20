@@ -452,7 +452,6 @@ class MotionCommand(CommandTerm):
         clipped_bin_failed_count = torch.clamp(
             self.bin_failed_count, max=self.cfg.failure_cap_beta * self.bin_failed_count.mean()
         )
-        # print("bin_failed_count: max, mean, min", self.bin_failed_count.max().item(), self.bin_failed_count.mean().item(), self.bin_failed_count.min().item())
         sampling_probabilities = torch.nn.functional.pad(
             clipped_bin_failed_count.unsqueeze(0).unsqueeze(0),
             (0, self.cfg.adaptive_kernel_size - 1),
@@ -466,7 +465,6 @@ class MotionCommand(CommandTerm):
         sampling_probabilities = (1 - self.cfg.adaptive_uniform_ratio) * sampling_probabilities + (
             self.cfg.adaptive_uniform_ratio
         ) / float(self.bin_count)
-        # print("sampling_probabilities : max, mean, min", sampling_probabilities.max().item(), sampling_probabilities.mean().item(), sampling_probabilities.min().item())
         return sampling_probabilities
 
     def _get_bin_global_frame_range(self, bin_index: int) -> tuple[int, int]:
@@ -634,12 +632,8 @@ class MotionCommand(CommandTerm):
         ).long()
 
         # NOTE the logic is correct, but is this computing efficient ?
-        # mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
-        # nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
-
-        nearest_end_idx = torch.bucketize(self.time_steps[env_ids], self.motion.time_step_end_idx, right=False)
-        nearest_end_idx = torch.clamp(nearest_end_idx, max=len(self.motion.time_step_end_idx) - 1)
-
+        mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
+        nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
         self.frame_end_per_env[env_ids] = self.motion.time_step_end_idx[nearest_end_idx]  # [num_envs]
         if self.cfg.eval_mode:
             self.time_steps[env_ids] = self.motion.time_step_start_idx[
@@ -670,34 +664,36 @@ class MotionCommand(CommandTerm):
 
         # add noise to robot states when envs are reset
         # add noise to root state
-        root_pos = self.body_pos_w[env_ids, 0].clone()
-        root_ori = self.body_quat_w[env_ids, 0].clone()
-        root_lin_vel = self.body_lin_vel_w[env_ids, 0].clone()
-        root_ang_vel = self.body_ang_vel_w[env_ids, 0].clone()
+        root_pos = self.body_pos_w[:, 0].clone()
+        root_ori = self.body_quat_w[:, 0].clone()
+        root_lin_vel = self.body_lin_vel_w[:, 0].clone()
+        root_ang_vel = self.body_ang_vel_w[:, 0].clone()
         range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_pos += rand_samples[:, 0:3]
+        root_pos[env_ids] += rand_samples[:, 0:3]
         # orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        # root_ori = quat_mul(orientations_delta, root_ori)
+        # root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
         range_list = [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_lin_vel += rand_samples[:, :3]
-        root_ang_vel += rand_samples[:, 3:]
+        root_lin_vel[env_ids] += rand_samples[:, :3]
+        root_ang_vel[env_ids] += rand_samples[:, 3:]
         # add noise to joint state
-        joint_pos = self.joint_pos[env_ids].clone()
-        joint_vel = self.joint_vel[env_ids].clone()
+        joint_pos = self.joint_pos.clone()
+        joint_vel = self.joint_vel.clone()
         joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
         soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
         joint_vel_limits = self.robot.data.joint_vel_limits[env_ids]
         max_ang_vel_root = 20.0
-        joint_pos = torch.clip(joint_pos, soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1])
-        joint_vel = torch.clip(joint_vel, -joint_vel_limits[:, :], joint_vel_limits[:, :])
-        root_ang_vel = torch.clip(root_ang_vel, -max_ang_vel_root, max_ang_vel_root)
-        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        joint_pos[env_ids] = torch.clip(
+            joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
+        )
+        joint_vel[env_ids] = torch.clip(joint_vel[env_ids], -joint_vel_limits[:, :], joint_vel_limits[:, :])
+        root_ang_vel[env_ids] = torch.clip(root_ang_vel[env_ids], -max_ang_vel_root, max_ang_vel_root)
+        self.robot.write_joint_state_to_sim(joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids)
         self.robot.write_root_state_to_sim(
-            torch.cat([root_pos, root_ori, root_lin_vel, root_ang_vel], dim=-1),
+            torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
             env_ids=env_ids,
         )
         # TODO: 切换动作文件时是否需要清空历史Observation
@@ -902,7 +898,7 @@ class MotionCommandCfg(CommandTermCfg):
     failure_cap_beta: float = 200.0
 
     # 每隔多少步导出一次 adaptive bins 概率和 bin->motion 反查映射，-1 表示不保存
-    fail_count_save_interval: int = 5 * 24
+    fail_count_save_interval: int = 1000 * 24
     save_adaptive_bins: bool = True
     adaptive_bins_file_prefix: str = "adaptive_bins"
 
