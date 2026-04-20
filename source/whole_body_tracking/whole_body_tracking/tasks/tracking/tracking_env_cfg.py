@@ -137,28 +137,30 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
-
-        # motion_anchor_pos_b = ObsTerm(func=mdp.motion_anchor_pos_b, params={"command_name": "motion"})
+        motion_joint_pos = ObsTerm(
+            func=mdp.motion_joint_pos, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        motion_joint_vel = ObsTerm(
+            func=mdp.motion_joint_vel, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
+        )
+        motion_anchor_lin_vel_b = ObsTerm(
+            func=mdp.motion_anchor_lin_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        motion_anchor_ang_vel_b = ObsTerm(
+            func=mdp.motion_anchor_ang_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
+        )
+        motion_anchor_project_gravity = ObsTerm(
+            func=mdp.motion_anchor_project_gravity,
+            params={"command_name": "motion"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+        motion_anchor_pos_z = ObsTerm(
+            func=mdp.motion_anchor_pos_z, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
         motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
-        # body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})
-        # body_ori = ObsTerm(func=mdp.robot_body_ori_b, params={"command_name": "motion"})
 
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
-        actions = ObsTerm(func=mdp.last_action)
-
-        # observation terms (order preserved)
-        # command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
-
-        motion_anchor_ori_b = ObsTerm(
-            func=mdp.motion_anchor_ori_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
-        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5))
-        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import math
 import numpy as np
 import os
@@ -81,6 +82,7 @@ class MotionLoader:
                 relative_paths = [line.strip() for line in f if line.strip()]
                 # import ipdb;ipdb.set_trace()
             npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
+            random.shuffle(npz_files)
         else:
             dir_path = Path(dir_path)
             npz_files = list(dir_path.rglob("*.npz"))
@@ -178,10 +180,6 @@ class MotionLoader:
         )  # frame list是每个motion file长度的list
         self.fps = fps
 
-        # if self.cfg.resample_interval != -1:
-        # save last data
-        # self.update_last_motion_data()
-
         self.joint_pos = data_dict["joint_pos"]
         self.joint_vel = data_dict["joint_vel"]
 
@@ -196,8 +194,9 @@ class MotionLoader:
 
         self.time_step_total = sum(frame_list)  # self.joint_pos.shape[0]
         self.file_names = file_names
-        print("self.file_names: ", self.file_names)
-        print("frame nums:" * 10, "     ", len(self.file_names))
+        print("file nums:", "     ", len(self.file_names))
+        print("frame nums:", "     ", (self._body_pos_w_sel.shape[0]))
+
         self.time_step_end_idx = []
         self.frame_list = torch.tensor(frame_list, device=device)
         self.time_step_end_idx = torch.cumsum(self.frame_list, dim=0)
@@ -289,6 +288,8 @@ class MotionCommand(CommandTerm):
         self.body_quat_relative_w = torch.zeros(self.num_envs, len(cfg.body_names), 4, device=self.device)
         self.body_quat_relative_w[:, :, 0] = 1.0
         self.history_success_rate_dict = {}
+        self.command_step_count = 0
+        self._last_bins_export_step = -1
 
         self.metrics["error_anchor_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_rot"] = torch.zeros(self.num_envs, device=self.device)
@@ -465,6 +466,131 @@ class MotionCommand(CommandTerm):
         self.resample_time = 0
         self.success_motion = torch.zeros(self.motion.motion_num, dtype=torch.float32, device=self.device)
 
+    def _compute_sampling_probabilities(self) -> torch.Tensor:
+        clipped_bin_failed_count = torch.clamp(
+            self.bin_failed_count, max=self.cfg.failure_cap_beta * self.bin_failed_count.mean()
+        )
+        sampling_probabilities = torch.nn.functional.pad(
+            clipped_bin_failed_count.unsqueeze(0).unsqueeze(0),
+            (0, self.cfg.adaptive_kernel_size - 1),
+            mode="replicate",
+        )
+        sampling_probabilities = torch.nn.functional.conv1d(sampling_probabilities, self.kernel.view(1, 1, -1)).view(-1)
+        sampling_probabilities = sampling_probabilities / (sampling_probabilities.sum() + 1e-8)
+        sampling_probabilities = torch.clamp(
+            sampling_probabilities, max=self.cfg.failure_cap_beta * sampling_probabilities.mean()
+        )
+        sampling_probabilities = (1 - self.cfg.adaptive_uniform_ratio) * sampling_probabilities + (
+            self.cfg.adaptive_uniform_ratio
+        ) / float(self.bin_count)
+        return sampling_probabilities
+
+    def _get_bin_global_frame_range(self, bin_index: int) -> tuple[int, int]:
+        total_frames = max(int(self.motion.time_step_total), 1)
+        if total_frames == 1:
+            return 0, 1
+
+        scaled_total = total_frames - 1
+        global_start = int(math.floor((bin_index * scaled_total) / float(self.bin_count)))
+        global_end = int(math.ceil(((bin_index + 1) * scaled_total) / float(self.bin_count)))
+        global_end = max(global_start + 1, min(global_end, total_frames))
+        return global_start, global_end
+
+    def _build_bin_motion_segments(self, global_start: int, global_end: int) -> list[dict]:
+        start_idx = self.motion.time_step_start_idx.detach().cpu().tolist()
+        end_idx = self.motion.time_step_end_idx.detach().cpu().tolist()
+        file_names = list(getattr(self.motion, "file_names", []))
+        if len(file_names) == 0:
+            file_names = [f"motion_{i:05d}.npz" for i in range(int(self.motion.motion_num))]
+
+        segments: list[dict] = []
+        for motion_id, (motion_start, motion_end) in enumerate(zip(start_idx, end_idx)):
+            overlap_start = max(global_start, int(motion_start))
+            overlap_end = min(global_end, int(motion_end))
+            if overlap_start >= overlap_end:
+                continue
+            segments.append(
+                {
+                    "motion_id": int(motion_id),
+                    "motion_file": file_names[motion_id],
+                    "global_frame_start": int(overlap_start),
+                    "global_frame_end_exclusive": int(overlap_end),
+                    "motion_local_frame_start": int(overlap_start - motion_start),
+                    "motion_local_frame_end_exclusive": int(overlap_end - motion_start),
+                }
+            )
+            if motion_end >= global_end:
+                break
+        return segments
+
+    def _export_adaptive_bins(self) -> None:
+        if not self.cfg.adaptive_sample or not self.cfg.save_adaptive_bins:
+            return
+        if self.bin_count <= 0 or self.motion.time_step_total is None:
+            return
+
+        sampling_probabilities = self._compute_sampling_probabilities().detach().cpu()
+        bin_failed_count = self.bin_failed_count.detach().cpu()
+        fps = float(getattr(self.motion, "fps", 0.0))
+        rank = int(self.cfg.local_rank) if int(self.cfg.local_rank) >= 0 else 0
+
+        bins = []
+        for bin_index in range(int(self.bin_count)):
+            global_start, global_end = self._get_bin_global_frame_range(bin_index)
+            motion_segments = self._build_bin_motion_segments(global_start, global_end)
+            first_segment = motion_segments[0] if motion_segments else None
+            bins.append(
+                {
+                    "bin_index": int(bin_index),
+                    "sampling_probability": float(sampling_probabilities[bin_index].item()),
+                    "bin_failed_count": float(bin_failed_count[bin_index].item()),
+                    "global_frame_start": int(global_start),
+                    "global_frame_end_exclusive": int(global_end),
+                    "global_time_s_start": float(global_start / fps) if fps > 0 else 0.0,
+                    "global_time_s_end_exclusive": float(global_end / fps) if fps > 0 else 0.0,
+                    "segment_count": int(len(motion_segments)),
+                    "motion_id_at_bin_start": int(first_segment["motion_id"]) if first_segment else -1,
+                    "motion_file": first_segment["motion_file"] if first_segment else None,
+                    "motion_local_frame_start": int(first_segment["motion_local_frame_start"]) if first_segment else -1,
+                    "motion_local_frame_end_exclusive": (
+                        int(first_segment["motion_local_frame_end_exclusive"]) if first_segment else -1
+                    ),
+                    "motion_segments": motion_segments,
+                }
+            )
+
+        bins_sorted_indices = sorted(
+            range(len(bins)), key=lambda index: bins[index]["sampling_probability"], reverse=True
+        )
+        payload = {
+            "meta": {
+                "step": int(self.command_step_count),
+                "rank": rank,
+                "distributed": bool(self.cfg.distributed),
+                "motions_dir": str(self.cfg.motion_file),
+                "log_save_path": str(self.cfg.log_save_path),
+                "fps": fps,
+                "motion_num": int(self.motion.motion_num),
+                "total_frames": int(self.motion.time_step_total),
+                "bin_count": int(self.bin_count),
+                "adaptive_kernel_size": int(self.cfg.adaptive_kernel_size),
+                "adaptive_lambda": float(self.cfg.adaptive_lambda),
+                "adaptive_uniform_ratio": float(self.cfg.adaptive_uniform_ratio),
+                "adaptive_alpha": float(self.cfg.adaptive_alpha),
+            },
+            "bins": bins,
+            "bins_sorted": bins_sorted_indices,
+        }
+
+        save_dir = Path(self.cfg.log_save_path).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out_path = (
+            save_dir / f"{self.cfg.adaptive_bins_file_prefix}_rank_{rank:02d}_step_{self.command_step_count:09d}.json"
+        )
+        out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        self._last_bins_export_step = self.command_step_count
+        print(f"[MotionCommand] Wrote adaptive bins: {out_path}")
+
     def _update_metrics(self):
         self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
         self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
@@ -507,25 +633,7 @@ class MotionCommand(CommandTerm):
 
         # Sample
 
-        clipped_bin_failed_count = torch.clamp(
-            self.bin_failed_count, max=self.cfg.failure_cap_beta * self.bin_failed_count.mean()
-        )
-
-        sampling_probabilities = torch.nn.functional.pad(
-            clipped_bin_failed_count.unsqueeze(0).unsqueeze(0),
-            (0, self.cfg.adaptive_kernel_size - 1),  # Non-causal kernel
-            mode="replicate",
-        )
-        sampling_probabilities = torch.nn.functional.conv1d(sampling_probabilities, self.kernel.view(1, 1, -1)).view(-1)
-        sampling_probabilities = sampling_probabilities / (sampling_probabilities.sum() + 1e-8)
-
-        sampling_probabilities = torch.clamp(
-            sampling_probabilities, max=self.cfg.failure_cap_beta * sampling_probabilities.mean()
-        )
-
-        sampling_probabilities = (1 - self.cfg.adaptive_uniform_ratio) * sampling_probabilities + (
-            self.cfg.adaptive_uniform_ratio
-        ) / float(self.bin_count)
+        sampling_probabilities = self._compute_sampling_probabilities()
 
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
         self.time_steps[env_ids] = (
@@ -613,6 +721,7 @@ class MotionCommand(CommandTerm):
         """
         Called every control step, update commands for envs that are out of time
         """
+        self.command_step_count += 1
         self.time_steps += 1
         env_ids = torch.where(self.time_steps >= self.frame_end_per_env)[0]
         if self.cfg.resample_interval != -1:  # change the reference motion every resample_interval control steps
@@ -640,6 +749,14 @@ class MotionCommand(CommandTerm):
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )
         self._current_bin_failed.zero_()
+        print("command_step_count: ", self.command_step_count)
+        if (
+            self.cfg.save_adaptive_bins
+            and self.cfg.fail_count_save_interval > 0
+            and self.command_step_count % self.cfg.fail_count_save_interval == 0
+            and self._last_bins_export_step != self.command_step_count
+        ):
+            self._export_adaptive_bins()
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
@@ -800,8 +917,10 @@ class MotionCommandCfg(CommandTermCfg):
     failure_cap: bool = True
     failure_cap_beta: float = 200.0
 
-    # 每隔多少步保存一次 motion 维度的 fail count，-1 表示不保存
-    fail_count_save_interval: int = 2000 * 24
+    # 每隔多少步导出一次 adaptive bins 概率和 bin->motion 反查映射，-1 表示不保存
+    fail_count_save_interval: int = 1000 * 24
+    save_adaptive_bins: bool = True
+    adaptive_bins_file_prefix: str = "adaptive_bins"
 
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
