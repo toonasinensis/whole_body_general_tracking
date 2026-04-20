@@ -10,7 +10,8 @@ import torch
 
 from isaaclab.app import AppLauncher
 
-G1_MOTION_FILE = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1/seed"
+# region robot configs
+G1_MOTION_FILE = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1/检查数据集"
 G1_ANCHOR_BODY_NAMES = "pelvis"
 G1_BODY_NAMES = [
     "pelvis",
@@ -29,7 +30,7 @@ G1_BODY_NAMES = [
     "right_wrist_yaw_link",
 ]
 
-ROBAN_MOTION_FILE = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/roban/roban1/"
+ROBAN_MOTION_FILE = "data/roban_motions/210531"
 ROBAN_ANCHOR_BODY_NAMES = "waist_yaw_link"
 ROBAN_BODY_NAMES = [
     "base_link",
@@ -143,43 +144,6 @@ class ReplayMotionsSceneCfg(InteractiveSceneCfg):
 
 
 num_motion = 200
-
-
-def _resolve_velocity_to_arrow(
-    velocity_w: torch.Tensor,
-    default_scale: tuple[float, float, float],
-    device: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Convert 3D world velocity to arrow scale and world quaternion."""
-    speed = torch.linalg.norm(velocity_w, dim=1)
-    arrow_scale = torch.tensor(default_scale, device=device).repeat(velocity_w.shape[0], 1)
-    arrow_scale[:, 0] *= speed
-
-    # Rotate arrow local +X axis to velocity direction in world frame.
-    eps = 1.0e-8
-    direction = velocity_w / speed.unsqueeze(-1).clamp(min=eps)
-    x_axis = torch.zeros_like(direction)
-    x_axis[:, 0] = 1.0
-
-    cross = torch.cross(x_axis, direction, dim=1)
-    dot = torch.sum(x_axis * direction, dim=1).clamp(-1.0, 1.0)
-
-    w = torch.sqrt(((1.0 + dot).clamp(min=0.0)) * 0.5)
-    xyz = cross / (2.0 * w.unsqueeze(-1).clamp(min=eps))
-    arrow_quat_w = torch.cat([w.unsqueeze(-1), xyz], dim=1)
-
-    # Handle opposite direction (dot=-1): 180 deg around +Y axis.
-    opposite = dot < (-1.0 + 1.0e-6)
-    if torch.any(opposite):
-        arrow_quat_w[opposite] = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device)
-
-    # For near-zero velocity, keep identity orientation.
-    stationary = speed < 1.0e-6
-    if torch.any(stationary):
-        arrow_quat_w[stationary] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
-
-    arrow_quat_w = torch.nn.functional.normalize(arrow_quat_w, dim=1)
-    return arrow_scale, arrow_quat_w
 
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
@@ -314,7 +278,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         # base_pos[:, 1] += motion_id_offset * row_spacing  - ( row_spacing * (STL_PLATFORM_TERRAINS_CFG.num_cols - 1)) / 2  # 居中排列
         root_states[:, :3] = base_pos
         root_states[:, 3:7] = motion.body_quat_w[time_steps][:, 0]
-        root_states[:, 7:10] = motion.anchor_lin_vel_w[time_steps][:, 0]
+        root_states[:, 7:10] = motion.body_lin_vel_w[time_steps][:, 0]
         root_states[:, 10:] = motion.body_ang_vel_w[time_steps][:, 0]
         robot.write_root_state_to_sim(root_states)
         robot.write_joint_state_to_sim(motion.joint_pos[time_steps], motion.joint_vel[time_steps])
