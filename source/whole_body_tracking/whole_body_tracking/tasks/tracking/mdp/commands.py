@@ -82,7 +82,6 @@ class MotionLoader:
                 relative_paths = [line.strip() for line in f if line.strip()]
                 # import ipdb;ipdb.set_trace()
             npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
-            random.shuffle(npz_files)
         else:
             dir_path = Path(dir_path)
             npz_files = list(dir_path.rglob("*.npz"))
@@ -755,7 +754,7 @@ class MotionCommand(CommandTerm):
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )
         self._current_bin_failed.zero_()
-        print("command_step_count: ", self.command_step_count)
+        # print("command_step_count: ", self.command_step_count)
         if (
             self.cfg.save_adaptive_bins
             and self.cfg.fail_count_save_interval > 0

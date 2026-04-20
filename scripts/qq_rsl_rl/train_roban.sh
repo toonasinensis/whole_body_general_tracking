@@ -25,6 +25,9 @@ NPROC_PER_NODE=1
 NUM_ENVS="${NUM_ENVS:-8192}"
 # Cap number of motions loaded to avoid dataset OOM (override if needed).
 MAX_MOTION_NUM="${MAX_MOTION_NUM:-8192}"
+MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/quick_test.txt}"
+# Default run name = motion list filename without extension.
+RUN_NAME="${RUN_NAME:-$(basename "${MOTION_FILE_TXT}" .txt)}"
 
 # Reduce allocator fragmentation for long training runs.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -54,7 +57,8 @@ python -m torch.distributed.run \
   --headless \
   --num_envs="${NUM_ENVS}" \
   --motion_file=data/roban_motions \
-  --motion_file_txt=data/roban_motions_list/motions_main_kept.txt \
+  --motion_file_txt="${MOTION_FILE_TXT}" \
+  --run_name="${RUN_NAME}" \
   --logger wandb \
   --log_project_name=roban_flat \
   --max_motion_num="${MAX_MOTION_NUM}" \
