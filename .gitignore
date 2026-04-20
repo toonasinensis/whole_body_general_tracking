@@ -36,6 +36,7 @@ utilities/*
 docker/artifacts/
 *.tmp
 
+train_logs/*
 # Isaac-Sim packman
 _isaac_sim*
 _repo

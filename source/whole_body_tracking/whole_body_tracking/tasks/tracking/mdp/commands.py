@@ -368,24 +368,6 @@ class MotionCommand(CommandTerm):
         """Get motion ids for each timestamp in the current concatenated motion buffer."""
         return self.motion.motion_ids_from_timestamps(timestamps)
 
-    def body_offsets_from_motion_ids(self, motion_ids: torch.Tensor) -> torch.Tensor:
-        """Build world-frame body offsets from motion ids.
-
-        Offsets are selected from terrain origins using modulo indexing:
-        ``terrain_ids = motion_ids % num_terrain_origins``.
-        """
-        if motion_ids.dtype != torch.long:
-            motion_ids = motion_ids.long()
-
-        # Same logic as replay script:
-        # terrain_origins = scene.terrain.terrain_origins.reshape(-1, 3)
-        # terrain_ids = motion_ids % terrain_origins.shape[0]
-        # offsets = terrain_origins[terrain_ids]
-        terrain_origins = self._env.scene.terrain.terrain_origins.reshape(-1, 3)
-        terrain_ids = motion_ids % terrain_origins.shape[0]
-        offsets = terrain_origins[terrain_ids].to(self.device)
-        return offsets
-
     @property
     def anchor_quat_w(self) -> torch.Tensor:
         return self.motion.anchor_quat_w[self.time_steps]
@@ -470,6 +452,7 @@ class MotionCommand(CommandTerm):
         clipped_bin_failed_count = torch.clamp(
             self.bin_failed_count, max=self.cfg.failure_cap_beta * self.bin_failed_count.mean()
         )
+        # print("bin_failed_count: max, mean, min", self.bin_failed_count.max().item(), self.bin_failed_count.mean().item(), self.bin_failed_count.min().item())
         sampling_probabilities = torch.nn.functional.pad(
             clipped_bin_failed_count.unsqueeze(0).unsqueeze(0),
             (0, self.cfg.adaptive_kernel_size - 1),
@@ -483,6 +466,7 @@ class MotionCommand(CommandTerm):
         sampling_probabilities = (1 - self.cfg.adaptive_uniform_ratio) * sampling_probabilities + (
             self.cfg.adaptive_uniform_ratio
         ) / float(self.bin_count)
+        # print("sampling_probabilities : max, mean, min", sampling_probabilities.max().item(), sampling_probabilities.mean().item(), sampling_probabilities.min().item())
         return sampling_probabilities
 
     def _get_bin_global_frame_range(self, bin_index: int) -> tuple[int, int]:
@@ -524,6 +508,9 @@ class MotionCommand(CommandTerm):
         return segments
 
     def _export_adaptive_bins(self) -> None:
+        import time
+
+        st1 = time.time()
         if not self.cfg.adaptive_sample or not self.cfg.save_adaptive_bins:
             return
         if self.bin_count <= 0 or self.motion.time_step_total is None:
@@ -534,8 +521,14 @@ class MotionCommand(CommandTerm):
         fps = float(getattr(self.motion, "fps", 0.0))
         rank = int(self.cfg.local_rank) if int(self.cfg.local_rank) >= 0 else 0
 
+        # 只导出bin_failed_count最大的前100个bins
+        topk = min(100, int(self.bin_count))
+        # torch.topk返回值是(tensor, indices)
+        _, top_indices = torch.topk(bin_failed_count, k=topk, largest=True, sorted=True)
+        top_indices = top_indices.tolist()
+
         bins = []
-        for bin_index in range(int(self.bin_count)):
+        for bin_index in top_indices:
             global_start, global_end = self._get_bin_global_frame_range(bin_index)
             motion_segments = self._build_bin_motion_segments(global_start, global_end)
             first_segment = motion_segments[0] if motion_segments else None
@@ -559,9 +552,8 @@ class MotionCommand(CommandTerm):
                 }
             )
 
-        bins_sorted_indices = sorted(
-            range(len(bins)), key=lambda index: bins[index]["sampling_probability"], reverse=True
-        )
+        # 按bin_failed_count降序排序bins
+        bins_sorted_indices = sorted(range(len(bins)), key=lambda index: bins[index]["bin_failed_count"], reverse=True)
         payload = {
             "meta": {
                 "step": int(self.command_step_count),
@@ -589,13 +581,12 @@ class MotionCommand(CommandTerm):
         )
         out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         self._last_bins_export_step = self.command_step_count
-        print(f"[MotionCommand] Wrote adaptive bins: {out_path}")
+        print(f"[MotionCommand] Wrote adaptive bins: {out_path}, {rank}, which take times: {time.time()-st1}")
 
     def _update_metrics(self):
         self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
         self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
         self.metrics["error_anchor_lin_vel"] = torch.norm(self.anchor_lin_vel_w - self.robot_anchor_lin_vel_w, dim=-1)
-        # print("anchor_lin_vel_w: ",self.metrics["error_anchor_lin_vel"] )
         self.metrics["error_anchor_ang_vel"] = torch.norm(self.anchor_ang_vel_w - self.robot_anchor_ang_vel_w, dim=-1)
         self.metrics["error_body_pos"] = torch.norm(self.body_pos_relative_w - self.robot_body_pos_w, dim=-1).mean(
             dim=-1
@@ -641,17 +632,14 @@ class MotionCommand(CommandTerm):
             / self.bin_count
             * (self.motion.time_step_total - 1)
         ).long()
-        # self.time_steps[env_ids] = (
-        #     sampled_bins
-        #     / self.bin_count
-        #     * (self.motion.time_step_total - 1)
-        # ).long()
-        # endregion Adaptive sampling
 
-        # find the nearest end index for checking motion clip boundary
         # NOTE the logic is correct, but is this computing efficient ?
-        mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
-        nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
+        # mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
+        # nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
+
+        nearest_end_idx = torch.bucketize(self.time_steps[env_ids], self.motion.time_step_end_idx, right=False)
+        nearest_end_idx = torch.clamp(nearest_end_idx, max=len(self.motion.time_step_end_idx) - 1)
+
         self.frame_end_per_env[env_ids] = self.motion.time_step_end_idx[nearest_end_idx]  # [num_envs]
         if self.cfg.eval_mode:
             self.time_steps[env_ids] = self.motion.time_step_start_idx[
@@ -682,36 +670,34 @@ class MotionCommand(CommandTerm):
 
         # add noise to robot states when envs are reset
         # add noise to root state
-        root_pos = self.body_pos_w[:, 0].clone()
-        root_ori = self.body_quat_w[:, 0].clone()
-        root_lin_vel = self.body_lin_vel_w[:, 0].clone()
-        root_ang_vel = self.body_ang_vel_w[:, 0].clone()
+        root_pos = self.body_pos_w[env_ids, 0].clone()
+        root_ori = self.body_quat_w[env_ids, 0].clone()
+        root_lin_vel = self.body_lin_vel_w[env_ids, 0].clone()
+        root_ang_vel = self.body_ang_vel_w[env_ids, 0].clone()
         range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_pos[env_ids] += rand_samples[:, 0:3]
+        root_pos += rand_samples[:, 0:3]
         # orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        # root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
+        # root_ori = quat_mul(orientations_delta, root_ori)
         range_list = [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_lin_vel[env_ids] += rand_samples[:, :3]
-        root_ang_vel[env_ids] += rand_samples[:, 3:]
+        root_lin_vel += rand_samples[:, :3]
+        root_ang_vel += rand_samples[:, 3:]
         # add noise to joint state
-        joint_pos = self.joint_pos.clone()
-        joint_vel = self.joint_vel.clone()
+        joint_pos = self.joint_pos[env_ids].clone()
+        joint_vel = self.joint_vel[env_ids].clone()
         joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
         soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
         joint_vel_limits = self.robot.data.joint_vel_limits[env_ids]
         max_ang_vel_root = 20.0
-        joint_pos[env_ids] = torch.clip(
-            joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
-        )
-        joint_vel[env_ids] = torch.clip(joint_vel[env_ids], -joint_vel_limits[:, :], joint_vel_limits[:, :])
-        root_ang_vel[env_ids] = torch.clip(root_ang_vel[env_ids], -max_ang_vel_root, max_ang_vel_root)
-        self.robot.write_joint_state_to_sim(joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids)
+        joint_pos = torch.clip(joint_pos, soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1])
+        joint_vel = torch.clip(joint_vel, -joint_vel_limits[:, :], joint_vel_limits[:, :])
+        root_ang_vel = torch.clip(root_ang_vel, -max_ang_vel_root, max_ang_vel_root)
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
         self.robot.write_root_state_to_sim(
-            torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
+            torch.cat([root_pos, root_ori, root_lin_vel, root_ang_vel], dim=-1),
             env_ids=env_ids,
         )
         # TODO: 切换动作文件时是否需要清空历史Observation
@@ -749,7 +735,6 @@ class MotionCommand(CommandTerm):
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )
         self._current_bin_failed.zero_()
-        print("command_step_count: ", self.command_step_count)
         if (
             self.cfg.save_adaptive_bins
             and self.cfg.fail_count_save_interval > 0
@@ -896,7 +881,6 @@ class MotionCommandCfg(CommandTermCfg):
     dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
     eval_mode: bool = False
     adaptive_sample: bool = True
-    adaptive_sample_motion_file: bool = True
     asset_name: str = MISSING
     max_motion_num: int = 999999
     resample_interval: int = 300000000000
@@ -918,7 +902,7 @@ class MotionCommandCfg(CommandTermCfg):
     failure_cap_beta: float = 200.0
 
     # 每隔多少步导出一次 adaptive bins 概率和 bin->motion 反查映射，-1 表示不保存
-    fail_count_save_interval: int = 1000 * 24
+    fail_count_save_interval: int = 5 * 24
     save_adaptive_bins: bool = True
     adaptive_bins_file_prefix: str = "adaptive_bins"
 

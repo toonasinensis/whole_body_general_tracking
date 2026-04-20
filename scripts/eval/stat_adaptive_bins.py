@@ -13,7 +13,7 @@ python scripts/eval/stat_adaptive_bins.py \
     --bins_json train_logs/adaptive_bins_step_000024000.json
 
 python scripts/eval/stat_adaptive_bins.py \
-    --bins_dir logs/rsl_rl/g1_flat --top_k 10
+    --bins_dir logs/rsl_rl/g1_flat --top_k 20
 """
 
 from __future__ import annotations
