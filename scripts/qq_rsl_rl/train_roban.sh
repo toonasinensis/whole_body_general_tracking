@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# torch.distributed.run listens on MASTER_PORT (default 29500). If you see
+# EADDRINUSE, another job holds that port — kill it or set MASTER_PORT, e.g.:
+#   MASTER_PORT=29511 bash scripts/qq_rsl_rl/train_roban.sh
+export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+if [[ -z "${MASTER_PORT:-}" ]]; then
+  # Pick a port in a high range to reduce collisions with the default 29500.
+  export MASTER_PORT=$((29501 + RANDOM % 2000))
+fi
+echo "[INFO] MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT}"
+
 # Always run under wt_env unless caller already activated an environment.
 # if [[ -z "${CONDA_DEFAULT_ENV:-}" || "${CONDA_DEFAULT_ENV}" != "wt_env" ]]; then
 #   source /home/xiechunyang/miniforge3/etc/profile.d/conda.sh
@@ -9,7 +19,7 @@ set -euo pipefail
 
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
-NPROC_PER_NODE=4
+NPROC_PER_NODE=1
 # PPO memory scales ~linearly with NUM_ENVS; 12288 is very likely to OOM on 24GB.
 # Override at runtime: NUM_ENVS=4096 bash scripts/qq_rsl_rl/train_roban.sh
 NUM_ENVS="${NUM_ENVS:-8192}"
@@ -31,16 +41,20 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   fi
 fi
 
+# Pass --master_port/--master_addr here: MASTER_PORT in the environment alone
+# does not change the elastic rendezvous listener (it still defaulted to 29500).
 python -m torch.distributed.run \
   --nnodes=1 \
   --nproc_per_node="${NPROC_PER_NODE}" \
+  --master_addr="${MASTER_ADDR}" \
+  --master_port="${MASTER_PORT}" \
   scripts/qq_rsl_rl/train.py \
   --registry_name=test1 \
   --task=Tracking-Flat-RobanS22-v0 \
   --headless \
   --num_envs="${NUM_ENVS}" \
   --motion_file=data/roban_motions \
-  --motion_file_txt=data/roban_motions_list/motions_main_kept_40000.txt \
+  --motion_file_txt=data/roban_motions_list/motions_squat_kept.txt \
   --logger wandb \
   --log_project_name=roban_flat \
   --max_motion_num="${MAX_MOTION_NUM}" \
