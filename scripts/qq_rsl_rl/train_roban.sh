@@ -54,7 +54,7 @@ python -m torch.distributed.run \
   --headless \
   --num_envs="${NUM_ENVS}" \
   --motion_file=data/roban_motions \
-  --motion_file_txt=data/roban_motions_list/motions_squat_kept.txt \
+  --motion_file_txt=data/roban_motions_list/motions_main_kept.txt \
   --logger wandb \
   --log_project_name=roban_flat \
   --max_motion_num="${MAX_MOTION_NUM}" \
