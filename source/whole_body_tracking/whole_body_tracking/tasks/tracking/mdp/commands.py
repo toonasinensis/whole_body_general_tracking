@@ -87,7 +87,13 @@ class MotionLoader:
             if not npz_files:
                 raise FileNotFoundError(f"No .npz files found in {dir_path}")
             """从 npz 文件中均匀随机采样 motion_num 个"""
-            npz_files.sort()
+            if self.cfg.eval_mode:
+                npz_files.sort()
+
+        # Training: randomize order (sampling / multi-GPU splits are not biased by file order).
+        # Eval: keep deterministic ordering for sequential [start_idx:end_idx] slices.
+        if not self.cfg.eval_mode:
+            random.shuffle(npz_files)
 
         if len(npz_files) > motion_num and motion_num != -1:  # 动作文件需要采样（内存不够）或者人为指定把所有数据拿出来
             if self.cfg.eval_mode:
