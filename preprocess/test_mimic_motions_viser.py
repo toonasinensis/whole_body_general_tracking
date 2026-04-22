@@ -19,7 +19,8 @@ conda run -n my_env python preprocess/test_mimic_motions_viser.py \
   --show_count 40 --columns 8
 
   python preprocess/test_mimic_motions_viser.py \
-    --robot_cfg g1 --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt \
+    --robot_cfg g1 \
+    --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/关节限位.txt \
     --motion_dir /home/thl/Documents/g1-mimic-npz
 
 """

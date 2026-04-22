@@ -82,9 +82,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    # env_cfg.terminations.ee_body_pos = None
-    # env_cfg.terminations.anchor_ori = None
-    # env_cfg.terminations.anchor_pos = None
+    env_cfg.terminations.ee_body_pos = None
+    env_cfg.terminations.anchor_ori = None
+    env_cfg.terminations.anchor_pos = None
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
