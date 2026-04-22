@@ -82,19 +82,15 @@ class MotionLoader:
                 relative_paths = [line.strip() for line in f if line.strip()]
                 # import ipdb;ipdb.set_trace()
             npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
+            random.seed(42)  # 方便对比试验
+            random.shuffle(npz_files)
         else:
             dir_path = Path(dir_path)
             npz_files = list(dir_path.rglob("*.npz"))
             if not npz_files:
                 raise FileNotFoundError(f"No .npz files found in {dir_path}")
             """从 npz 文件中均匀随机采样 motion_num 个"""
-            if self.cfg.eval_mode:
-                npz_files.sort()
-
-        # Training: randomize order (sampling / multi-GPU splits are not biased by file order).
-        # Eval: keep deterministic ordering for sequential [start_idx:end_idx] slices.
-        if not self.cfg.eval_mode:
-            random.shuffle(npz_files)
+            npz_files.sort()
 
         if len(npz_files) > motion_num and motion_num != -1:  # 动作文件需要采样（内存不够）或者人为指定把所有数据拿出来
             if self.cfg.eval_mode:
@@ -202,13 +198,13 @@ class MotionLoader:
         print("file nums:", "     ", len(self.file_names))
         print("frame nums:", "     ", (self._body_pos_w_sel.shape[0]))
 
-        self.time_step_end_idx = []
         self.frame_list = torch.tensor(frame_list, device=device)
+        self.motion_num = len(frame_list)
+
         self.time_step_end_idx = torch.cumsum(self.frame_list, dim=0)
         self.time_step_start_idx = torch.cat(
             [torch.tensor([0], device=self.frame_list.device), self.time_step_end_idx[:-1]]
         )
-        self.motion_num = len(frame_list)
 
     @property
     def body_pos_w(self) -> torch.Tensor:
@@ -261,8 +257,9 @@ class MotionLoader:
         if timestamps.dtype != torch.long:
             timestamps = timestamps.long()
         timestamps = torch.clamp(timestamps, min=0, max=int(self.time_step_total) - 1)
-        motion_ids = torch.bucketize(timestamps, self.time_step_end_idx, right=False)
-        return torch.clamp(motion_ids, max=self.motion_num - 1)
+        # General case: end_idx is exclusive; use right=True so boundary timestamps map to the next motion.
+        motion_ids = torch.bucketize(timestamps, self.time_step_end_idx, right=True)
+        return torch.clamp(motion_ids, min=0, max=self.motion_num - 1)
 
 
 class MotionCommand(CommandTerm):
@@ -279,7 +276,10 @@ class MotionCommand(CommandTerm):
             self.robot.find_bodies(self.cfg.body_names, preserve_order=True)[0], dtype=torch.long, device=self.device
         )
 
-        self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # Per-env local frame index within the currently selected motion.
+        self.local_time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # Per-env motion id in the current concatenated motion buffer.
+        self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         self.motion = MotionLoader(self.cfg, self.body_indexes, self.motion_anchor_body_index, device=self.device)
 
@@ -289,6 +289,10 @@ class MotionCommand(CommandTerm):
         # self.motion.update_last_motion_data()  # when init , init last motion data
 
         self.frame_end_per_env = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # Evaluation-only: number of completed motion cycles per env.
+        self.eval_cycle_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # Evaluation-only: fixed mapping env_id -> motion_id (deterministic). Set in _setup_fixed_eval_motion_assignment().
+        self.fixed_eval_motion_ids: torch.Tensor | None = None
         self.body_pos_relative_w = torch.zeros(self.num_envs, len(cfg.body_names), 3, device=self.device)
         self.body_quat_relative_w = torch.zeros(self.num_envs, len(cfg.body_names), 4, device=self.device)
         self.body_quat_relative_w[:, :, 0] = 1.0
@@ -306,13 +310,35 @@ class MotionCommand(CommandTerm):
         self.metrics["error_joint_vel"] = torch.zeros(self.num_envs, device=self.device)
         if self.cfg.adaptive_sample:
             self.metrics["sampling_entropy"] = torch.zeros(self.num_envs, device=self.device)
-            self.metrics["sampling_top1_prob"] = torch.zeros(self.num_envs, device=self.device)
-            self.metrics["sampling_top1_bin"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["sampling_top1_prob_max"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["sampling_top1_prob_bin"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["sampling_top1_prob_mean"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["sampling_top1_prob_min"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["prob_max_over_uniform"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["prob_uniform"] = torch.zeros(self.num_envs, device=self.device)
+
+            self.metrics["failures_min"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["failures_mean"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["failures_max"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["failures_max_over_uniform"] = torch.zeros(self.num_envs, device=self.device)
+            self.metrics["num_concentrate_bins"] = torch.zeros(self.num_envs, device=self.device)
+
+        # Future-frame indexing helpers.
+        future_step_num = getattr(self.cfg, "future_step_num", [0])
+        if future_step_num is None or len(future_step_num) == 0:
+            future_step_num = [0]
+        self._future_step_offsets = torch.tensor(future_step_num, device=self.device, dtype=torch.long)
+
+        # If requested, bind each env to a fixed motion id (env i -> motion i).
+        if bool(getattr(self.cfg, "fixed_eval_motion_ids", False)) and bool(getattr(self.cfg, "eval_mode", False)):
+            self._setup_fixed_eval_motion_assignment()
 
     @property
     def command(self) -> torch.Tensor:  # TODO Consider again if this is the best observation
         return torch.cat(
             [
+                # self.joint_pos_future.view(self.num_envs, -1),
+                # self.joint_vel_future.view(self.num_envs, -1),
                 self.joint_pos,
                 self.joint_vel,
                 self.anchor_lin_vel_b,
@@ -340,32 +366,33 @@ class MotionCommand(CommandTerm):
 
     @property
     def joint_pos(self) -> torch.Tensor:
-        return self.motion.joint_pos[self.time_steps]  # (num_envs, num_joints, 3)
+        return self.motion.joint_pos[self.global_time_steps]  # (num_envs, num_joints, 3)
 
     @property
     def joint_vel(self) -> torch.Tensor:
-        return self.motion.joint_vel[self.time_steps]
+        return self.motion.joint_vel[self.global_time_steps]
 
     @property
     def body_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps] + self._env.scene.env_origins[:, None, :]
+        return self.motion.body_pos_w[self.global_time_steps] + self._env.scene.env_origins[:, None, :]
 
     @property
     def body_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps]
+        return self.motion.body_quat_w[self.global_time_steps]
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps]
+        return self.motion.body_lin_vel_w[self.global_time_steps]
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps]
+        return self.motion.body_ang_vel_w[self.global_time_steps]
 
     @property
     def anchor_pos_w(self) -> torch.Tensor:
         result = (
-            torch.index_select(self.motion.anchor_pos_w, dim=0, index=self.time_steps) + self._env.scene.env_origins
+            torch.index_select(self.motion.anchor_pos_w, dim=0, index=self.global_time_steps)
+            + self._env.scene.env_origins
         )
         return result
 
@@ -373,40 +400,145 @@ class MotionCommand(CommandTerm):
         """Get motion ids for each timestamp in the current concatenated motion buffer."""
         return self.motion.motion_ids_from_timestamps(timestamps)
 
-    def body_offsets_from_motion_ids(self, motion_ids: torch.Tensor) -> torch.Tensor:
-        """Build world-frame body offsets from motion ids.
-
-        Offsets are selected from terrain origins using modulo indexing:
-        ``terrain_ids = motion_ids % num_terrain_origins``.
-        """
-        if motion_ids.dtype != torch.long:
-            motion_ids = motion_ids.long()
-
-        # Same logic as replay script:
-        # terrain_origins = scene.terrain.terrain_origins.reshape(-1, 3)
-        # terrain_ids = motion_ids % terrain_origins.shape[0]
-        # offsets = terrain_origins[terrain_ids]
-        terrain_origins = self._env.scene.terrain.terrain_origins.reshape(-1, 3)
-        terrain_ids = motion_ids % terrain_origins.shape[0]
-        offsets = terrain_origins[terrain_ids].to(self.device)
-        return offsets
-
     @property
     def anchor_quat_w(self) -> torch.Tensor:
-        return self.motion.anchor_quat_w[self.time_steps]
+        return self.motion.anchor_quat_w[self.global_time_steps]
 
     @property
     def anchor_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.anchor_lin_vel_w[self.time_steps]
+        return self.motion.anchor_lin_vel_w[self.global_time_steps]
 
     @property
     def anchor_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.anchor_ang_vel_w[self.time_steps]
+        return self.motion.anchor_ang_vel_w[self.global_time_steps]
+
+    @property
+    def global_time_steps(self) -> torch.Tensor:
+        """Global timestamps for indexing the concatenated motion buffers."""
+        start = self.motion.time_step_start_idx[self.motion_ids]
+        return start + self.local_time_steps
+
+    @property
+    def num_future_frames(self) -> int:
+        return int(self._future_step_offsets.numel())
+
+    @property
+    def motion_start_time_steps(self) -> torch.Tensor:
+        """Per-env global start index of the current motion."""
+        return self.motion.time_step_start_idx[self.motion_ids]
+
+    @property
+    def motion_num_steps(self) -> torch.Tensor:
+        """Per-env number of frames for the current motion."""
+        start = self.motion.time_step_start_idx[self.motion_ids]
+        end = self.motion.time_step_end_idx[self.motion_ids]
+        return end - start
+
+    @property
+    def future_time_steps_init(self) -> torch.Tensor:
+        """Future step offsets (local frame deltas) as a 1D tensor."""
+        return self._future_step_offsets
+
+    @property
+    def future_motion_ids(self) -> torch.Tensor:
+        """Motion ids for all future reference frames, flattened."""
+        return self.motion_ids[:, None].expand(-1, self.num_future_frames).reshape(-1)
+
+    @property
+    def future_time_steps(self) -> torch.Tensor:
+        """Compute absolute (global) time-step indices for all future reference frames.
+
+        Clamps to the last valid frame of each motion to avoid out-of-bounds access.
+
+        Returns:
+            Flattened tensor of shape ``(num_envs * num_future_frames,)``.
+        """
+        start = self.motion_start_time_steps
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        )
+        return (start[:, None] + future_local).long()
+
+    @property
+    def anchor_pos_w_future(self) -> torch.Tensor:
+        """Future reference anchor position in world frame for each env."""
+        return self.motion.anchor_pos_w[self.future_time_steps] + self._env.scene.env_origins[:, None, :]
+
+    @property
+    def joint_pos_future(self) -> torch.Tensor:
+        """Future reference joint positions for each env."""
+        return self.motion.joint_pos[self.future_time_steps]
+
+    @property
+    def joint_vel_future(self) -> torch.Tensor:
+        """Future reference joint velocities for each env."""
+        return self.motion.joint_vel[self.future_time_steps]
+
+    @property
+    def anchor_quat_w_future(self) -> torch.Tensor:
+        """Future reference anchor orientation in world frame for each env."""
+        return self.motion.anchor_quat_w[self.future_time_steps]
+
+    @property
+    def joint_vel_multi_future(self) -> torch.Tensor:
+        """Return reference joint velocities for all future frames, flattened.
+
+        Returns:
+            Tensor of shape ``(num_envs, num_future_frames * ...)``.
+        """
+        return self.motion.joint_vel[self.future_time_steps].view(self.num_envs, -1)
+
+    def _set_time_from_global_timestamps(self, env_ids: Sequence[int], timestamps: torch.Tensor) -> None:
+        """Set (motion_ids, local time_steps, local end) from global timestamps."""
+        if len(env_ids) == 0:
+            return
+
+        if timestamps.dtype != torch.long:
+            timestamps = timestamps.long()
+        timestamps = torch.clamp(timestamps, min=0, max=int(self.motion.time_step_total) - 1)
+
+        motion_ids = self.motion.motion_ids_from_timestamps(timestamps)
+        start = self.motion.time_step_start_idx[motion_ids]
+        end = self.motion.time_step_end_idx[motion_ids]
+        local_t = timestamps - start
+
+        self.motion_ids[env_ids] = motion_ids
+        self.local_time_steps[env_ids] = local_t
+        # store local end (exclusive) to drive resampling with local time_steps
+        self.frame_end_per_env[env_ids] = end - start
 
     @property
     def anchor_lin_vel_b(self) -> torch.Tensor:
         anchor_lin_vel_b = quat_apply_inverse(self.anchor_quat_w, self.anchor_lin_vel_w)
         return anchor_lin_vel_b
+
+    def _setup_fixed_eval_motion_assignment(self) -> None:
+        """Pin each env to one motion id while preserving local/global indexing semantics.
+
+        In this script, indexing uses:
+        - `motion_ids`: per-env selected motion
+        - `local_time_steps`: per-env frame index within that motion
+        - `global_time_steps = motion_start + local_time_steps`
+        """
+        motion_num = int(getattr(self.motion, "motion_num", 0) or 0)
+        if motion_num <= 0:
+            raise RuntimeError("MotionLoader has no motions loaded; cannot set up fixed eval motion mapping.")
+        if int(self.num_envs) != motion_num:
+            raise ValueError(
+                f"fixed_eval_motion_ids requires num_envs == motion_num, got num_envs={int(self.num_envs)} motion_num={motion_num}."
+            )
+
+        self.fixed_eval_motion_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        self.motion_ids[:] = self.fixed_eval_motion_ids
+        self.local_time_steps.zero_()
+        self.eval_cycle_count.zero_()
+
+        start = self.motion.time_step_start_idx[self.motion_ids]
+        end = self.motion.time_step_end_idx[self.motion_ids]
+        # local end (exclusive) for each env.
+        self.frame_end_per_env[:] = end - start
 
     @property
     def anchor_ang_vel_b(self) -> torch.Tensor:
@@ -463,7 +595,6 @@ class MotionCommand(CommandTerm):
         )  # 1s motion frames for each bin
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
-        # NOTE self.kernel is not used in this script
         self.kernel = torch.tensor(
             [self.cfg.adaptive_lambda**i for i in range(self.cfg.adaptive_kernel_size)], device=self.device
         )
@@ -472,6 +603,12 @@ class MotionCommand(CommandTerm):
         self.success_motion = torch.zeros(self.motion.motion_num, dtype=torch.float32, device=self.device)
 
     def _compute_sampling_probabilities(self) -> torch.Tensor:
+        self.metrics["failures_max"][:] = self.bin_failed_count.max()
+        self.metrics["failures_mean"][:] = self.bin_failed_count.mean()
+        self.metrics["failures_min"][:] = self.bin_failed_count.min()
+        self.metrics["failures_max_over_uniform"][:] = (
+            self.bin_failed_count.max() * self.bin_count / (self.bin_failed_count.sum() + 1e-8)
+        )
         clipped_bin_failed_count = torch.clamp(
             self.bin_failed_count, max=self.cfg.failure_cap_beta * self.bin_failed_count.mean()
         )
@@ -529,6 +666,9 @@ class MotionCommand(CommandTerm):
         return segments
 
     def _export_adaptive_bins(self) -> None:
+        import time
+
+        st1 = time.time()
         if not self.cfg.adaptive_sample or not self.cfg.save_adaptive_bins:
             return
         if self.bin_count <= 0 or self.motion.time_step_total is None:
@@ -539,8 +679,14 @@ class MotionCommand(CommandTerm):
         fps = float(getattr(self.motion, "fps", 0.0))
         rank = int(self.cfg.local_rank) if int(self.cfg.local_rank) >= 0 else 0
 
+        # 只导出bin_failed_count最大的前100个bins
+        topk = min(100, int(self.bin_count))
+        # torch.topk返回值是(tensor, indices)
+        _, top_indices = torch.topk(bin_failed_count, k=topk, largest=True, sorted=True)
+        top_indices = top_indices.tolist()
+
         bins = []
-        for bin_index in range(int(self.bin_count)):
+        for bin_index in top_indices:
             global_start, global_end = self._get_bin_global_frame_range(bin_index)
             motion_segments = self._build_bin_motion_segments(global_start, global_end)
             first_segment = motion_segments[0] if motion_segments else None
@@ -564,9 +710,8 @@ class MotionCommand(CommandTerm):
                 }
             )
 
-        bins_sorted_indices = sorted(
-            range(len(bins)), key=lambda index: bins[index]["sampling_probability"], reverse=True
-        )
+        # 按bin_failed_count降序排序bins
+        bins_sorted_indices = sorted(range(len(bins)), key=lambda index: bins[index]["bin_failed_count"], reverse=True)
         payload = {
             "meta": {
                 "step": int(self.command_step_count),
@@ -594,13 +739,12 @@ class MotionCommand(CommandTerm):
         )
         out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         self._last_bins_export_step = self.command_step_count
-        print(f"[MotionCommand] Wrote adaptive bins: {out_path}")
+        print(f"[MotionCommand] Wrote adaptive bins: {out_path}, {rank}, which take times: {time.time()-st1}")
 
     def _update_metrics(self):
         self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
         self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
         self.metrics["error_anchor_lin_vel"] = torch.norm(self.anchor_lin_vel_w - self.robot_anchor_lin_vel_w, dim=-1)
-        # print("anchor_lin_vel_w: ",self.metrics["error_anchor_lin_vel"] )
         self.metrics["error_anchor_ang_vel"] = torch.norm(self.anchor_ang_vel_w - self.robot_anchor_ang_vel_w, dim=-1)
         self.metrics["error_body_pos"] = torch.norm(self.body_pos_relative_w - self.robot_body_pos_w, dim=-1).mean(
             dim=-1
@@ -623,16 +767,13 @@ class MotionCommand(CommandTerm):
         2. compute sampling probability and sample bins accordingly
         3. compute metrics
         """
-        # NOTE there shall be a logic to justify
-        # whether the env_ids are out of time, out of motion range, or failed (early termination)
-        # if early termination, add to self._current_bin_failed
-        # else no change
         episode_failed = self._env.termination_manager.terminated[env_ids]
         if torch.any(episode_failed):
-            current_bin_index = torch.clamp(  #
-                (self.time_steps * self.bin_count) // max(self.motion.time_step_total, 1), 0, self.bin_count - 1
+            # Use the last valid frame (exclusive end indices shouldn't be used as timestamps).
+            global_ts = torch.clamp(self.global_time_steps - 1, min=0, max=int(self.motion.time_step_total) - 1)
+            current_bin_index = torch.clamp(
+                (global_ts * self.bin_count) // max(self.motion.time_step_total, 1), 0, self.bin_count - 1
             )
-            # NOTE terminated envs are early terminated or out of motion range ?
             fail_bins = current_bin_index[env_ids][episode_failed]
             self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
 
@@ -641,34 +782,31 @@ class MotionCommand(CommandTerm):
         sampling_probabilities = self._compute_sampling_probabilities()
 
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
-        self.time_steps[env_ids] = (
+        global_ts = (
             (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device))
             / self.bin_count
             * (self.motion.time_step_total - 1)
         ).long()
-        # self.time_steps[env_ids] = (
-        #     sampled_bins
-        #     / self.bin_count
-        #     * (self.motion.time_step_total - 1)
-        # ).long()
-        # endregion Adaptive sampling
 
-        # find the nearest end index for checking motion clip boundary
-        # NOTE the logic is correct, but is this computing efficient ?
-        mask = self.time_steps[env_ids].unsqueeze(1) <= self.motion.time_step_end_idx.unsqueeze(0)
-        nearest_end_idx = mask.float().argmax(dim=1)  # [num_envs]
-        self.frame_end_per_env[env_ids] = self.motion.time_step_end_idx[nearest_end_idx]  # [num_envs]
+        # Map global timestamp -> (motion_id, local frame index, local end), avoiding mask+argmax.
+        self._set_time_from_global_timestamps(env_ids, global_ts)
         if self.cfg.eval_mode:
-            self.time_steps[env_ids] = self.motion.time_step_start_idx[
-                nearest_end_idx
-            ]  # 评估模式下，动作都从第一个帧进行
+            # 评估模式下，动作都从该 motion 的第一个帧进行（local=0）
+            self.local_time_steps[env_ids] = 0
         # Metrics
         H = -(sampling_probabilities * (sampling_probabilities + 1e-12).log()).sum()
         H_norm = H / math.log(self.bin_count)
         pmax, imax = sampling_probabilities.max(dim=0)
         self.metrics["sampling_entropy"][:] = H_norm
-        self.metrics["sampling_top1_prob"][:] = pmax
-        self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
+        self.metrics["sampling_top1_prob_max"][:] = pmax
+        self.metrics["prob_max_over_uniform"][:] = pmax / (1 / self.bin_count)
+        self.metrics["prob_uniform"][:] = 1 / self.bin_count
+        self.metrics["sampling_top1_prob_bin"][:] = imax.float() / self.bin_count
+        self.metrics["sampling_top1_prob_mean"][:] = sampling_probabilities.mean()
+        self.metrics["sampling_top1_prob_min"][:] = sampling_probabilities.min()
+        self.metrics["num_concentrate_bins"][:] = (
+            sampling_probabilities > 150 * (sampling_probabilities.mean())
+        ).sum()  # 计算超过平均值10倍的数目
 
     def _resample_command(self, env_ids: Sequence[int]):
         """_resample_command will be called multiple times in each step
@@ -679,7 +817,18 @@ class MotionCommand(CommandTerm):
         """
         if len(env_ids) == 0:
             return
-        if self.cfg.adaptive_sample:
+        # Evaluation: deterministic clip restart (no adaptive sampling).
+        if bool(getattr(self.cfg, "fixed_eval_motion_ids", False)) and bool(getattr(self.cfg, "eval_mode", False)):
+            if self.fixed_eval_motion_ids is None:
+                self._setup_fixed_eval_motion_assignment()
+            env_ids_t = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+            motion_ids = self.fixed_eval_motion_ids[env_ids_t]
+            self.motion_ids[env_ids_t] = motion_ids
+            self.local_time_steps[env_ids_t] = 0
+            start = self.motion.time_step_start_idx[motion_ids]
+            end = self.motion.time_step_end_idx[motion_ids]
+            self.frame_end_per_env[env_ids_t] = end - start
+        elif self.cfg.adaptive_sample:
             self._adaptive_sampling(env_ids)
         else:
             raise NotImplementedError
@@ -727,12 +876,17 @@ class MotionCommand(CommandTerm):
         Called every control step, update commands for envs that are out of time
         """
         self.command_step_count += 1
-        self.time_steps += 1
-        env_ids = torch.where(self.time_steps >= self.frame_end_per_env)[0]
+        self.local_time_steps += 1
+        env_ids = torch.where(self.local_time_steps >= self.frame_end_per_env)[0]
+        # Count completed cycles only on real end-of-clip events during stepping.
+        if bool(getattr(self.cfg, "fixed_eval_motion_ids", False)) and bool(getattr(self.cfg, "eval_mode", False)):
+            if len(env_ids) > 0:
+                self.eval_cycle_count[env_ids] += 1
         if self.cfg.resample_interval != -1:  # change the reference motion every resample_interval control steps
             self.resample_time += 1
             if self.resample_time >= self.cfg.resample_interval:
                 self.resample_motion_files(self.env)
+                env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
 
         # compute the metrics
@@ -749,12 +903,10 @@ class MotionCommand(CommandTerm):
         )  # 把数据中xy yaw换成实际机器人的xy yaw
 
         # MAE update the bin failed history
-        # NOTE we shall ensure that the _resample_command() function be called once before this function
         self.bin_failed_count = (
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )
         self._current_bin_failed.zero_()
-        # print("command_step_count: ", self.command_step_count)
         if (
             self.cfg.save_adaptive_bins
             and self.cfg.fail_count_save_interval > 0
@@ -771,6 +923,9 @@ class MotionCommand(CommandTerm):
                 )
                 self.goal_anchor_visualizer = VisualizationMarkers(
                     self.cfg.anchor_visualizer_cfg.replace(prim_path="/Visuals/Command/goal/anchor")
+                )
+                self.future_anchor_visualizer = VisualizationMarkers(
+                    self.cfg.anchor_visualizer_cfg.replace(prim_path="/Visuals/Command/future/anchor")
                 )
 
                 if self.cfg.debug_anchor_speed:
@@ -797,6 +952,7 @@ class MotionCommand(CommandTerm):
 
             self.current_anchor_visualizer.set_visibility(True)
             self.goal_anchor_visualizer.set_visibility(True)
+            self.future_anchor_visualizer.set_visibility(True)
             if self.cfg.debug_anchor_speed:
                 self.current_anchor_lin_vel_visualizer.set_visibility(True)
                 self.goal_anchor_lin_vel_visualizer.set_visibility(True)
@@ -809,6 +965,7 @@ class MotionCommand(CommandTerm):
             if hasattr(self, "current_anchor_visualizer"):
                 self.current_anchor_visualizer.set_visibility(False)
                 self.goal_anchor_visualizer.set_visibility(False)
+                self.future_anchor_visualizer.set_visibility(False)
                 if self.cfg.debug_anchor_speed:
                     self.current_anchor_lin_vel_visualizer.set_visibility(False)
                     self.goal_anchor_lin_vel_visualizer.set_visibility(False)
@@ -857,9 +1014,10 @@ class MotionCommand(CommandTerm):
     def _debug_vis_callback(self, event):
         if not self.robot.is_initialized:
             return
-
-        # self.current_anchor_visualizer.visualize(self.robot_anchor_pos_w, self.robot_anchor_quat_w)
-        # self.goal_anchor_visualizer.visualize(self.anchor_pos_w, self.anchor_quat_w)
+        if hasattr(self, "future_anchor_visualizer"):
+            self.future_anchor_visualizer.visualize(
+                self.anchor_pos_w_future.view(-1, 3), self.anchor_quat_w_future.view(-1, 4)
+            )
 
         if self.cfg.debug_anchor_speed:
             current_lin_vel_scale, current_lin_vel_quat = self._resolve_velocity_to_arrow(
@@ -900,8 +1058,9 @@ class MotionCommandCfg(CommandTermCfg):
 
     dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
     eval_mode: bool = False
+    # Evaluation: if True, pin env i to motion i (requires num_envs == number of motions loaded).
+    fixed_eval_motion_ids: bool = False
     adaptive_sample: bool = True
-    adaptive_sample_motion_file: bool = True
     asset_name: str = MISSING
     max_motion_num: int = 999999
     resample_interval: int = 300000000000
@@ -911,6 +1070,8 @@ class MotionCommandCfg(CommandTermCfg):
     log_save_path: str = "train_logs"
     pose_range: dict[str, tuple[float, float]] = {}
     velocity_range: dict[str, tuple[float, float]] = {}
+
+    future_step_num = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     joint_position_range: tuple[float, float] = (-0.52, 0.52)
 

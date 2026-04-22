@@ -107,7 +107,7 @@ class CommandsCfg:
         resampling_time_range=(1.0e9, 1.0e9),
         debug_vis=True,
         max_motion_num=999999,
-        motion_file="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/amass",
+        motion_file=None,
         pose_range={
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
@@ -152,9 +152,7 @@ class ObservationsCfg:
             func=mdp.motion_anchor_ang_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
         )
         motion_anchor_project_gravity = ObsTerm(
-            func=mdp.motion_anchor_project_gravity,
-            params={"command_name": "motion"},
-            noise=Unoise(n_min=-0.05, n_max=0.05),
+            func=mdp.motion_anchor_project_gravity, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
         motion_anchor_pos_z = ObsTerm(
             func=mdp.motion_anchor_pos_z, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
@@ -163,7 +161,7 @@ class ObservationsCfg:
         motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
 
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel) # not observable
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))

@@ -20,7 +20,21 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument("--dataset_txt", type=str, default=None, help="Path to the motion dataset_txt.")
+
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
+parser.add_argument(
+    "--tb_log_dir",
+    type=str,
+    default=None,
+    help="TensorBoard output directory used when --logger=tensorboard. Defaults to <checkpoint_dir>/tensorboard/play.",
+)
+parser.add_argument(
+    "--tb_log_interval",
+    type=int,
+    default=1,
+    help="Log command metrics to TensorBoard every N env steps when --logger=tensorboard.",
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -89,6 +103,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 f"[INFO]: Overriding motion file in the environment config with: {env_cfg.commands.motion.motion_file}"
             )
 
+        if args_cli.dataset_txt is not None:
+            print(f"[INFO]: Using motion file filter from CLI: {args_cli.dataset_txt}")
+            env_cfg.commands.motion.dataset_txt = args_cli.dataset_txt
+            print(
+                "[INFO]: Overriding motion file filter in the environment config with:"
+                f" {env_cfg.commands.motion.dataset_txt}"
+            )
+
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     env_cfg.episode_length_s = 9999
     # create isaac environment
@@ -122,6 +144,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
+    base_env = env.unwrapped
+    motion_cmd = None
+    if hasattr(base_env, "command_manager"):
+        try:
+            motion_cmd = base_env.command_manager.get_term("motion")
+        except Exception:
+            motion_cmd = None
+
+    tb_writer = None
+    tb_log_interval = max(1, args_cli.tb_log_interval)
+    if args_cli.logger == "tensorboard":
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except ImportError as err:
+            raise ImportError("TensorBoard logging requested, but 'tensorboard' is not installed.") from err
+
+        tb_log_dir = args_cli.tb_log_dir or os.path.join(log_dir, "tensorboard", "play")
+        tb_writer = SummaryWriter(log_dir=tb_log_dir)
+        print(f"[INFO] TensorBoard logging enabled. log_dir: {tb_log_dir}")
+        if motion_cmd is None:
+            print("[WARN] Could not find command term 'motion'; command metrics will not be logged.")
+
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")  # noqa: F841
 
@@ -145,11 +189,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+
+        timestep += 1
+        if tb_writer is not None and motion_cmd is not None and timestep % tb_log_interval == 0:
+            for key, value in motion_cmd.metrics.items():
+                if torch.is_tensor(value):
+                    scalar = float(value.mean().item())
+                else:
+                    scalar = float(value)
+                tb_writer.add_scalar(f"command/{key}", scalar, global_step=timestep)
+
         if args_cli.video:
-            timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
+
+    if tb_writer is not None:
+        tb_writer.flush()
+        tb_writer.close()
 
     # close the simulator
     env.close()
