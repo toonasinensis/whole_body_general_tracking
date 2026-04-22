@@ -152,14 +152,11 @@ class ObservationsCfg:
             func=mdp.motion_anchor_ang_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
         )
         motion_anchor_project_gravity = ObsTerm(
-            func=mdp.motion_anchor_project_gravity,
-            params={"command_name": "motion"},
-            noise=Unoise(n_min=-0.05, n_max=0.05),
+            func=mdp.motion_anchor_project_gravity, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
         motion_anchor_pos_z = ObsTerm(
             func=mdp.motion_anchor_pos_z, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
-
         motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
 
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))

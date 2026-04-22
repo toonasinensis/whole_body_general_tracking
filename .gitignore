@@ -1,4 +1,6 @@
 data/
+train_logs/
+eval_results/
 
 # Qiqi in Dev Folders
 v_stack/
