@@ -1,0 +1,6 @@
+lafan/fallAndGetUp1_subject1.npz
+lafan/fallAndGetUp1_subject4.npz
+lafan/fallAndGetUp1_subject5.npz
+lafan/fallAndGetUp2_subject2.npz
+lafan/fallAndGetUp2_subject3.npz
+lafan/fallAndGetUp3_subject1.npz

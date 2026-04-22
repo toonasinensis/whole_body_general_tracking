@@ -3,6 +3,11 @@ The aims of this script is to
 1. The joints order in the motion files shall be aligned with the joints order in the isaaclab robot (check using joints)
 2. The bodies order in the motion files shall be aligned with the bodies order in the isaaclab robot (check using body links error)
 3. Visualize the motions in the isaaclab to show their feasibility
+
+python preprocess/test_mimic_motions.py --robot_cfg g1 \
+    --dataset_txt "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt" \
+    --motion_dir "/home/thl/Documents/g1-mimic-npz"
+
 """
 
 import argparse
@@ -11,7 +16,8 @@ import torch
 from isaaclab.app import AppLauncher
 
 # region robot configs
-G1_MOTION_FILE = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1/检查数据集"
+G1_MOTION_FILE = "/home/thl/Documents/g1-mimic-npz"
+G1_MOTION_DATASET_TXT = "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt"
 G1_ANCHOR_BODY_NAMES = "pelvis"
 G1_BODY_NAMES = [
     "pelvis",
@@ -55,11 +61,13 @@ ROBOT_PRESETS = {
         "anchor_body_name": G1_ANCHOR_BODY_NAMES,
         "body_names": G1_BODY_NAMES,
         "default_motion_file": G1_MOTION_FILE,
+        "default_motion_dataset_txt": G1_MOTION_DATASET_TXT,
     },
     "roban": {
         "anchor_body_name": ROBAN_ANCHOR_BODY_NAMES,
         "body_names": ROBAN_BODY_NAMES,
         "default_motion_file": ROBAN_MOTION_FILE,
+        "default_motion_dataset_txt": "/home/thl/Documents/roban-mimic-npz",
     },
 }
 # endregion robot configs
@@ -74,6 +82,20 @@ parser.add_argument(
     default="g1",
     choices=["g1", "roban"],
     help="Robot preset: g1 or roban.",
+)
+# 新增 motion_dir 和 dataset_txt 参数
+parser.add_argument(
+    "--motion_dir",
+    type=str,
+    default=None,
+    help="根目录，txt 里的路径为相对路径时拼接用。默认用 preset 的 default_motion_file。",
+)
+parser.add_argument(
+    "--dataset_txt",
+    type=str,
+    nargs="+",
+    default=None,
+    help="一个或多个 txt 文件，每行一个 npz 路径（相对 motion_dir 或绝对路径）",
 )
 # endregion add argparse arguments
 
@@ -152,8 +174,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
 
+    from pathlib import Path
+
     preset = ROBOT_PRESETS[args_cli.robot_cfg]
-    motion_file = preset["default_motion_file"]
     body_names = list(preset["body_names"])
     if len(body_names) == 0:
         raise ValueError("--body-names must contain at least one body name")
@@ -164,9 +187,17 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # Build body index mapping: motion body_names -> IsaacLab body indices.
     robot_body_indexes = robot.find_bodies(body_names, preserve_order=True)[0]
 
+    # 处理 motion 文件列表
+    motion_dir = args_cli.motion_dir or preset["default_motion_file"]
+    motion_dir = str(Path(motion_dir).expanduser().resolve())
+    dataset_txt = args_cli.dataset_txt or preset.get("default_motion_dataset_txt")
+    if isinstance(dataset_txt, list) and len(dataset_txt) == 1:
+        dataset_txt = dataset_txt[0]
+
     cfg = MotionCommandCfg(
         anchor_body_name=anchor_body_name,
-        motion_file=motion_file,
+        motion_file=motion_dir,
+        dataset_txt=dataset_txt,
         body_names=body_names,
         asset_name="robot",
         max_motion_num=num_motion,

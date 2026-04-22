@@ -107,7 +107,7 @@ class CommandsCfg:
         resampling_time_range=(1.0e9, 1.0e9),
         debug_vis=True,
         max_motion_num=999999,
-        motion_file="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/amass",
+        motion_file=None,
         pose_range={
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),

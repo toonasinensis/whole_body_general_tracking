@@ -17,6 +17,12 @@ conda run -n my_env python preprocess/test_mimic_motions_viser.py \
   --robot_cfg g1 --skeleton \
   --motion_dir /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1/检查数据集 \
   --show_count 40 --columns 8
+
+  python preprocess/test_mimic_motions_viser.py \
+    --robot_cfg g1 \
+    --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/关节限位.txt \
+    --motion_dir /home/thl/Documents/g1-mimic-npz
+
 """
 
 from __future__ import annotations
@@ -43,7 +49,8 @@ except ImportError as exc:  # pragma: no cover
 _ASSET_DIR = Path(__file__).parent.parent / "source/whole_body_tracking/whole_body_tracking/assets"
 
 G1_URDF_PATH = _ASSET_DIR / "unitree_description/urdf/g1/main.urdf"
-G1_MOTION_FILE = str(Path(__file__).parent.parent / "data/g1/检查数据集")
+G1_MOTION_FILE = str(Path(__file__).parent.parent / "data/g1/EVAL")
+
 G1_ANCHOR_BODY_NAME = "pelvis"
 G1_BODY_NAMES = [
     "pelvis",
@@ -203,6 +210,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot_cfg", type=str, default="g1", choices=["g1", "roban"])
     parser.add_argument("--motion_dir", type=str, default=None)
     parser.add_argument(
+        "--motion_txt",
+        type=str,
+        nargs="+",
+        default=None,
+        help="One or more txt files. Each non-empty line is an .npz path relative to --motion_dir.",
+    )
+    parser.add_argument(
         "--show_count", type=int, default=12, help="Motions to display at once (default 12 for mesh mode)."
     )
     parser.add_argument("--start_index", type=int, default=0)
@@ -231,6 +245,35 @@ def collect_motion_paths(motion_dir: Path) -> list[Path]:
     paths = sorted(motion_dir.rglob("*.npz"))
     if not paths:
         raise FileNotFoundError(f"No .npz motions found in {motion_dir}")
+    return paths
+
+
+def collect_motion_paths_from_txt(motion_dir: Path, txt_files: list[Path]) -> list[Path]:
+    paths: list[Path] = []
+    for txt_file in txt_files:
+        if not txt_file.exists():
+            raise FileNotFoundError(f"motion txt not found: {txt_file}")
+
+        with txt_file.open("r", encoding="utf-8") as f:
+            for line_no, raw in enumerate(f, start=1):
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                p = Path(line).expanduser()
+                if not p.is_absolute():
+                    p = motion_dir / p
+                p = p.resolve()
+
+                if p.suffix.lower() != ".npz":
+                    raise ValueError(f"Not an .npz path in {txt_file}:{line_no}: {line}")
+                if not p.exists():
+                    raise FileNotFoundError(f"Missing motion file listed in {txt_file}:{line_no}: {p}")
+
+                paths.append(p)
+
+    if not paths:
+        raise ValueError("No valid .npz entries found in --motion_txt files.")
     return paths
 
 
@@ -303,10 +346,18 @@ def main() -> None:
     urdf_path: Path = Path(preset["urdf_path"])
 
     motion_dir = Path(args.motion_dir or preset["default_motion_file"]).expanduser().resolve()
-    all_paths = collect_motion_paths(motion_dir)
-    subset_paths = all_paths[args.start_index : args.start_index + args.show_count]
+    if args.motion_txt:
+        txt_files = [Path(p).expanduser().resolve() for p in args.motion_txt]
+        subset_paths = collect_motion_paths_from_txt(motion_dir, txt_files)
+        all_paths = subset_paths
+    else:
+        all_paths = collect_motion_paths(motion_dir)
+        subset_paths = all_paths[args.start_index : args.start_index + args.show_count]
+
     if not subset_paths:
         raise ValueError(f"No motions selected: total={len(all_paths)}, start={args.start_index}")
+
+    label_index_offset = 0 if args.motion_txt else args.start_index
 
     motions: list[MotionData] = []
     for p in subset_paths:
@@ -318,7 +369,11 @@ def main() -> None:
         raise RuntimeError("No valid motions loaded.")
 
     print(f"[INFO] motion_dir = {motion_dir}")
-    print(f"[INFO] total={len(all_paths)}  selected={len(subset_paths)}  loaded={len(motions)}")
+    if args.motion_txt:
+        print(f"[INFO] motion_txt = {', '.join(str(p) for p in txt_files)}")
+        print(f"[INFO] listed={len(subset_paths)}  loaded={len(motions)}")
+    else:
+        print(f"[INFO] total={len(all_paths)}  selected={len(subset_paths)}  loaded={len(motions)}")
     use_mesh = not args.skeleton
     print(f"[INFO] render_mode = {'URDF mesh' if use_mesh else 'skeleton'}")
 
@@ -362,7 +417,11 @@ def main() -> None:
         selected_txt = server.gui.add_text("selected_motion", initial_value="(click a robot to inspect)")
         server.gui.add_text(
             "page_info",
-            initial_value=f"start={args.start_index}  count={len(motions)}  total={len(all_paths)}",
+            initial_value=(
+                f"txt_mode count={len(motions)}"
+                if args.motion_txt
+                else f"start={args.start_index}  count={len(motions)}  total={len(all_paths)}"
+            ),
         )
 
     offsets = grid_offsets(num_items=len(motions), columns=max(1, args.columns), spacing=args.cell_spacing)
@@ -382,7 +441,7 @@ def main() -> None:
         rel_name = (
             str(motion.path.relative_to(motion_dir)) if motion.path.is_relative_to(motion_dir) else str(motion.path)
         )
-        short_name = f"[{args.start_index + i}] {motion.path.name}"
+        short_name = f"[{label_index_offset + i}] {motion.path.name}"
 
         body0 = motion.body_pos[0]
         anchor_pos0 = body0[anchor_idx]
@@ -464,7 +523,7 @@ def main() -> None:
 
         handles.append(h)
 
-    selected_txt.value = f"[{args.start_index}] {motions[0].path.name}"
+    selected_txt.value = f"[{label_index_offset}] {motions[0].path.name}"
 
     # ------------------------------------------------------------------
     # Animation loop
