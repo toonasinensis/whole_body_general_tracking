@@ -1,5 +1,5 @@
 data/
-
+train_logs/
 # Qiqi in Dev Folders
 v_stack/
 .vscode/*
