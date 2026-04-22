@@ -30,7 +30,7 @@ if [[ -n "${MOTION_FILE_TXT:-}" ]]; then
   EXTRA_ARGS+=(--motion_file_txt="${MOTION_FILE_TXT}")
 fi
 
-python "${REPO_ROOT}/scripts/eval/eval_adaptive_bins.py" \
+python "${REPO_ROOT}/scripts/eval/rollout_adaptive_bins.py" \
   --task="${TASK}" \
   --resume_path="${RESUME_PATH}" \
   --motion_file="${MOTION_FILE}" \

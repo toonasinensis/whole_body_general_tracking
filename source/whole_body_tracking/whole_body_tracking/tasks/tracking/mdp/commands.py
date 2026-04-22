@@ -595,7 +595,6 @@ class MotionCommand(CommandTerm):
         )  # 1s motion frames for each bin
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
-        # NOTE self.kernel is not used in this script
         self.kernel = torch.tensor(
             [self.cfg.adaptive_lambda**i for i in range(self.cfg.adaptive_kernel_size)], device=self.device
         )
@@ -768,10 +767,6 @@ class MotionCommand(CommandTerm):
         2. compute sampling probability and sample bins accordingly
         3. compute metrics
         """
-        # NOTE there shall be a logic to justify
-        # whether the env_ids are out of time, out of motion range, or failed (early termination)
-        # if early termination, add to self._current_bin_failed
-        # else no change
         episode_failed = self._env.termination_manager.terminated[env_ids]
         if torch.any(episode_failed):
             # Use the last valid frame (exclusive end indices shouldn't be used as timestamps).
@@ -779,7 +774,6 @@ class MotionCommand(CommandTerm):
             current_bin_index = torch.clamp(
                 (global_ts * self.bin_count) // max(self.motion.time_step_total, 1), 0, self.bin_count - 1
             )
-            # NOTE terminated envs are early terminated or out of motion range ?
             fail_bins = current_bin_index[env_ids][episode_failed]
             self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
 
@@ -909,7 +903,6 @@ class MotionCommand(CommandTerm):
         )  # 把数据中xy yaw换成实际机器人的xy yaw
 
         # MAE update the bin failed history
-        # NOTE we shall ensure that the _resample_command() function be called once before this function
         self.bin_failed_count = (
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )

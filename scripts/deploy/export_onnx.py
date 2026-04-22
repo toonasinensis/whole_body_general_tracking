@@ -61,6 +61,12 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument(
+    "--motion_file_txt",
+    type=str,
+    default=None,
+    help="Optional txt file listing relative .npz paths under --motion_file (maps to commands.motion.dataset_txt).",
+)
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
 
 # onnx export (optional)
@@ -144,6 +150,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Using motion file from CLI: {args_cli.motion_file}")
         env_cfg.commands.motion.motion_file = args_cli.motion_file
         print(f"[INFO]: Overriding motion file in the environment config with: {env_cfg.commands.motion.motion_file}")
+    if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
+        env_cfg.commands.motion.dataset_txt = args_cli.motion_file_txt
+        print(f"[INFO]: Overriding motion file txt in the environment config with: {env_cfg.commands.motion.dataset_txt}")
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     
     env_cfg.episode_length_s = 9999

@@ -45,6 +45,12 @@ parser = argparse.ArgumentParser(description="Test exported ONNX motion policy")
 parser.add_argument("--task", type=str, default=None, help="Name of the task")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to motion file")
+parser.add_argument(
+    "--motion_file_txt",
+    type=str,
+    default=None,
+    help="Optional txt file listing relative .npz paths under --motion_file (maps to commands.motion.dataset_txt).",
+)
 parser.add_argument("--onnx_path", type=str, required=True, help="Path to the exported .onnx file")
 parser.add_argument("--video", action="store_true", default=False, help="Record video")
 parser.add_argument("--video_length", type=int, default=500, help="Video length in steps")
@@ -87,6 +93,9 @@ def main(env_cfg, agent_cfg):
     if args_cli.motion_file is not None:
         env_cfg.commands.motion.motion_file = args_cli.motion_file
         print(f"[INFO] Using motion file: {args_cli.motion_file}")
+    if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
+        env_cfg.commands.motion.dataset_txt = args_cli.motion_file_txt
+        print(f"[INFO] Using motion file txt: {args_cli.motion_file_txt}")
 
     # Create environment
     render_mode = "rgb_array" if args_cli.video else None

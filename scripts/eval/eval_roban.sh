@@ -1,4 +1,4 @@
-python scripts/qq_rsl_rl/eval.py \
+python scripts/eval/eval.py \
   --task=Tracking-Flat-RobanS22-v0 \
   --motion_file=data/roban_motions \
   --motion_file_txt=data/roban_motions_list/motions_crawl_kept.txt \
