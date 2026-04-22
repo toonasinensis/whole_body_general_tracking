@@ -64,6 +64,7 @@ class DelayedPDActuator_RobanS22(DelayedPDActuator):
         error_pos = control_action.joint_positions - joint_pos
         error_vel = control_action.joint_velocities - joint_vel
 
+        # NOTE modify this code if using Residual PD controller
         # calculate the desired joint torques with friction compensation
         self.computed_effort = (
             self.stiffness * error_pos

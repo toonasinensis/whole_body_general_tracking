@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -136,6 +137,93 @@ def _resolve_root_body_name(robot) -> str:
     return "unknown_root_body"
 
 
+def _to_serializable_list(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu().tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return value
+
+
+def _as_float_list_1d(value) -> list[float]:
+    if torch.is_tensor(value):
+        data = value.detach().cpu().reshape(-1).tolist()
+    elif isinstance(value, np.ndarray):
+        data = value.reshape(-1).tolist()
+    elif isinstance(value, (list, tuple)):
+        data = list(value)
+    else:
+        data = [value]
+    return [float(v) for v in data]
+
+
+def _all_close_to_zero(values: list[float], eps: float = 1e-12) -> bool:
+    return len(values) > 0 and all(abs(v) <= eps for v in values)
+
+
+def _resolve_cfg_field_for_joint(actuator_cfg, joint_name: str, field_name: str):
+    raw = getattr(actuator_cfg, field_name, None)
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        for pattern, value in raw.items():
+            if re.fullmatch(str(pattern), joint_name):
+                return value
+        return None
+    return raw
+
+
+def _resolve_per_joint_from_actuator_cfg(robot, joint_names: list[str], field_names: list[str]) -> list[float] | None:
+    actuator_cfgs = getattr(getattr(robot, "cfg", None), "actuators", None)
+    if not actuator_cfgs:
+        return None
+
+    resolved: list[float] = []
+    for joint_name in joint_names:
+        value_found = None
+        for actuator_cfg in actuator_cfgs.values():
+            joint_exprs = getattr(actuator_cfg, "joint_names_expr", None)
+            if joint_exprs:
+                if not any(re.fullmatch(str(expr), joint_name) for expr in joint_exprs):
+                    continue
+            for field_name in field_names:
+                value = _resolve_cfg_field_for_joint(actuator_cfg, joint_name, field_name)
+                if value is not None:
+                    value_found = float(value)
+                    break
+            if value_found is not None:
+                break
+        if value_found is None:
+            return None
+        resolved.append(value_found)
+    return resolved
+
+
+def _resolve_action_scale(unwrapped_env):
+    joint_pos_term = unwrapped_env.action_manager.get_term("joint_pos")
+    scale = getattr(joint_pos_term, "_scale", None)
+    if isinstance(scale, torch.Tensor):
+        if scale.ndim == 0:
+            return float(scale.item())
+        if scale.ndim > 1:
+            return scale[0].detach().cpu().tolist()
+        return scale.detach().cpu().tolist()
+    if isinstance(scale, np.ndarray):
+        if scale.ndim > 1:
+            return scale[0].tolist()
+        return scale.tolist()
+    if isinstance(scale, (list, tuple)):
+        if len(scale) == 0:
+            return 0.0
+        first = scale[0]
+        return _to_serializable_list(first)
+    if scale is None:
+        return 0.0
+    return float(scale)
+
+
 def _build_policy_obs_spec(env, onnx_input_name: str, onnx_input_shape) -> dict:
     unwrapped = env.unwrapped
     robot = unwrapped.scene["robot"]
@@ -147,6 +235,23 @@ def _build_policy_obs_spec(env, onnx_input_name: str, onnx_input_shape) -> dict:
     anchor_body_name = motion_cmd.cfg.anchor_body_name
     root_body_name = _resolve_root_body_name(robot)
     num_joints = len(joint_names)
+    joint_default_pos = _to_serializable_list(robot.data.default_joint_pos_nominal[0])
+
+    runtime_torque = _as_float_list_1d(
+        getattr(robot.data, "joint_effort_limits", getattr(robot.data, "effort_limits", torch.zeros(num_joints)))[0]
+    )
+    cfg_torque = _resolve_per_joint_from_actuator_cfg(robot, joint_names, ["effort_limit_sim", "effort_limit"])
+    joint_torque_limit = cfg_torque if (cfg_torque is not None and _all_close_to_zero(runtime_torque)) else runtime_torque
+
+    runtime_kp = _as_float_list_1d(robot.data.joint_stiffness[0])
+    cfg_kp = _resolve_per_joint_from_actuator_cfg(robot, joint_names, ["stiffness"])
+    actuator_kp = cfg_kp if (cfg_kp is not None and _all_close_to_zero(runtime_kp)) else runtime_kp
+
+    runtime_kd = _as_float_list_1d(robot.data.joint_damping[0])
+    cfg_kd = _resolve_per_joint_from_actuator_cfg(robot, joint_names, ["damping"])
+    actuator_kd = cfg_kd if (cfg_kd is not None and _all_close_to_zero(runtime_kd)) else runtime_kd
+
+    action_scale = _resolve_action_scale(unwrapped)
 
     # Per-step term dimensions for the policy group in tracking_env_cfg.PolicyCfg.
     base_term_dims = {
@@ -166,62 +271,50 @@ def _build_policy_obs_spec(env, onnx_input_name: str, onnx_input_shape) -> dict:
     base_term_semantics = {
         "motion_joint_pos": {
             "components_per_entity": 1,
-            "entity_order": {"joints": joint_names},
             "value_meaning": "reference motion joint positions",
         },
         "motion_joint_vel": {
             "components_per_entity": 1,
-            "entity_order": {"joints": joint_names},
             "value_meaning": "reference motion joint velocities",
         },
         "motion_anchor_lin_vel_b": {
             "components_order": ["vx", "vy", "vz"],
-            "entity_order": {"body_links": [anchor_body_name]},
             "value_meaning": "reference anchor linear velocity in anchor frame",
         },
         "motion_anchor_ang_vel_b": {
             "components_order": ["wx", "wy", "wz"],
-            "entity_order": {"body_links": [anchor_body_name]},
             "value_meaning": "reference anchor angular velocity in anchor frame",
         },
         "motion_anchor_project_gravity": {
             "components_order": ["gx", "gy", "gz"],
-            "entity_order": {"body_links": [anchor_body_name]},
             "value_meaning": "projected gravity in reference anchor frame",
         },
         "motion_anchor_pos_z": {
             "components_order": ["z"],
-            "entity_order": {"body_links": [anchor_body_name]},
             "value_meaning": "reference anchor world z position",
         },
         "motion_anchor_ori_b": {
             "components_order": ["r00", "r10", "r20", "r01", "r11", "r21"],
-            "entity_order": {"body_links": [anchor_body_name]},
             "value_meaning": "reference anchor orientation relative to robot anchor (6D)",
         },
         "projected_gravity": {
             "components_order": ["gx", "gy", "gz"],
-            "entity_order": {"body_links": [root_body_name]},
             "value_meaning": "robot projected gravity in base frame",
         },
         "base_ang_vel": {
             "components_order": ["wx", "wy", "wz"],
-            "entity_order": {"body_links": [root_body_name]},
             "value_meaning": "robot base angular velocity",
         },
         "joint_pos": {
             "components_per_entity": 1,
-            "entity_order": {"joints": joint_names},
             "value_meaning": "robot joint positions (relative/default-normalized by term implementation)",
         },
         "joint_vel": {
             "components_per_entity": 1,
-            "entity_order": {"joints": joint_names},
             "value_meaning": "robot joint velocities (relative/default-normalized by term implementation)",
         },
         "actions": {
             "components_per_entity": 1,
-            "entity_order": {"joints": joint_names},
             "value_meaning": "previous action vector",
         },
     }
@@ -257,10 +350,17 @@ def _build_policy_obs_spec(env, onnx_input_name: str, onnx_input_shape) -> dict:
             "unknown_terms": unknown_terms,
         },
         "orders": {
-            "robot_joint_names": joint_names,
-            "robot_root_body_name": root_body_name,
+            "joint_names": joint_names,
+            "anchor_body_name": anchor_body_name,
+            "root_body_name": root_body_name,
             "motion_body_link_names": body_names,
-            "motion_anchor_body_name": anchor_body_name,
+        },
+        "actuation": {
+            "joint_default_pos": joint_default_pos,
+            "joint_torque_limit": joint_torque_limit,
+            "actuator_kp": actuator_kp,
+            "actuator_kd": actuator_kd,
+            "action_scale": action_scale,
         },
     }
     return spec
@@ -373,6 +473,6 @@ def main(env_cfg, agent_cfg):
 
 if __name__ == "__main__":
     try:
-        main()
+        main()  # pyright: ignore[reportCallIssue]
     finally:
         simulation_app.close()

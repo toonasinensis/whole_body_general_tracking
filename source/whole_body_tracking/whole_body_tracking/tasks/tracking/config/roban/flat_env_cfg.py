@@ -8,7 +8,7 @@ import whole_body_tracking.tasks.tracking.mdp as mdp
 from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
 
-ROBAN_S22_MOTION_ANCHOR_BODY_NAME = "waist_yaw_link"
+ROBAN_S22_MOTION_ANCHOR_BODY_NAME = "base_link"
 ROBAN_S22_MOTION_BODY_NAMES = [
     "base_link",
     "waist_yaw_link",
