@@ -1,6 +1,7 @@
 """Export checkpoint to ONNX, then play ONNX in one Isaac Sim session."""
 
 import argparse
+import json
 import os
 import sys
 
@@ -105,6 +106,173 @@ def _to_numpy_policy_obs(obs_data) -> np.ndarray:
     return np.asarray(policy_obs, dtype=np.float32)
 
 
+def _to_int_shape_list(shape) -> list[int | str]:
+    result: list[int | str] = []
+    for item in shape:
+        if isinstance(item, int):
+            result.append(item)
+        elif item is None:
+            result.append("dynamic")
+        else:
+            result.append(str(item))
+    return result
+
+
+def _resolve_root_body_name(robot) -> str:
+    # Try explicit root-name attributes first, then fall back to the first body entry.
+    for attr_name in ("root_body_name", "root_link_name", "base_link_name"):
+        value = getattr(robot, attr_name, None)
+        if isinstance(value, str) and value:
+            return value
+
+    data_body_names = getattr(robot.data, "body_names", None)
+    if data_body_names and len(data_body_names) > 0:
+        return str(data_body_names[0])
+
+    body_names = getattr(robot, "body_names", None)
+    if body_names and len(body_names) > 0:
+        return str(body_names[0])
+
+    return "unknown_root_body"
+
+
+def _build_policy_obs_spec(env, onnx_input_name: str, onnx_input_shape) -> dict:
+    unwrapped = env.unwrapped
+    robot = unwrapped.scene["robot"]
+    motion_cmd = unwrapped.command_manager.get_term("motion")
+
+    policy_term_order = list(unwrapped.observation_manager.active_terms["policy"])
+    joint_names = list(robot.data.joint_names)
+    body_names = list(motion_cmd.cfg.body_names)
+    anchor_body_name = motion_cmd.cfg.anchor_body_name
+    root_body_name = _resolve_root_body_name(robot)
+    num_joints = len(joint_names)
+
+    # Per-step term dimensions for the policy group in tracking_env_cfg.PolicyCfg.
+    base_term_dims = {
+        "motion_joint_pos": num_joints,
+        "motion_joint_vel": num_joints,
+        "motion_anchor_lin_vel_b": 3,
+        "motion_anchor_ang_vel_b": 3,
+        "motion_anchor_project_gravity": 3,
+        "motion_anchor_pos_z": 1,
+        "motion_anchor_ori_b": 6,
+        "projected_gravity": 3,
+        "base_ang_vel": 3,
+        "joint_pos": num_joints,
+        "joint_vel": num_joints,
+        "actions": num_joints,
+    }
+    base_term_semantics = {
+        "motion_joint_pos": {
+            "components_per_entity": 1,
+            "entity_order": {"joints": joint_names},
+            "value_meaning": "reference motion joint positions",
+        },
+        "motion_joint_vel": {
+            "components_per_entity": 1,
+            "entity_order": {"joints": joint_names},
+            "value_meaning": "reference motion joint velocities",
+        },
+        "motion_anchor_lin_vel_b": {
+            "components_order": ["vx", "vy", "vz"],
+            "entity_order": {"body_links": [anchor_body_name]},
+            "value_meaning": "reference anchor linear velocity in anchor frame",
+        },
+        "motion_anchor_ang_vel_b": {
+            "components_order": ["wx", "wy", "wz"],
+            "entity_order": {"body_links": [anchor_body_name]},
+            "value_meaning": "reference anchor angular velocity in anchor frame",
+        },
+        "motion_anchor_project_gravity": {
+            "components_order": ["gx", "gy", "gz"],
+            "entity_order": {"body_links": [anchor_body_name]},
+            "value_meaning": "projected gravity in reference anchor frame",
+        },
+        "motion_anchor_pos_z": {
+            "components_order": ["z"],
+            "entity_order": {"body_links": [anchor_body_name]},
+            "value_meaning": "reference anchor world z position",
+        },
+        "motion_anchor_ori_b": {
+            "components_order": ["r00", "r10", "r20", "r01", "r11", "r21"],
+            "entity_order": {"body_links": [anchor_body_name]},
+            "value_meaning": "reference anchor orientation relative to robot anchor (6D)",
+        },
+        "projected_gravity": {
+            "components_order": ["gx", "gy", "gz"],
+            "entity_order": {"body_links": [root_body_name]},
+            "value_meaning": "robot projected gravity in base frame",
+        },
+        "base_ang_vel": {
+            "components_order": ["wx", "wy", "wz"],
+            "entity_order": {"body_links": [root_body_name]},
+            "value_meaning": "robot base angular velocity",
+        },
+        "joint_pos": {
+            "components_per_entity": 1,
+            "entity_order": {"joints": joint_names},
+            "value_meaning": "robot joint positions (relative/default-normalized by term implementation)",
+        },
+        "joint_vel": {
+            "components_per_entity": 1,
+            "entity_order": {"joints": joint_names},
+            "value_meaning": "robot joint velocities (relative/default-normalized by term implementation)",
+        },
+        "actions": {
+            "components_per_entity": 1,
+            "entity_order": {"joints": joint_names},
+            "value_meaning": "previous action vector",
+        },
+    }
+
+    terms = []
+    cursor = 0
+    unknown_terms = []
+    for term_name in policy_term_order:
+        dim = base_term_dims.get(term_name)
+        if dim is None:
+            unknown_terms.append(term_name)
+            continue
+        start = cursor
+        end = start + dim
+        cursor = end
+        term_spec = {
+            "name": term_name,
+            "slice": [start, end],
+            "dim": dim,
+        }
+        term_spec.update(base_term_semantics.get(term_name, {}))
+        terms.append(term_spec)
+
+    spec = {
+        "onnx_input": {
+            "name": onnx_input_name,
+            "shape": _to_int_shape_list(onnx_input_shape),
+        },
+        "policy_observation_group": {
+            "term_order": policy_term_order,
+            "single_step_concat_dim": cursor,
+            "terms": terms,
+            "unknown_terms": unknown_terms,
+        },
+        "orders": {
+            "robot_joint_names": joint_names,
+            "robot_root_body_name": root_body_name,
+            "motion_body_link_names": body_names,
+            "motion_anchor_body_name": anchor_body_name,
+        },
+    }
+    return spec
+
+
+def _write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=True)
+        f.write("\n")
+
+
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg, agent_cfg):
     agent_cfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
@@ -169,8 +337,14 @@ def main(env_cfg, agent_cfg):
         providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
     input_name = ort_session.get_inputs()[0].name
+    input_shape = ort_session.get_inputs()[0].shape
     output_name = ort_session.get_outputs()[0].name
     print(f"[INFO] ONNX input: '{input_name}', output: '{output_name}'")
+    obs_spec = _build_policy_obs_spec(env, input_name, input_shape)
+    obs_spec_filename = f"{os.path.splitext(args_cli.onnx_filename)[0]}_obs_spec.json"
+    obs_spec_path = os.path.join(export_model_dir, obs_spec_filename)
+    _write_json(obs_spec_path, obs_spec)
+    print(f"[INFO] Observation spec exported to: {obs_spec_path}")
 
     obs_dict, _ = env.reset()
     obs_np = _to_numpy_policy_obs(obs_dict)
