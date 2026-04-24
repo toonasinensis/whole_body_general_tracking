@@ -15,7 +15,7 @@ Arrays (typical shapes):
 1. **deploy** — Same 21-name order as the deploy CSV (see below). Matches the *source*
    layout in ``utilities/fix_joint_order.py`` (folder ``210531`` style exports).
 2. **isaac** — Interleaved order produced as the *destination* layout by
-   ``utilities/fix_joint_order.py`` (``dst_joint_order``), i.e. Isaac Lab–style
+   ``utilities/fix_joint_order.py`` (``dst_joint_order``), i.e. Isaac Lab-style
    column ordering.
 
 If the NPZ contains a ``joint_names`` array (length 21, same names as below), the

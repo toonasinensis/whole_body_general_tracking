@@ -834,42 +834,52 @@ class MotionCommand(CommandTerm):
             raise NotImplementedError
             # self.use_new_motion_pre_env[env_ids] = True
 
+        # NOTE add utility of shutting down the noise
         # add noise to robot states when envs are reset
         # add noise to root state
         root_pos = self.body_pos_w[:, 0].clone()
         root_ori = self.body_quat_w[:, 0].clone()
         root_lin_vel = self.body_lin_vel_w[:, 0].clone()
         root_ang_vel = self.body_ang_vel_w[:, 0].clone()
+
         range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
         root_pos[env_ids] += rand_samples[:, 0:3]
+        
+        # TODO check whether initial orientation noise will do good to the general tracking target
         # orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
         # root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
+
         range_list = [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
         root_lin_vel[env_ids] += rand_samples[:, :3]
         root_ang_vel[env_ids] += rand_samples[:, 3:]
+
         # add noise to joint state
         joint_pos = self.joint_pos.clone()
         joint_vel = self.joint_vel.clone()
+
         joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
         soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
-        joint_vel_limits = self.robot.data.joint_vel_limits[env_ids]
-        max_ang_vel_root = 20.0
         joint_pos[env_ids] = torch.clip(
             joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
         )
+
+        # limits clip
+        joint_vel_limits = self.robot.data.joint_vel_limits[env_ids]
         joint_vel[env_ids] = torch.clip(joint_vel[env_ids], -joint_vel_limits[:, :], joint_vel_limits[:, :])
+        max_ang_vel_root = 20.0
         root_ang_vel[env_ids] = torch.clip(root_ang_vel[env_ids], -max_ang_vel_root, max_ang_vel_root)
+
         self.robot.write_joint_state_to_sim(joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids)
         self.robot.write_root_state_to_sim(
             torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
             env_ids=env_ids,
         )
         # TODO: 切换动作文件时是否需要清空历史Observation
-        # NOTE: what about the historical observation when resetting the environment?
+        # According to my test the 10*0.02=0.2 seconds' obs mismatch does NOT affect the performance of trained model
 
     def _update_command(self):
         """

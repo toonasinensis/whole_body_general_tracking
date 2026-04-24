@@ -1,5 +1,9 @@
 """
 Load assigned deployed motions for testing joints orders
+
+python preprocess/test_deploy_csv_mujoco.py \
+  --motion data/roban_deploy_motions/body_check_001__A160.csv \
+  --fps 50
 """
 from __future__ import annotations
 
@@ -11,6 +15,8 @@ from typing import Any
 import mujoco
 import mujoco.viewer
 import numpy as np
+
+raise Exception("Not implemented, mujoco based visualization will be implemented in the future")
 
 # MuJoCo Python bindings are mostly untyped; treat as Any for static analysis.
 mj: Any = mujoco

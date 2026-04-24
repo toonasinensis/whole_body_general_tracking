@@ -141,28 +141,35 @@ class ObservationsCfg:
         # items listed in old version commands
         motion_joint_pos = ObsTerm(
             func=mdp.motion_joint_pos, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
+        ) #21
         motion_joint_vel = ObsTerm(
             func=mdp.motion_joint_vel, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
-        )
+        ) #21-42
         motion_anchor_lin_vel_b = ObsTerm(
             func=mdp.motion_anchor_lin_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
+        ) #42-45 in assigned motion root frame; in csv defined motion root frame
         motion_anchor_ang_vel_b = ObsTerm(
             func=mdp.motion_anchor_ang_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
-        )
+        ) #45-48 in assigned motion root frame; in csv defined motion root frame
         motion_anchor_project_gravity = ObsTerm(
             func=mdp.motion_anchor_project_gravity, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
+        ) #48-51 in assigned motion root frame; in csv defined motion root frame
         motion_anchor_pos_z = ObsTerm(
             func=mdp.motion_anchor_pos_z, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
+        ) #51-52
 
-        motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
+        motion_anchor_ori_b = ObsTerm(
+            func=mdp.motion_anchor_ori_b, params={"command_name": "motion"}
+        ) # in assigned robot/motion root frame; in waist_yaw_link frame
 
-        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        projected_gravity = ObsTerm(
+            func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05)
+        ) # root frame in isaaclab (base_link for roban); in waist_yaw_link frame
         # base_lin_vel = ObsTerm(func=mdp.base_lin_vel) # not observable
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        base_ang_vel = ObsTerm(
+            func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2)
+        ) # root frame in isaaclab (base_link for roban); in waist_yaw_link frame
+
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
         actions = ObsTerm(func=mdp.last_action)
@@ -238,7 +245,8 @@ class EventCfg:
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
-
+    # TODO shall we enlarge the weight of anchor global tracking error
+    # to get better global tracking performance?
     motion_global_anchor_pos = RewTerm(
         func=mdp.motion_global_anchor_position_error_exp,
         weight=0.5,
