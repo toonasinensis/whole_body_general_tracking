@@ -35217,7 +35217,6 @@
 230103/step_in_shit_R_001__A101_M.npz
 230103/step_in_shit_R_002__A097.npz
 230103/step_in_shit_R_002__A097_M.npz
-230103/step_in_shit_R_002__A098.npz
 230103/step_in_shit_R_002__A098_M.npz
 230103/step_in_shit_R_002__A099.npz
 230103/step_in_shit_R_002__A099_M.npz
@@ -35644,7 +35643,6 @@
 230104/inj_right_leg_jump_ff_180_R_002__A105.npz
 230104/inj_right_leg_jump_ff_180_R_002__A105_M.npz
 230104/inj_right_leg_jump_ff_180_R_max_001__A102.npz
-230104/inj_right_leg_jump_ff_180_R_max_001__A102_M.npz
 230104/inj_right_leg_jump_ff_180_R_max_001__A103.npz
 230104/inj_right_leg_jump_ff_180_R_max_001__A103_M.npz
 230104/inj_right_leg_jump_ff_180_R_max_002__A102.npz
@@ -37151,7 +37149,6 @@
 230112/lamenting_003__A438_M.npz
 230112/lasso_catch_pulling_R_002__A116.npz
 230112/lasso_catch_pulling_R_002__A116_M.npz
-230112/lasso_catch_pulling_R_002__A117.npz
 230112/lasso_catch_pulling_R_002__A117_M.npz
 230112/lasso_catch_pulling_R_002__A118.npz
 230112/lasso_catch_pulling_R_002__A118_M.npz
@@ -90636,7 +90633,6 @@
 230425/jump_to_see_001__A352.npz
 230425/jump_to_see_001__A352_M.npz
 230425/jump_to_see_001__A353.npz
-230425/jump_to_see_001__A353_M.npz
 230425/jump_to_see_001__A354.npz
 230425/jump_to_see_001__A354_M.npz
 230425/jump_to_see_002__A350.npz
@@ -97305,14 +97301,6 @@
 230713/courtly_bow_male_R_002__A431_M.npz
 230713/courtly_bow_male_R_002__A432.npz
 230713/courtly_bow_male_R_002__A432_M.npz
-230713/crossed_legs_R_001__A429.npz
-230713/crossed_legs_R_001__A429_M.npz
-230713/crossed_legs_R_001__A430.npz
-230713/crossed_legs_R_001__A430_M.npz
-230713/crossed_legs_R_001__A431.npz
-230713/crossed_legs_R_001__A431_M.npz
-230713/crossed_legs_R_001__A432.npz
-230713/crossed_legs_R_001__A432_M.npz
 230713/curtsy_R_001__A428.npz
 230713/curtsy_R_001__A428_M.npz
 230713/curtsy_R_001__A429.npz
@@ -104262,8 +104250,6 @@
 231024/jog_in_place_increasing_speed_back_up_squat_R_001__A495_M.npz
 231024/jump_around_001__A493.npz
 231024/jump_around_001__A493_M.npz
-231024/kick_back_001__A494.npz
-231024/kick_back_001__A494_M.npz
 231024/lunch_break_001__A492.npz
 231024/lunch_break_001__A492_M.npz
 231024/lunch_break_001__A493.npz
@@ -126720,8 +126706,6 @@
 230713/balled_up_R_001__A431_M.npz
 230713/crossed_legs_R_001__A428.npz
 230713/crossed_legs_R_001__A428_M.npz
-230713/dozing_cross_legged_R_001__A428.npz
-230713/dozing_cross_legged_R_001__A428_M.npz
 230713/dozing_cross_legged_R_001__A430.npz
 230713/dozing_cross_legged_R_001__A430_M.npz
 230713/fetal_position_R_001__A428.npz
@@ -126827,7 +126811,6 @@
 230713/reach_jump_R_001__A431.npz
 230713/reach_jump_R_001__A431_M.npz
 230713/rest_R_001__A428.npz
-230713/rest_R_001__A428_M.npz
 230713/rest_R_001__A430.npz
 230713/rest_R_001__A430_M.npz
 230713/spread_out_R_001__A429.npz

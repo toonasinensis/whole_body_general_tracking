@@ -577,7 +577,7 @@ class MotionCommand(CommandTerm):
             self.bin_failed_count.max() * self.bin_count / (self.bin_failed_count.sum() + 1e-8)
         )
         clipped_bin_failed_count = torch.clamp(
-            self.bin_failed_count, max=self.cfg.failure_cap_beta * self.bin_failed_count.mean()
+            self.bin_failed_count, max=self.cfg.failure_most_hard_cap_beta * self.bin_failed_count.mean()
         )
         sampling_probabilities = torch.nn.functional.pad(
             clipped_bin_failed_count.unsqueeze(0).unsqueeze(0),
@@ -585,13 +585,27 @@ class MotionCommand(CommandTerm):
             mode="replicate",
         )
         sampling_probabilities = torch.nn.functional.conv1d(sampling_probabilities, self.kernel.view(1, 1, -1)).view(-1)
-        sampling_probabilities = sampling_probabilities / (sampling_probabilities.sum() + 1e-8)
-        sampling_probabilities = torch.clamp(
+        sampling_probabilities = sampling_probabilities / (sampling_probabilities.sum() + 1e-12)
+
+        sampling_probabilities_middle_hard = torch.clamp(
             sampling_probabilities, max=self.cfg.failure_cap_beta * sampling_probabilities.mean()
         )
-        sampling_probabilities = (1 - self.cfg.adaptive_uniform_ratio) * sampling_probabilities + (
-            self.cfg.adaptive_uniform_ratio
-        ) / float(self.bin_count)
+        sampling_probabilities_middle_hard = sampling_probabilities_middle_hard / (
+            sampling_probabilities_middle_hard.sum() + 1e-12
+        )
+
+        sampling_probabilities_most_hard = torch.clamp(
+            sampling_probabilities, max=self.cfg.failure_most_hard_cap_beta * sampling_probabilities.mean()
+        )
+        sampling_probabilities_most_hard = sampling_probabilities_most_hard / (
+            sampling_probabilities_most_hard.sum() + 1e-12
+        )
+
+        sampling_probabilities = self.cfg.motion_ratio[0] * (1 / float(self.bin_count)) + (
+            self.cfg.motion_ratio[1] * sampling_probabilities_middle_hard
+            + self.cfg.motion_ratio[2] * sampling_probabilities_most_hard
+        )
+
         return sampling_probabilities
 
     def _get_bin_global_frame_range(self, bin_index: int) -> tuple[int, int]:
@@ -777,7 +791,7 @@ class MotionCommand(CommandTerm):
         self.metrics["sampling_top1_prob_mean"][:] = sampling_probabilities.mean()
         self.metrics["sampling_top1_prob_min"][:] = sampling_probabilities.min()
         self.metrics["num_concentrate_bins"][:] = (
-            sampling_probabilities > 150 * (sampling_probabilities.mean())
+            sampling_probabilities > self.cfg.failure_most_hard_cap_beta * 0.5 * (sampling_probabilities.mean())
         ).sum()  # 计算超过平均值10倍的数目
 
     def _resample_command(self, env_ids: Sequence[int]):
@@ -838,7 +852,7 @@ class MotionCommand(CommandTerm):
         """
         self.command_step_count += 1
         self.local_time_steps += 1
-        env_ids = torch.where(self.local_time_steps >= self.frame_end_per_env)[0]
+        env_ids = torch.where(self.local_time_steps >= self.frame_end_per_env - self.cfg.max_future_step)[0]  # 防止溢出
         if self.cfg.resample_interval != -1:  # change the reference motion every resample_interval control steps
             self.resample_time += 1
             if self.resample_time >= self.cfg.resample_interval:
@@ -1027,20 +1041,22 @@ class MotionCommandCfg(CommandTermCfg):
     pose_range: dict[str, tuple[float, float]] = {}
     velocity_range: dict[str, tuple[float, float]] = {}
 
-    future_step_num = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
+    future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    max_future_step = max(future_step_num)
     joint_position_range: tuple[float, float] = (-0.52, 0.52)
 
     adaptive_kernel_size: int = 3
     adaptive_lambda: float = 0.8
-    adaptive_uniform_ratio: float = 0.1
+    motion_ratio = [0.2, 0.79, 0.01]  # 预留参数，暂时不使用 # 越来越难
+    adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
 
     failure_cap: bool = True
     failure_cap_beta: float = 200.0
+    failure_most_hard_cap_beta: float = 5000.0
 
     # 每隔多少步导出一次 adaptive bins 概率和 bin->motion 反查映射，-1 表示不保存
-    fail_count_save_interval: int = 1000 * 24
+    fail_count_save_interval: int = 500 * 24
     save_adaptive_bins: bool = True
     adaptive_bins_file_prefix: str = "adaptive_bins"
 

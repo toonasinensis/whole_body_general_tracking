@@ -188,6 +188,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # agent stepping
             actions = policy(obs)
             # env stepping
+            if isinstance(actions, dict) and "actions" in actions:
+                actions = actions["actions"]
             obs, _, _, _ = env.step(actions)
 
         timestep += 1

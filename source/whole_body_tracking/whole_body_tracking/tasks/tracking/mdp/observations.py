@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 
-from isaaclab.utils.math import matrix_from_quat, subtract_frame_transforms
+from isaaclab.utils.math import matrix_from_quat, quat_inv, quat_mul, subtract_frame_transforms
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
 
@@ -126,3 +126,25 @@ def motion_anchor_project_gravity(env: ManagerBasedEnv, command_name: str) -> to
 def motion_anchor_pos_z(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     return command.anchor_pos_z
+
+
+def motion_joint_pos_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.joint_pos_future.view(env.num_envs, -1)
+
+
+def motion_joint_vel_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.joint_vel_future.view(env.num_envs, -1)
+
+
+def motion_anchor_ori_b_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    ref_root_quat = command.anchor_quat_w_future
+    root_rot_dif = quat_mul(
+        quat_inv(command.robot_anchor_quat_w.view(env.num_envs, 1, 4).repeat(1, command.num_future_frames, 1)),
+        ref_root_quat.view(env.num_envs, command.num_future_frames, 4),
+    )
+    mat = matrix_from_quat(root_rot_dif)
+    root_rot_dif_l_mat = mat[..., :2].reshape(mat.shape[0], -1)
+    return root_rot_dif_l_mat
