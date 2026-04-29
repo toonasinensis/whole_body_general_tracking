@@ -382,7 +382,7 @@ def main(env_cfg, agent_cfg):
         env_cfg.scene.env_spacing = args_cli.env_spacing
         print(f"[INFO] Using env spacing: {args_cli.env_spacing}")
     env_cfg.episode_length_s = 9999
-    for term in ["ee_body_pos", "anchor_ori", "anchor_pos"]:
+    for term in ["ee_body_pos", "anchor_ori", "anchor_pos", "anchor_lin_vel"]:
         if hasattr(env_cfg.terminations, term):
             setattr(env_cfg.terminations, term, None)
 

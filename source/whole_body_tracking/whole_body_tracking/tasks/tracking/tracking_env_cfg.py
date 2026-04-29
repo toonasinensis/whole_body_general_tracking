@@ -51,6 +51,7 @@ class MySceneCfg(InteractiveSceneCfg):
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
+            restitution=1.0, #NOTE added after
             static_friction=1.0,
             dynamic_friction=1.0,
         ),
@@ -108,7 +109,7 @@ class CommandsCfg:
         debug_vis=True,
         max_motion_num=999999,
         motion_file=None,
-        pose_range={
+        pose_range={ # NOTE diff
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
             "z": (0.05, 0.1),
@@ -117,7 +118,7 @@ class CommandsCfg:
             "yaw": (-0.0, 0.0),
         },
         velocity_range=VELOCITY_RANGE,
-        joint_position_range=(-0.0, 0.0),
+        joint_position_range=(-0.0, 0.0), #NOTE diff
     )
 
 
@@ -125,7 +126,11 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=[".*"], use_default_offset=True)
+    joint_pos = mdp.JointPositionActionCfg(
+        asset_name="robot", 
+        joint_names=[".*"],  # NOTE diff but no affects
+        use_default_offset=True
+    )
 
 
 @configclass

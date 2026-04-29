@@ -56,7 +56,9 @@ RobanS22_CYLINDER_CFG = ArticulationCfg(
             max_depenetration_velocity=1.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=4
+            enabled_self_collisions=True, 
+            solver_position_iteration_count=8, 
+            solver_velocity_iteration_count=4
         ),
         joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
             gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
@@ -79,6 +81,7 @@ RobanS22_CYLINDER_CFG = ArticulationCfg(
             "leg_r4_joint": 0.0,
             "leg_r5_joint": 0.0,
             "leg_r6_joint": 0.0,
+
             "zarm_l1_joint": 0.0,
             "zarm_l2_joint": 0.0,
             "zarm_l3_joint": 0.0,
@@ -98,18 +101,18 @@ RobanS22_CYLINDER_CFG = ArticulationCfg(
                 "leg_.*",
                 "zarm_.*",
             ],
-            effort_limit_sim={
-                "waist_yaw_joint": 80.0,
-                "leg_[l,r]1_joint": 150.0,
-                "leg_[l,r]2_joint": 150.0,
-                "leg_[l,r]3_joint": 70.0,
+            effort_limit_sim={ #NOTE different from balei_002
+                "waist_yaw_joint": 80.0,   #64.0
+                "leg_[l,r]1_joint": 150.0, #120.0
+                "leg_[l,r]2_joint": 150.0, #120.0
+                "leg_[l,r]3_joint": 70.0,  #56.0
                 "leg_[l,r]4_joint": 150.0,
-                "leg_[l,r]5_joint": 74.0,
-                "leg_[l,r]6_joint": 74.0,
-                "zarm_[l,r]1_joint": 14.1,
-                "zarm_[l,r]2_joint": 37.0,
-                "zarm_[l,r]3_joint": 37.0,
-                "zarm_[l,r]4_joint": 37.0,
+                "leg_[l,r]5_joint": 74.0,  #70.2
+                "leg_[l,r]6_joint": 74.0,  #70.2
+                "zarm_[l,r]1_joint": 14.1, #11.28
+                "zarm_[l,r]2_joint": 37.0, #29.6
+                "zarm_[l,r]3_joint": 37.0, #29.6
+                "zarm_[l,r]4_joint": 37.0, #29.6
             },
             effort_limit_rated={
                 "waist_yaw_joint": 35.0,
@@ -138,10 +141,10 @@ RobanS22_CYLINDER_CFG = ArticulationCfg(
                 "zarm_[l,r]4_joint": 15.0,
             },
             stiffness={
-                "waist_yaw_joint": 40.1792,
+                "waist_yaw_joint": 40.1792,   # 60.1792
                 "leg_[l,r]1_joint": 90.1792,
-                "leg_[l,r]2_joint": 150.0984,
-                "leg_[l,r]3_joint": 40.1792,
+                "leg_[l,r]2_joint": 150.0984, #120.0984
+                "leg_[l,r]3_joint": 40.1792,  #60.1792 
                 "leg_[l,r]4_joint": 150.0984,
                 "leg_[l,r]5_joint": 34.2506,
                 "leg_[l,r]6_joint": 34.2506,
@@ -200,6 +203,35 @@ RobanS22_CYLINDER_CFG = ArticulationCfg(
 
 
 # # Compute the action scale for joints of roban_s22 robot
+# NOTE mimic uses the 
+# PRESERVE_JOINT_ORDER_ASSET_CFG = SceneEntityCfg(
+#     "robot",
+#     joint_names=[
+#         "waist_yaw_joint",
+#         "leg_l1_joint",
+#         "leg_l2_joint",
+#         "leg_l3_joint",
+#         "leg_l4_joint",
+#         "leg_l5_joint",
+#         "leg_l6_joint",
+#         "leg_r1_joint",
+#         "leg_r2_joint",
+#         "leg_r3_joint",
+#         "leg_r4_joint",
+#         "leg_r5_joint",
+#         "leg_r6_joint",
+#         "zarm_l1_joint",
+#         "zarm_l2_joint",
+#         "zarm_l3_joint",
+#         "zarm_l4_joint",
+#         "zarm_r1_joint",
+#         "zarm_r2_joint",
+#         "zarm_r3_joint",
+#         "zarm_r4_joint",
+#     ],
+#     preserve_order=True
+# )
+
 # RobanS22_ACTION_SCALE = {}
 # for a in RobanS22_CYLINDER_CFG.actuators.values():
 #     e_cfg = a.effort_limit_sim

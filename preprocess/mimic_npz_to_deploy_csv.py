@@ -192,19 +192,115 @@ def convert_file(
     write_deploy_csv(csv_path, rows)
 
 
+def _iter_motion_list(list_path: Path) -> list[str]:
+    """
+    Read a motion list text file.
+
+    Each non-empty line is treated as a path (relative or absolute). Lines starting
+    with '#' are ignored. Inline comments are supported via ' # ...'.
+    """
+    items: list[str] = []
+    for raw in list_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if " #" in line:
+            line = line.split(" #", 1)[0].rstrip()
+        if line:
+            items.append(line)
+    return items
+
+
+def _resolve_npz_path(motions_dir: Path, item: str) -> tuple[Path, Path]:
+    """
+    Resolve an item from the motion list into:
+    - absolute npz path
+    - relative path to motions_dir (used to mirror folder structure)
+    """
+    p = Path(item)
+    npz = p if p.is_absolute() else motions_dir / p
+    if npz.suffix != ".npz":
+        npz = npz.with_suffix(".npz")
+    rel = npz.resolve().relative_to(motions_dir.resolve())
+    return npz, rel
+
+
+def batch_convert(
+    motions_dir: Path,
+    motion_list_path: Path,
+    deploy_root: Path,
+    anchor_body_index: int,
+    layout: str,
+    *,
+    strict: bool,
+    dry_run: bool,
+) -> tuple[int, int]:
+    """
+    Convert many motions listed in a text file.
+
+    Output CSVs are written under deploy_root, mirroring the relative folder
+    structure from motions_dir.
+    """
+    motions_dir = motions_dir.resolve()
+    deploy_root = deploy_root.resolve()
+    motion_list_path = motion_list_path.resolve()
+
+    items = _iter_motion_list(motion_list_path)
+    ok = 0
+    fail = 0
+
+    for item in items:
+        try:
+            npz_path, rel = _resolve_npz_path(motions_dir, item)
+            if not npz_path.exists():
+                raise FileNotFoundError(f"Missing npz: {npz_path}")
+            csv_path = (deploy_root / rel).with_suffix(".csv")
+            if not dry_run:
+                convert_file(npz_path, csv_path, anchor_body_index, layout)
+            ok += 1
+        except Exception as e:  # noqa: BLE001 - CLI batch tool: surface per-file errors
+            fail += 1
+            msg = f"[FAIL] {item}: {e}"
+            if strict:
+                raise RuntimeError(msg) from e
+            print(msg)
+
+    return ok, fail
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert Roban mimic NPZ to deploy tab-CSV.")
     parser.add_argument(
         "--input",
         type=Path,
         default=_REPO_ROOT / "data/roban_motions/210531/jump_and_land_heavy_001__A001_M.npz",
-        help="Input .npz file.",
+        help="(Single-file mode) Input .npz file.",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=_REPO_ROOT / "data/roban_deploy_motions/jump_and_land_heavy_001__A001_M.csv",
-        help="Output .csv path.",
+        help="(Single-file mode) Output .csv path.",
+    )
+    parser.add_argument(
+        "--motions-dir",
+        type=Path,
+        default=None,
+        help="(Batch mode) Root folder containing motions (.npz). If set, batch mode is enabled.",
+    )
+    parser.add_argument(
+        "--motion-list",
+        type=Path,
+        default=None,
+        help="(Batch mode) Text file listing motions to convert (one per line). "
+        "Paths may be relative to --motions-dir or absolute; '.npz' suffix is optional.",
+    )
+    parser.add_argument(
+        "--deploy-root",
+        type=Path,
+        default=None,
+        help="(Batch mode) Output root folder for deploy CSVs. The script mirrors the "
+        "same relative subfolder structure from --motions-dir under this directory.",
     )
     parser.add_argument(
         "--npz-joint-layout",
@@ -219,7 +315,35 @@ def main() -> None:
         default=0,
         help="Index into body_pos_w / body_quat_w for root pose written to the CSV (default 0 = first body).",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="(Batch mode) Stop immediately on the first failure.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="(Batch mode) Don't write files; just validate paths and NPZ readability.",
+    )
     args = parser.parse_args()
+
+    if args.motions_dir is not None or args.motion_list is not None or args.deploy_root is not None:
+        if args.motions_dir is None or args.motion_list is None or args.deploy_root is None:
+            raise SystemExit("Batch mode requires: --motions-dir, --motion-list, --deploy-root")
+        motions_dir = args.motions_dir if args.motions_dir.is_absolute() else _REPO_ROOT / args.motions_dir
+        motion_list = args.motion_list if args.motion_list.is_absolute() else _REPO_ROOT / args.motion_list
+        deploy_root = args.deploy_root if args.deploy_root.is_absolute() else _REPO_ROOT / args.deploy_root
+        ok, fail = batch_convert(
+            motions_dir,
+            motion_list,
+            deploy_root,
+            args.anchor_body_index,
+            args.npz_joint_layout,
+            strict=bool(args.strict),
+            dry_run=bool(args.dry_run),
+        )
+        print(f"Done. ok={ok} fail={fail} deploy_root={deploy_root}")
+        return
 
     inp = args.input if args.input.is_absolute() else _REPO_ROOT / args.input
     out = args.output if args.output.is_absolute() else _REPO_ROOT / args.output

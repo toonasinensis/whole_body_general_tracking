@@ -241,6 +241,10 @@ class TerminationsCfg:
             ],
         },
     )
+    # anchor_lin_vel = DoneTerm(
+    #     func=mdp.bad_anchor_lin_vel,
+    #     params={"command_name": "motion", "threshold": 1.0},
+    # )
 
 
 @configclass

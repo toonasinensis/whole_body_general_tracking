@@ -38,6 +38,20 @@ def bad_anchor_ori(
     return (motion_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2]).abs() > threshold
 
 
+def bad_anchor_lin_vel(
+    env: ManagerBasedRLEnv, command_name: str, threshold: float
+) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    # Compare in the reference motion's heading frame (yaw-only frame).
+    # This keeps z vertical, and aligns x/y with the motion's projected x-axis on the horizontal plane.
+    motion_heading_quat_w = math_utils.yaw_quat(command.anchor_quat_w)
+    robot_heading_quat_w = math_utils.yaw_quat(command.robot_anchor_quat_w)
+    motion_lin_vel_h = math_utils.quat_apply_inverse(motion_heading_quat_w, command.anchor_lin_vel_w)
+    robot_lin_vel_h = math_utils.quat_apply_inverse(robot_heading_quat_w, command.robot_anchor_lin_vel_w)
+    # Compare only horizontal components (x,y) in the heading frame.
+    return torch.norm(motion_lin_vel_h[:, :2] - robot_lin_vel_h[:, :2], dim=1) > threshold
+
+
 def bad_motion_body_pos(
     env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
 ) -> torch.Tensor:

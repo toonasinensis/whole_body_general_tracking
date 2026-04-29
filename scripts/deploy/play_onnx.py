@@ -86,7 +86,7 @@ def main(env_cfg, agent_cfg):
     env_cfg.episode_length_s = 9999
 
     # Disable problematic terminations for long play
-    for term in ["ee_body_pos", "anchor_ori", "anchor_pos"]:
+    for term in ["ee_body_pos", "anchor_ori", "anchor_pos", "anchor_lin_vel"]:
         if hasattr(env_cfg.terminations, term):
             setattr(env_cfg.terminations, term, None)
 

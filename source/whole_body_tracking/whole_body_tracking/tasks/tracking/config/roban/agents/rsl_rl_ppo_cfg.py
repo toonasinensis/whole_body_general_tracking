@@ -24,7 +24,7 @@ class CriticCfg:
 class RobanS22FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000000000000000
-    save_interval = 100
+    save_interval = 500
     experiment_name = "roban_flat"
     empirical_normalization = True
 

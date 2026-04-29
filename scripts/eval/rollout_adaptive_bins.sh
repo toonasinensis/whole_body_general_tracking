@@ -9,12 +9,12 @@ cd "${REPO_ROOT}"
 
 TASK="${TASK:-Tracking-Flat-RobanS22-v0}"
 # Set to your checkpoint (relative to repo root or absolute).
-RESUME_PATH="${RESUME_PATH:-logs/rsl_rl/roban_flat/2026-04-17_21-27-35/model_25600.pt}"
+RESUME_PATH="${RESUME_PATH:-logs/rsl_rl/roban_flat/0422_all_kept/model_79000.pt}"
 MOTION_FILE="${MOTION_FILE:-data/roban_motions}"
 # Optional: same as train.py --motion_file_txt (unset = rglob all .npz under MOTION_FILE).
 # Example: export MOTION_FILE_TXT=data/roban_motions_list/quick_test.txt
-MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/motions_main_kept_500.txt}"
-MAX_MOTION_NUM="${MAX_MOTION_NUM:-5000}"
+MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/adaptive_motions.txt}"
+MAX_MOTION_NUM="${MAX_MOTION_NUM:-16000}"
 STEPS="${STEPS:-8000}"
 WARMUP_STEPS="${WARMUP_STEPS:-500}"
 OUT="${OUT:-data/eval_results/adaptive_bins_run.json}"

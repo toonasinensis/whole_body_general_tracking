@@ -63,5 +63,5 @@ python -m torch.distributed.run \
   --log_project_name=roban_flat \
   --max_motion_num="${MAX_MOTION_NUM}" \
   --distributed \
-  #  --resume=true \
-  #  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"
+  --resume=true \
+  --resume_path="logs/rsl_rl/roban_flat/2026-04-28_19-09-04_quick_test/model_3000.pt"

@@ -82,8 +82,11 @@ class MotionLoader:
                 relative_paths = [line.strip() for line in f if line.strip()]
                 # import ipdb;ipdb.set_trace()
             npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
-            random.seed(42)  # 方便对比试验
-            random.shuffle(npz_files)
+            # NOTE: When evaluating with fixed env->motion assignment we must preserve the
+            # dataset_txt order; otherwise evaluation results cannot be aligned reliably.
+            if not (bool(getattr(self.cfg, "eval_mode", False)) and bool(getattr(self.cfg, "fixed_eval_motion_ids", False))):
+                random.seed(42)  # 方便对比试验
+                random.shuffle(npz_files)
         else:
             dir_path = Path(dir_path)
             npz_files = list(dir_path.rglob("*.npz"))
@@ -878,8 +881,7 @@ class MotionCommand(CommandTerm):
             torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
             env_ids=env_ids,
         )
-        # TODO: 切换动作文件时是否需要清空历史Observation
-        # According to my test the 10*0.02=0.2 seconds' obs mismatch does NOT affect the performance of trained model
+        # NOTE: 切换动作文件时是否需要清空历史Observation
 
     def _update_command(self):
         """
@@ -888,6 +890,7 @@ class MotionCommand(CommandTerm):
         self.command_step_count += 1
         self.local_time_steps += 1
         env_ids = torch.where(self.local_time_steps >= self.frame_end_per_env)[0]
+        # self.local_time_steps[env_ids] = self.frame_end_per_env[env_ids] -1 
         # Count completed cycles only on real end-of-clip events during stepping.
         if bool(getattr(self.cfg, "fixed_eval_motion_ids", False)) and bool(getattr(self.cfg, "eval_mode", False)):
             if len(env_ids) > 0:

@@ -70,7 +70,8 @@ class DelayedPDActuator_RobanS22(DelayedPDActuator):
             self.stiffness * error_pos
             + self.damping * error_vel
             + control_action.joint_efforts
-            - (self.friction_static * torch.tanh(joint_vel / self.activation_vel) + self.friction_dynamic * joint_vel)
+            - (self.friction_static * torch.tanh(joint_vel / self.activation_vel) 
+            + self.friction_dynamic * joint_vel)
         )
 
         # clip the torques based on the motor limits
