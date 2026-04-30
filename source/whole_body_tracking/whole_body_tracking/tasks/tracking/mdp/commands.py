@@ -1041,19 +1041,21 @@ class MotionCommandCfg(CommandTermCfg):
     pose_range: dict[str, tuple[float, float]] = {}
     velocity_range: dict[str, tuple[float, float]] = {}
 
-    future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    # future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    future_step_num = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
     max_future_step = max(future_step_num)
     joint_position_range: tuple[float, float] = (-0.52, 0.52)
 
     adaptive_kernel_size: int = 3
     adaptive_lambda: float = 0.8
-    motion_ratio = [0.2, 0.79, 0.01]  # 预留参数，暂时不使用 # 越来越难
+    motion_ratio = [0.2, 0.6, 0.2]  # 预留参数，暂时不使用 # 越来越难
     adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
 
     failure_cap: bool = True
     failure_cap_beta: float = 200.0
-    failure_most_hard_cap_beta: float = 5000.0
+    failure_most_hard_cap_beta: float = 10000.0
 
     # 每隔多少步导出一次 adaptive bins 概率和 bin->motion 反查映射，-1 表示不保存
     fail_count_save_interval: int = 500 * 24

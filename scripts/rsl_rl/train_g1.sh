@@ -11,7 +11,7 @@ set -euo pipefail
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
 NPROC_PER_NODE=1
-NUM_ENVS="${NUM_ENVS:-4000}"
+NUM_ENVS="${NUM_ENVS:-16000}"
 
 python -m torch.distributed.run \
   --nnodes=1 \
@@ -23,6 +23,6 @@ python -m torch.distributed.run \
   --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file="/home/thl/Documents/g1-mimic-npz" \
-  --dataset_txt="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/mini_test.txt"  \
+  --dataset_txt="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/lafan.txt"  \
 #  --resume=true \
 #  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_18500.pt"
