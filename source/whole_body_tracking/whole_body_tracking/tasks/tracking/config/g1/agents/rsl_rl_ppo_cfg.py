@@ -53,6 +53,20 @@ class ActorShellCfg:
                 "hidden_dims": [2048, 1024, 512, 512],  # ecoder MLP 隐层
                 "activation": "swish",
             },
+            "encoder_smpl": {
+                "encoder_groups": ["smpl_cmd_mf"],  # 输入的 encoder_groups
+                "hidden_dims": [2048, 1024, 512, 512],  # ecoder MLP 隐层
+                "activation": "swish",
+            },
+        },
+        "loss": {
+            "token": 1.0,  # token loss 权重: MSE(encoder(token), token_target) * weight，0.0 = 关闭
+            "re_encode": (
+                1.0
+            ),  # 循环 loss 权重: MSE(encoder(smpl_recon.detach()), encoder(token).detach()) * weight，0.0 = 关闭
+            "recon": (
+                0.010
+            ),  # 重建 loss 权重: MSE(encoder(smpl_recon.detach()), encoder(token).detach()) * weight，0.0 = 关闭
         },
         "fsq": {"num_fsq_levels": 32, "fsq_level_list": 32, "max_num_tokens": 2},
         "latent_dim": 128,  # = num_fsq_levels(32) × max_num_tokens(2)
@@ -70,16 +84,13 @@ class ActorShellCfg:
             },
             "g1_kin_decoder": {  # g1_kin_decoder 负责重建 rbt_cmd_mf
                 "decoder_groups": [],  # decoder 输入中哪些是 passthrough 的原始 obs（默认为 []，即全 latent 输入）
-                "hidden_dims": [2048, 1024, 512, 512],  # decoder MLP 隐层
+                "hidden_dims": [4096, 2048, 1024, 512, 256],  # decoder MLP 隐层
                 "activation": "swish",
                 "detach_latent": False,  # False = recon loss 梯度穿过 FSQ STE 回传 encoder
                 "outputs": [
                     "rbt_cmd_mf"
                 ],  # True = decoder 输出 action，False = decoder 只做辅助任务（如重建），actor output 直接来自 latent
-                "recon_weight": 0.010,  # 重建 loss 权重: MSE(decoder(z), rbt_cmd_mf) * recon_weight
-                "reecode_loss_weight": (
-                    1.0
-                ),  # 循环 loss 权重: MSE(encoder_g1(recon.detach()), z_g1.detach()) * weight，0.0 = 关闭
+                # 循环 loss 权重: MSE(encoder_g1(recon.detach()), z_g1.detach()) * weight，0.0 = 关闭
             },
         },
         "activation": "swish",
@@ -150,6 +161,6 @@ class G1FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     critic = CriticCfg()
 
     obs_groups = {
-        "actor": ["prop", "rbt_cmd_mf"],
+        "actor": ["prop", "rbt_cmd_mf", "smpl_cmd_mf"],
         "critic": ["critic"],
     }

@@ -148,3 +148,15 @@ def motion_anchor_ori_b_mf(env: ManagerBasedEnv, command_name: str) -> torch.Ten
     mat = matrix_from_quat(root_rot_dif)
     root_rot_dif_l_mat = mat[..., :2].reshape(mat.shape[0], -1)
     return root_rot_dif_l_mat
+
+
+def smpl_joints_local_multi_future(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    future_local = command.smpl_joints_local_multi_future.view(env.num_envs, -1)
+    return future_local
+
+
+def smpl_root_quat_w_dif_l_multi_future(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    future_local = command.smpl_root_quat_w_dif_l_multi_future.view(env.num_envs, -1)
+    return future_local

@@ -29,6 +29,7 @@ parser.add_argument("--registry_name", type=str, required=True, help="The name o
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
 parser.add_argument("--dataset_txt", type=str, default=None, help="Path to the motion dataset_txt.")
+parser.add_argument("--smpl_file_path", type=str, default=None, help="Path to the SMPL file.")
 
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
@@ -128,6 +129,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "[INFO]: Overriding motion file filter in the environment config with:"
             f" {env_cfg.commands.motion.dataset_txt}"
         )
+    if args_cli.smpl_file_path is not None:
+        print(f"[INFO]: Using SMPL file from CLI: {args_cli.smpl_file_path}")
+        env_cfg.commands.motion.smpl_file_path = args_cli.smpl_file_path
+        print(f"[INFO]: Overriding SMPL file in the environment config with: {env_cfg.commands.motion.smpl_file_path}")
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)

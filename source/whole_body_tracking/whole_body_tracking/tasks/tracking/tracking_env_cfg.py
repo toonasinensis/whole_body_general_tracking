@@ -200,6 +200,23 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     @configclass
+    class SmplCmdMfCfg(ObsGroup):
+        smpl_joints_local_multi_future = ObsTerm(
+            func=mdp.smpl_joints_local_multi_future,
+            params={"command_name": "motion"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+        smpl_root_quat_w_dif_l_multi_future = ObsTerm(
+            func=mdp.smpl_root_quat_w_dif_l_multi_future,
+            params={"command_name": "motion"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
     class PrivilegedCfg(ObsGroup):
         command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
         motion_anchor_pos_b = ObsTerm(func=mdp.motion_anchor_pos_b, params={"command_name": "motion"})
@@ -216,6 +233,7 @@ class ObservationsCfg:
     # policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
     rbt_cmd_mf: RbtCmdMfCfg = RbtCmdMfCfg()
+    smpl_cmd_mf: SmplCmdMfCfg = SmplCmdMfCfg()
     prop: PropCfg = PropCfg()
 
 

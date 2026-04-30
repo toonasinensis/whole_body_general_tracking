@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-import datetime
 import json
 import math
-import numpy as np
-import os
-
-# from whole_body_parkour.data import DATA_ASSET_DIR
-import random
 import torch
 from collections.abc import Sequence
 from dataclasses import MISSING
 from pathlib import Path
-from tqdm import tqdm
 from typing import TYPE_CHECKING
+
+from smpl_math_utils import angle_axis_to_quaternion as _smpl_aa_to_quat
+from smpl_math_utils import quaternion_to_rotation_matrix as _smpl_quat_to_mat
+from smpl_motion_lib import UnifiedMotionLib
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
@@ -42,226 +39,6 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-class MotionLoader:
-    def __init__(
-        self,
-        cfg: MotionCommandCfg,
-        body_indexes: Sequence[int] = [0],
-        motion_anchor_body_index: int = 0,
-        device: str = "cpu",
-    ):
-        self.device = device
-        self.cfg = cfg
-        self.body_indexes = body_indexes
-        self.motion_anchor_body_index = motion_anchor_body_index
-        self.motion_num = None
-        self.json_path = None
-        self.death_path = None
-        self.first_init = False
-
-        self.joint_pos = None
-        self.joint_vel = None
-        self._body_pos_w_sel = None
-        self._body_quat_w_sel = None
-        self._body_lin_vel_w_sel = None
-        self._body_ang_vel_w_sel = None
-
-        self.time_step_total = None  # self.joint_pos.shape[0]
-        self.file_names = None
-        self.time_step_end_idx = None
-        self.frame_list = None  # 确保在同一 device
-        self.time_step_start_idx = None
-        self.motion_num = None
-        if self.cfg.eval_mode:
-            self.sample_counter = 0
-
-    def _find_npz_files(self, dir_path: Path, motion_num: int, dataset_txt=None):
-        """随机选择一个子文件夹（若存在），返回其中所有 .npz 文件路径"""
-        if dataset_txt is not None:
-            with open(dataset_txt) as f:
-                relative_paths = [line.strip() for line in f if line.strip()]
-                # import ipdb;ipdb.set_trace()
-            npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
-            random.seed(42)  # 方便对比试验
-            random.shuffle(npz_files)
-        else:
-            dir_path = Path(dir_path)
-            npz_files = list(dir_path.rglob("*.npz"))
-            if not npz_files:
-                raise FileNotFoundError(f"No .npz files found in {dir_path}")
-            """从 npz 文件中均匀随机采样 motion_num 个"""
-            npz_files.sort()
-
-        if len(npz_files) > motion_num and motion_num != -1:  # 动作文件需要采样（内存不够）或者人为指定把所有数据拿出来
-            if self.cfg.eval_mode:
-                start_idx = self.sample_counter * motion_num  # % len(npz_files)
-                start_idx = min(start_idx, len(npz_files) - 1)  # 防止越界
-                end_idx = min(start_idx + motion_num, len(npz_files) - 1)  # 防止越界
-                if start_idx > len(npz_files) or start_idx == len(npz_files) - 1:
-                    raise ValueError("Not enough npz files for eval_mode sampling. all data if eval finished.")
-                sampled_files = npz_files[start_idx:end_idx]
-                print("eval_mode process: ", (float(start_idx) / len(npz_files)))
-                print("当前本地时间:", datetime.datetime.now().strftime("%H%M"))
-                self.sample_counter += 1
-            else:
-                # 采样后保持排序顺序：先按motion号排序，再按z_scale排序
-                sampled_files = sorted(random.sample(npz_files, motion_num))
-        elif self.cfg.distributed:
-            total_motion_num = len(npz_files)
-            subset_motion_num = total_motion_num // self.cfg.total_rank
-            start_idx = subset_motion_num * self.cfg.local_rank
-            end_idx = subset_motion_num * (self.cfg.local_rank + 1)
-            print(f"第{self.cfg.local_rank}个GPU的数据集为数据{start_idx}->{end_idx}, 共{subset_motion_num}个")
-            sampled_files = npz_files[start_idx:end_idx]
-        else:
-            print(f"加载全部共{len(npz_files)}个NPZ动作数据")
-            sampled_files = npz_files
-        return sampled_files
-
-    def load_and_cat_npz_with_filenames(self, dir_path, motion_num=25, device="cpu", dataset_txt=None):
-        """
-        加载 npz 文件，并按 batch 拼接，避免一次性占用 GPU 显存。
-        batch_size: 每次拼接的帧数
-        """
-
-        batch_size = 1024
-        npz_file_paths = self._find_npz_files(dir_path, motion_num, dataset_txt)
-        rel_npz_file_names = [os.path.relpath(f, dir_path) for f in npz_file_paths]
-        tensor_keys = ["joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w"]
-        tensor_lists = {k: [] for k in tensor_keys}
-        fps_list = []
-        frames_per_file = []
-
-        # 先在 CPU 上读取数据，保持 list
-        for f_path in tqdm(npz_file_paths, desc="Processing files"):
-            try:
-                data = np.load(f_path, allow_pickle=True)
-                for k in tensor_keys:
-                    tensor = torch.from_numpy(data[k]).float()  # CPU tensor
-                    tensor_lists[k].append(tensor)
-                fps_list.append(data["fps"])
-                frames_per_file.append(data["joint_pos"].shape[0])
-            except Exception as e:
-                print(f"   路径: {f_path}")
-                print(f"   错误: {e}")
-                # 可选：跳过这个文件继续
-                continue
-
-        fps_values = [float(fps) for fps in fps_list]
-        assert len(set(fps_values)) == 1, "All fps in npz files must be the same."
-        fps = fps_values[0]
-
-        if device != "cpu":
-            print(f"[Before batch cat] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-
-        # 按 batch 拼接，逐步拷贝到 GPU（如果 device != "cpu"）
-
-        data_dict = {k: [] for k in tensor_keys}
-        for k in tensor_keys:
-            batch_tensors = []
-            for tensor in tensor_lists[k]:
-                num_frames = tensor.shape[0]
-                for start in range(0, num_frames, batch_size):
-                    end = min(start + batch_size, num_frames)
-                    batch = tensor[start:end]
-                    if device != "cpu":
-                        batch = batch.to(device)
-                    batch_tensors.append(batch)
-            # 最后将所有 batch 拼成一个 tensor
-            data_dict[k] = torch.cat(batch_tensors, dim=0)
-
-        if device != "cpu":
-            print(f"[After batch cat] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-
-        return data_dict, rel_npz_file_names, fps, frames_per_file
-
-    def resample_motionloader(self, device):
-        data_dict, file_names, fps, frame_list = self.load_and_cat_npz_with_filenames(
-            self.cfg.motion_file, self.cfg.max_motion_num, device, self.cfg.dataset_txt
-        )  # frame list是每个motion file长度的list
-        self.fps = fps
-
-        self.joint_pos = data_dict["joint_pos"]
-        self.joint_vel = data_dict["joint_vel"]
-
-        self._body_pos_w_sel = data_dict["body_pos_w"][:, self.body_indexes]
-        self._body_quat_w_sel = data_dict["body_quat_w"][:, self.body_indexes]
-        self._body_lin_vel_w_sel = data_dict["body_lin_vel_w"][:, self.body_indexes]
-        self._body_ang_vel_w_sel = data_dict["body_ang_vel_w"][:, self.body_indexes]
-        # print("Loaded motions with total frames:", sum(frame_list), frame_list)
-        if device != "cpu":
-            print(f"[data_dict] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-        print(" \n \n \n")
-
-        self.time_step_total = sum(frame_list)  # self.joint_pos.shape[0]
-        self.file_names = file_names
-        print("file nums:", "     ", len(self.file_names))
-        print("frame nums:", "     ", (self._body_pos_w_sel.shape[0]))
-
-        self.frame_list = torch.tensor(frame_list, device=device)
-        self.motion_num = len(frame_list)
-
-        self.time_step_end_idx = torch.cumsum(self.frame_list, dim=0)
-        self.time_step_start_idx = torch.cat(
-            [torch.tensor([0], device=self.frame_list.device), self.time_step_end_idx[:-1]]
-        )
-
-    @property
-    def body_pos_w(self) -> torch.Tensor:
-        return self._body_pos_w_sel  # 直接返回缓存，O(1)
-
-    @property
-    def body_quat_w(self) -> torch.Tensor:
-        return self._body_quat_w_sel
-
-    @property
-    def body_lin_vel_w(self) -> torch.Tensor:
-        return self._body_lin_vel_w_sel
-
-    @property
-    def body_ang_vel_w(self) -> torch.Tensor:
-        return self._body_ang_vel_w_sel
-
-    @property
-    def anchor_pos_w(self) -> torch.Tensor:
-        # motion_anchor_body_index 是 int，整数索引返回 view 而非 copy
-        return self._body_pos_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_quat_w(self) -> torch.Tensor:
-        return self._body_quat_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_lin_vel_w(self) -> torch.Tensor:
-        return self._body_lin_vel_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_ang_vel_w(self) -> torch.Tensor:
-        return self._body_ang_vel_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_pos_z(self) -> torch.Tensor:
-        return self.anchor_pos_w[:, 2:3]
-
-    def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
-        """Map global frame timestamps to motion ids.
-        The global timestamps index the concatenated motion tensor. This function returns
-        the corresponding motion id for each timestamp based on ``time_step_end_idx``.
-        Args
-            timestamps: (num_envs, ) global frame timestamps for each environment
-        Returns
-            (num_envs, ) corresponding motion ids for each environment
-        """
-        if self.time_step_end_idx is None:
-            raise RuntimeError("MotionLoader is not initialized. Call resample_motionloader first.")
-        if timestamps.dtype != torch.long:
-            timestamps = timestamps.long()
-        timestamps = torch.clamp(timestamps, min=0, max=int(self.time_step_total) - 1)
-        # General case: end_idx is exclusive; use right=True so boundary timestamps map to the next motion.
-        motion_ids = torch.bucketize(timestamps, self.time_step_end_idx, right=True)
-        return torch.clamp(motion_ids, min=0, max=self.motion_num - 1)
-
-
 class MotionCommand(CommandTerm):
     cfg: MotionCommandCfg
 
@@ -281,11 +58,15 @@ class MotionCommand(CommandTerm):
         # Per-env motion id in the current concatenated motion buffer.
         self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
-        self.motion = MotionLoader(self.cfg, self.body_indexes, self.motion_anchor_body_index, device=self.device)
+        self.motion = UnifiedMotionLib(
+            body_indexes=self.body_indexes.tolist(),
+            motion_anchor_body_index=self.motion_anchor_body_index,
+            device=self.device,
+        )
 
-        self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-
-        self.resample_motion_files(self.env)
+        self.resample_motion_files(self.env, self.cfg)
+        if self.cfg.debug_vis:
+            self.set_debug_vis(self.cfg.debug_vis)
         # self.motion.update_last_motion_data()  # when init , init last motion data
 
         self.frame_end_per_env = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -482,6 +263,140 @@ class MotionCommand(CommandTerm):
         """
         return self.motion.joint_vel[self.future_time_steps].view(self.num_envs, -1)
 
+    # region SMPL properties
+    @property
+    def has_smpl_data(self) -> bool:
+        if not hasattr(self, "motion"):
+            return False
+        return self.motion.smpl_joints is not None and self.motion.smpl_transl is not None
+
+    @property
+    def smpl_joints(self) -> torch.Tensor:
+        """Current-frame SMPL joint positions.  Shape: (num_envs, 24, 3)."""
+        return self.motion.smpl_joints[self.global_time_steps]
+
+    @property
+    def smpl_transl(self) -> torch.Tensor:
+        """Current-frame SMPL root translation.  Shape: (num_envs, 3)."""
+        return self.motion.smpl_transl[self.global_time_steps]
+
+    @property
+    def smpl_poses(self) -> torch.Tensor:
+        """Current-frame SMPL axis-angle pose.  Shape: (num_envs, 72)."""
+        return self.motion.smpl_poses[self.global_time_steps]
+
+    @property
+    def smpl_poses_future(self) -> torch.Tensor:
+        """Future-frame SMPL axis-angle pose.  Shape: (num_envs, num_future_frames, 72)."""
+        return self.motion.smpl_poses[self.future_time_steps]
+
+    @property
+    def smpl_joints_future(self) -> torch.Tensor:
+        """Future-frame SMPL joint positions.  Shape: (num_envs, num_future_frames, 24, 3)."""
+        return self.motion.smpl_joints[self.future_time_steps]
+
+    @property
+    def smpl_transl_future(self) -> torch.Tensor:
+        """Future-frame SMPL root translation.  Shape: (num_envs, num_future_frames, 3)."""
+        return self.motion.smpl_transl[self.future_time_steps]
+
+    @property
+    def smpl_global_position(self) -> torch.Tensor | None:
+        """Current-frame SMPL global joint positions in env world frame.  Shape: (num_envs, 24, 3)."""
+        if not self.has_smpl_data:
+            return None
+        smpl_global = self.motion.get_smpl_global_position(self.motion_ids, self.local_time_steps)
+        return smpl_global + self._env.scene.env_origins[:, None, :]
+
+    @property
+    def smpl_global_position_future(self) -> torch.Tensor | None:
+        """Future-frame SMPL global joint positions in env world frame. Shape: (num_envs, num_future_frames, 24, 3)."""
+        if not self.has_smpl_data:
+            return None
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        )
+        smpl_global = self.motion.get_smpl_global_position(self.future_motion_ids, future_local.reshape(-1))
+        smpl_global = smpl_global.view(self.num_envs, self.num_future_frames, 24, 3)
+
+        return smpl_global + self._env.scene.env_origins[:, None, None, :]
+
+    def get_smpl_joints(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        """Query SMPL joint positions by (motion_id, local_frame).  Shape: (B, 24, 3)."""
+        return self.motion.get_smpl_joints(motion_ids, motion_steps)
+
+    def get_smpl_transl(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        """Query SMPL root translation by (motion_id, local_frame).  Shape: (B, 3)."""
+        return self.motion.get_smpl_transl(motion_ids, motion_steps)
+
+    def get_smpl_pose(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        """Query SMPL axis-angle pose by (motion_id, local_frame).  Shape: (B, 72)."""
+        return self.motion.get_smpl_pose(motion_ids, motion_steps)
+
+    def get_smpl_global_position(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        """Query SMPL global joint positions by (motion_id, local_frame).  Shape: (B, 24, 3)."""
+        return self.motion.get_smpl_global_position(motion_ids, motion_steps)
+
+    def _smpl_aa_to_world_quat(self, root_aa: torch.Tensor) -> torch.Tensor:
+        """Convert SMPL root axis-angle to world frame quaternion (wxyz).
+
+        Assumes root_aa is already in Z-up (get_smpl_pose handles Y-up conversion).
+        Removes SMPL's default rest-pose rotation [0.5, 0.5, 0.5, 0.5].
+        """
+        B = root_aa.shape[0]
+        q = _smpl_aa_to_quat(root_aa.reshape(B, 3))  # (B, 4) wxyz
+        q_base_conj = torch.tensor([[0.5, -0.5, -0.5, -0.5]], device=q.device, dtype=q.dtype).expand(B, -1)
+        return quat_mul(q, q_base_conj)
+
+    @property
+    def smpl_root_quat_w(self) -> torch.Tensor:
+        """Current-frame SMPL root orientation in world frame (wxyz). Shape: (num_envs, 4)."""
+        raw_aa = self.motion.get_smpl_pose(self.motion_ids, self.local_time_steps)[..., :3]
+        return self._smpl_aa_to_world_quat(raw_aa)
+
+    @property
+    def smpl_root_quat_w_multi_future(self) -> torch.Tensor:
+        """SMPL root orientation in world frame for all future frames (wxyz). Shape: (num_envs, num_future_frames, 4)."""
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        ).reshape(-1)
+        raw_aa = self.motion.get_smpl_pose(self.future_motion_ids, future_local)[..., :3]
+        return self._smpl_aa_to_world_quat(raw_aa).view(self.num_envs, self.num_future_frames, 4)
+
+    @property
+    def smpl_root_quat_w_dif_l_multi_future(self) -> torch.Tensor:
+        """SMPL root orientation relative to robot anchor, as 6D rotation, for all future frames.
+
+        Computes quat_inv(robot_anchor) ⊗ smpl_root per future frame, converts to rotation
+        matrix and returns the first 2 columns (6D representation).
+
+        Returns:
+            Tensor of shape ``(num_envs, num_future_frames * 6)``.
+        """
+        smpl_root = self.smpl_root_quat_w_multi_future  # (num_envs, num_future_frames, 4)
+        N = self.num_envs * self.num_future_frames
+        robot_anchor = self.robot_anchor_quat_w[:, None, :].expand(-1, self.num_future_frames, -1)
+        root_rot_dif = quat_mul(
+            quat_inv(robot_anchor.reshape(N, 4)),
+            smpl_root.reshape(N, 4),
+        ).view(self.num_envs, self.num_future_frames, 4)
+        mat = _smpl_quat_to_mat(root_rot_dif)  # (num_envs, num_future_frames, 3, 3)
+        return mat[..., :2].reshape(self.num_envs, -1)  # (num_envs, num_future_frames * 6)
+
+    @property
+    def smpl_joints_local_multi_future(self) -> torch.Tensor:
+        ref_joints = self.smpl_joints_future
+        ref_root_quat = self.smpl_root_quat_w_multi_future.unsqueeze(-2).repeat(1, 1, ref_joints.shape[-2], 1)
+        ref_joints_root = quat_apply(quat_inv(ref_root_quat), ref_joints)
+
+        return ref_joints_root
+
+    # endregion SMPL properties
+
     def _set_time_from_global_timestamps(self, env_ids: Sequence[int], timestamps: torch.Tensor) -> None:
         """Set (motion_ids, local time_steps, local end) from global timestamps."""
         if len(env_ids) == 0:
@@ -553,9 +468,8 @@ class MotionCommand(CommandTerm):
 
     # endregion normal property
 
-    def resample_motion_files(self, env):
-        self.motion.resample_motionloader(device=self.device)
-        self.use_new_motion_pre_env[:] = False
+    def resample_motion_files(self, env, motion_cfg):
+        self.motion.load_from_cfg(motion_cfg)
         self.bin_count = (
             int(self.motion.time_step_total // (1 / (env.cfg.decimation * env.cfg.sim.dt))) + 1
         )  # 1s motion frames for each bin
@@ -807,7 +721,6 @@ class MotionCommand(CommandTerm):
             self._adaptive_sampling(env_ids)
         else:
             raise NotImplementedError
-            # self.use_new_motion_pre_env[env_ids] = True
 
         # add noise to robot states when envs are reset
         # add noise to root state
@@ -887,6 +800,12 @@ class MotionCommand(CommandTerm):
         ):
             self._export_adaptive_bins()
 
+    # region debug visualization
+    def _identity_quaternions(self, count: int) -> torch.Tensor:
+        quat_w = torch.zeros((count, 4), device=self.device)
+        quat_w[:, 0] = 1.0
+        return quat_w
+
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
             if not hasattr(self, "current_anchor_visualizer"):
@@ -922,15 +841,36 @@ class MotionCommand(CommandTerm):
                         )
                     )
 
+            if (
+                self.cfg.debug_smpl_global_position
+                and self.has_smpl_data
+                and not hasattr(self, "current_smpl_visualizer")
+            ):
+                self.current_smpl_visualizer = VisualizationMarkers(
+                    self.cfg.current_smpl_visualizer_cfg.replace(prim_path="/Visuals/Command/current/smpl")
+                )
+            if (
+                self.cfg.debug_smpl_future_global_position
+                and self.has_smpl_data
+                and not hasattr(self, "future_smpl_visualizer")
+            ):
+                self.future_smpl_visualizer = VisualizationMarkers(
+                    self.cfg.future_smpl_visualizer_cfg.replace(prim_path="/Visuals/Command/future/smpl")
+                )
+
             self.current_anchor_visualizer.set_visibility(True)
             self.goal_anchor_visualizer.set_visibility(True)
             self.future_anchor_visualizer.set_visibility(True)
             if self.cfg.debug_anchor_speed:
                 self.current_anchor_lin_vel_visualizer.set_visibility(True)
                 self.goal_anchor_lin_vel_visualizer.set_visibility(True)
+            if hasattr(self, "current_smpl_visualizer"):
+                self.current_smpl_visualizer.set_visibility(True)
+            if hasattr(self, "future_smpl_visualizer"):
+                self.future_smpl_visualizer.set_visibility(True)
 
             for i in range(len(self.cfg.body_names)):
-                self.current_body_visualizers[i].set_visibility(True)
+                self.current_body_visualizers[i].set_visibility(False)
                 self.goal_body_visualizers[i].set_visibility(True)
 
         else:
@@ -941,6 +881,10 @@ class MotionCommand(CommandTerm):
                 if self.cfg.debug_anchor_speed:
                     self.current_anchor_lin_vel_visualizer.set_visibility(False)
                     self.goal_anchor_lin_vel_visualizer.set_visibility(False)
+                if hasattr(self, "current_smpl_visualizer"):
+                    self.current_smpl_visualizer.set_visibility(False)
+                if hasattr(self, "future_smpl_visualizer"):
+                    self.future_smpl_visualizer.set_visibility(False)
 
                 for i in range(len(self.cfg.body_names)):
                     self.current_body_visualizers[i].set_visibility(False)
@@ -986,10 +930,35 @@ class MotionCommand(CommandTerm):
     def _debug_vis_callback(self, event):
         if not self.robot.is_initialized:
             return
+
+        if hasattr(self, "current_anchor_visualizer"):
+            self.current_anchor_visualizer.visualize(self.robot_anchor_pos_w, self.robot_anchor_quat_w)
+            self.goal_anchor_visualizer.visualize(self.anchor_pos_w, self.anchor_quat_w)
+
         if hasattr(self, "future_anchor_visualizer"):
             self.future_anchor_visualizer.visualize(
                 self.anchor_pos_w_future.view(-1, 3), self.anchor_quat_w_future.view(-1, 4)
             )
+
+        if hasattr(self, "current_smpl_visualizer"):
+            smpl_global_position = self.smpl_global_position
+            if smpl_global_position is not None:
+                self.current_smpl_visualizer.visualize(
+                    smpl_global_position.view(-1, 3),
+                    self.smpl_root_quat_w.view(-1, 4).repeat_interleave(smpl_global_position.shape[2], dim=0),
+                )
+        if hasattr(self, "future_smpl_visualizer"):
+            smpl_global_position_future = self.smpl_global_position_future
+            if smpl_global_position_future is not None:
+                num_joints = smpl_global_position_future.shape[2]
+                self.future_smpl_visualizer.visualize(
+                    self.smpl_global_position_future.view(-1, 3),
+                    self.smpl_root_quat_w_multi_future.view(-1, 4).repeat_interleave(num_joints, dim=0),
+                )
+
+        # if hasattr(self, "future_smpl_visualizer"):
+        #     if smpl_global_position is not None:
+        #         self.future_smpl_visualizer.visualize(smpl_global_position.view(-1, 3),self.smpl_root_quat_w_multi_future.view(-1, 4))
 
         if self.cfg.debug_anchor_speed:
             current_lin_vel_scale, current_lin_vel_quat = self._resolve_velocity_to_arrow(
@@ -1021,6 +990,8 @@ class MotionCommand(CommandTerm):
             self.current_body_visualizers[i].visualize(self.robot_body_pos_w[:, i], self.robot_body_quat_w[:, i])
             self.goal_body_visualizers[i].visualize(self.body_pos_relative_w[:, i], self.body_quat_relative_w[:, i])
 
+    # endregion debug visualization
+
 
 @configclass
 class MotionCommandCfg(CommandTermCfg):
@@ -1029,6 +1000,7 @@ class MotionCommandCfg(CommandTermCfg):
     class_type: type = MotionCommand
 
     dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
+    smpl_file_path: str = "/home/thl/Downloads/data/TEST_50hz"
     eval_mode: bool = False
     adaptive_sample: bool = True
     asset_name: str = MISSING
@@ -1068,6 +1040,12 @@ class MotionCommandCfg(CommandTermCfg):
     body_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
     body_visualizer_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
 
+    current_smpl_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
+    current_smpl_visualizer_cfg.markers["frame"].scale = (0.06, 0.06, 0.06)
+
+    future_smpl_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
+    future_smpl_visualizer_cfg.markers["frame"].scale = (0.04, 0.04, 0.04)
+
     current_anchor_lin_vel_visualizer_cfg: VisualizationMarkersCfg = BLUE_ARROW_X_MARKER_CFG.replace(
         prim_path="/Visuals/Command/current/anchor_lin_vel"
     )
@@ -1080,6 +1058,8 @@ class MotionCommandCfg(CommandTermCfg):
     # Debug printing for anchor velocity in _debug_vis_callback.
     debug_anchor_speed: bool = True
     debug_anchor_speed_scale: float = 1.0
+    debug_smpl_global_position: bool = True
+    debug_smpl_future_global_position: bool = True
 
     # 为了分布式训练
     distributed: bool = False

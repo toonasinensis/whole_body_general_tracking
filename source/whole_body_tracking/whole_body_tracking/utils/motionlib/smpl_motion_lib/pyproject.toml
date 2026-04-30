@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smpl_motion_lib"
+version = "0.1.0"
+dependencies = [
+    "numpy>=1.24",
+    "joblib>=1.2",
+    "smpl_math_utils>=0.1.0",
+    "viser>=0.2.0",
+]
