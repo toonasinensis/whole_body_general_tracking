@@ -155,7 +155,8 @@ def main(
     # attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
     # reset environment
     # import ipdb; ipdb.set_trace()
-    obs = env.get_observations()
+    # reset environment
+    obs, _ = env.get_observations()
     timestep = 0
     # simulate environment
     while simulation_app.is_running():
@@ -165,6 +166,10 @@ def main(
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+            print("obs shape:", obs.shape)
+            print("obs[0] =", obs[0])       # 第0个env的观测
+            print("actions =", actions[0])  # 第0个env的动作输出
+
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

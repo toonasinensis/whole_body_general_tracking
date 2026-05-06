@@ -31,6 +31,9 @@ RUN_NAME="${RUN_NAME:-$(basename "${MOTION_FILE_TXT}" .txt)}"
 
 # Reduce allocator fragmentation for long training runs.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# W&B: log curves/metrics but avoid uploading every model_*.pt (large). Checkpoints stay under logs/.
+# Override: WANDB_LOG_CHECKPOINTS=1 to upload checkpoints again. See MotionOnPolicyRunner.
+export WANDB_LOG_CHECKPOINTS="${WANDB_LOG_CHECKPOINTS:-0}"
 # Preflight: avoid Isaac Sim startup failures when GPU is already full.
 if command -v nvidia-smi >/dev/null 2>&1; then
   FREE_MB="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n 1 || echo "")"
@@ -59,9 +62,9 @@ python -m torch.distributed.run \
   --motion_file=data/roban_motions \
   --motion_file_txt="${MOTION_FILE_TXT}" \
   --run_name="${RUN_NAME}" \
+  --max_motion_num="${MAX_MOTION_NUM}" \
   --logger wandb \
   --log_project_name=roban_flat \
-  --max_motion_num="${MAX_MOTION_NUM}" \
   --distributed \
   #  --resume=true \
-  #  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"
+  #  --resume_path="logs/rsl_rl/roban_flat/2026-04-22_23-59-52_motions_all_kept/model_79000.pt"

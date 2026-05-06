@@ -59,7 +59,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
-            "pos_distribution_params": (-0.03, 0.03),
+            "pos_distribution_params": (-0.1, 0.1),
             "operation": "add",
         },
     )
@@ -78,7 +78,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="waist_yaw_link"),
-            "com_range": {"x": (-0.01, 0.01), "y": (-0.01, 0.01), "z": (-0.01, 0.01)},
+            "com_range": {"x": (-0.02, 0.03), "y": (-0.02, 0.02), "z": (-0.02, 0.02)},
         },
     )
 
@@ -87,7 +87,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
-            "mass_distribution_params": (0.8, 1.2),
+            "mass_distribution_params": (0.8, 1.5),
             "operation": "scale",
         },
     )
@@ -97,7 +97,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="waist_yaw_link"),
-            "mass_distribution_params": (0.8, 1.2),
+            "mass_distribution_params": (0.8, 1.5),
             "operation": "scale",
         },
     )

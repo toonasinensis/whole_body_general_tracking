@@ -21,7 +21,7 @@ from isaaclab.utils.timer import Timer
 from isaaclab.utils.warp import convert_to_warp_mesh  # noqa: F401
 
 if TYPE_CHECKING:
-    from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg  # noqa: F401
+    from isaaclab.terrains.terrain_generator_cfg import SubTerrainBaseCfg  # noqa: F401
 
     from .stl_terrain_generator_cfg import STLTerrainGeneratorCfg
     from .stl_trimesh_cfg import TrimeshPlatformCfg

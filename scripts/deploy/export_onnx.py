@@ -186,36 +186,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
-    # export policy to onnx (optional)
-    if args_cli.export_onnx:
-        export_model_dir = args_cli.onnx_dir or os.path.join(os.path.dirname(resume_path), "exported")
-        export_motion_policy_as_onnx(
-            env.unwrapped,
-            ppo_runner.alg.get_policy(), # MLPModel defined in Isaaclab
-            path=export_model_dir,
-            filename=args_cli.onnx_filename,
-        )
+    # export policy to onnx/jit
+    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
 
-        attach_onnx_metadata(env.unwrapped, args_cli.wandb_path or "none", export_model_dir, args_cli.onnx_filename)
-
-        env.close()
-        return
-
-    obs = env.get_observations()
-    timestep = 0
-    # simulate environment
-    while simulation_app.is_running():
-        # run everything in inference mode
-        with torch.inference_mode():
-            # agent stepping
-            actions = policy(obs)
-            # env stepping
-            obs, _, _, _ = env.step(actions)
-        if args_cli.video:
-            timestep += 1
-            # Exit the play loop after recording one video
-            if timestep == args_cli.video_length:
-                break
+    export_motion_policy_as_onnx(
+        env.unwrapped,
+        ppo_runner.alg.policy,
+        normalizer=ppo_runner.obs_normalizer,
+        path=export_model_dir,
+        filename="policy.onnx",
+    )
+    attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
 
     # close the simulator
     env.close()

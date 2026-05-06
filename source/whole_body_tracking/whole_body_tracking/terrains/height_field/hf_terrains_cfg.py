@@ -5,7 +5,10 @@
 
 from dataclasses import MISSING
 
-from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg
+try:
+    from isaaclab.terrains.sub_terrain_cfg import SubTerrainBaseCfg
+except ModuleNotFoundError:
+    from isaaclab.terrains.terrain_generator_cfg import SubTerrainBaseCfg
 from isaaclab.utils import configclass
 
 from . import hf_terrains

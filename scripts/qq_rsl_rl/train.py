@@ -82,6 +82,7 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
+from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
@@ -101,6 +102,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
 
+    ###################################
+    # setup for multi-process running #
+    ###################################
+    # wandb settings
+    # load the motion file from the wandb registry
+    registry_name = args_cli.registry_name
+    if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
+        registry_name += ":latest"
+
+    # W&B: rsl_rl also calls wandb.save() on every checkpoint and on git diffs, which can use a lot of storage.
+    # MotionOnPolicyRunner honors WANDB_LOG_CHECKPOINTS=0 (keep scalars, skip .pt uploads) and WANDB_LOG_GIT_FILES=0.
+    if getattr(agent_cfg, "logger", None) is not None and str(agent_cfg.logger).lower() == "wandb":
+        if getattr(agent_cfg, "wandb_project", None) in (None, ""):
+            # Prefer CLI project name; fall back to env var; otherwise a safe default.
+            agent_cfg.wandb_project = (
+                args_cli.log_project_name
+                or os.environ.get("WANDB_PROJECT")
+                or "rsl_rl_roban_s22"
+            )
+
     # ---------------------------------------------------------------------
     # Multi-process (torchrun) training: ensure W&B runs only on global rank 0
     #
@@ -116,50 +137,29 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             os.environ.setdefault("WANDB_DISABLED", "true")
             # Disable the wandb logger on non-main ranks (runner will skip it).
             agent_cfg.logger = None
-    
-    # Ensure Weights & Biases has the required config key.
-    # custom_rsl_rl's WandbSummaryWriter expects cfg["wandb_project"] to exist when logger=="wandb".
-    if getattr(agent_cfg, "logger", None) is not None and str(agent_cfg.logger).lower() == "wandb":
-        if getattr(agent_cfg, "wandb_project", None) in (None, ""):
-            # Prefer CLI project name; fall back to env var; otherwise a safe default.
-            agent_cfg.wandb_project = (
-                args_cli.log_project_name
-                or os.environ.get("WANDB_PROJECT")
-                or "rsl_rl_roban_s22"
-            )
-
 
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-    agent_cfg.max_iterations = (
-        args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
-    )
+    agent_cfg.max_iterations = args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
+
     if args_cli.distributed:
         env_cfg.sim.device = args_cli.device
-
         env_cfg.commands.motion.distributed = True
         env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
         env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
 
         agent_cfg.device = args_cli.device
+
         # set seed to have diversity in different threads
         seed = agent_cfg.seed + app_launcher.local_rank
         env_cfg.seed = seed
         agent_cfg.seed = seed
     else:
         env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+        env_cfg.seed = agent_cfg.seed
 
-    # set the environment seed
-    # note: certain randomizations occur in the environment initialization so we set the seed here
-    env_cfg.seed = agent_cfg.seed
-
-    # load the motion file from the wandb registry
-    registry_name = args_cli.registry_name
-    if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-        registry_name += ":latest"
-
-    # import wandb
-    # api = wandb.Api()
-    # artifact = api.artifact(registry_name)
+    ##################
+    # configurations #
+    ##################
     env_cfg.commands.motion.motion_file = args_cli.motion_file
     # Optional dataset list: MotionLoader uses cfg.dataset_txt to select a subset of npz files.
     if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
@@ -167,6 +167,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Avoid OOM by capping number of motions loaded.
     if args_cli.max_motion_num is not None and hasattr(env_cfg.commands.motion, "max_motion_num"):
         env_cfg.commands.motion.max_motion_num = args_cli.max_motion_num
+
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -177,7 +178,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
 
-    # create isaac environment
+    ############################
+    # create isaac environment #
+    ############################
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # wrap for video recording
     if args_cli.video:
@@ -197,15 +200,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env)
-
     # create runner from rsl-rl
-    runner_cfg_dict = agent_cfg.to_dict()
-    # Mirror the enforced project into the dict so the runner logger sees it.
-    if getattr(agent_cfg, "logger", None) is not None and str(agent_cfg.logger).lower() == "wandb":
-        runner_cfg_dict.setdefault("wandb_project", getattr(agent_cfg, "wandb_project", None))
     runner = OnPolicyRunner(
-        env, runner_cfg_dict, log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
+        env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
     )
+
+    ##################
+    # start training #
+    ##################
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # save resume path before creating a new log_dir
@@ -215,11 +217,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
-    # runner.load("/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_3500.pt")
 
     # dump the configuration into log-directory
-    # dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-    # dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     # dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
     # dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 

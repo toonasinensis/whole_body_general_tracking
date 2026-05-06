@@ -682,7 +682,7 @@
     <collision>
       <origin xyz="0 0 -0.225" rpy="0 0 0" />
       <geometry>
-        <capsule radius="0.04" length="0.08" />
+        <capsule radius="0.035" length="0.08" />
       </geometry>
     </collision>
   </link>
@@ -857,7 +857,7 @@
     <collision>
       <origin xyz="0 0 -0.225" rpy="0 0 0" />
       <geometry>
-        <capsule radius="0.04" length="0.08" />
+        <capsule radius="0.035" length="0.08" />
       </geometry>
     </collision>
   </link>
@@ -992,15 +992,12 @@
       </material>
     </visual>
   </link>
-
-  <!-- Joint connecting head_pitch to head_camera_base -->
   <joint name="camera_base_joint" type="fixed">
     <origin xyz="0.047118 0 0.051192" rpy="0 0.27152 0"/>
     <parent link="zhead_2_link"/>
     <child link="camera_base"/>
   </joint>
 
-  <!-- head_radar link with updated inertial properties -->
   <link name="head_radar">
     <inertial>
       <origin xyz="-0.00018049 0.00000619 0.01744856" rpy="0 0 0"/>
@@ -1023,8 +1020,6 @@
       </material>
     </visual>
   </link>
-
-  <!-- Joint connecting head_yaw to head_radar -->
   <joint name="head_radar_joint" type="fixed">
     <origin xyz="0 0 -0.026453" rpy="0 0 0"/>
     <parent link="zhead_1_link"/>

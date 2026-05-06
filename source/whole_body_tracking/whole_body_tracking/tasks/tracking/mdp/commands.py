@@ -28,7 +28,7 @@ from isaaclab.utils.math import euler_xyz_from_quat  # noqa: F401
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
 from isaaclab.utils.math import (
     quat_apply,
-    quat_apply_inverse,
+    quat_rotate_inverse as quat_apply_inverse,
     quat_error_magnitude,
     quat_inv,
     quat_mul,

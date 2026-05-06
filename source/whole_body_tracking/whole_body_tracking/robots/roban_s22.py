@@ -6,14 +6,6 @@ from isaaclab.assets.articulation import ArticulationCfg
 from whole_body_tracking.actuators.actuator_cfg import DelayedPDActuatorCfg_RobanS22
 from whole_body_tracking.assets import ASSET_DIR
 
-# from isaaclab.actuators import DelayedPDActuatorCfg
-
-
-# from isaaclab.managers import SceneEntityCfg
-
-
-# from isaaclab.managers import SceneEntityCfg
-
 
 # ============================================================
 # Motor armature parameters for RobanS2.2 (biped_s17)
