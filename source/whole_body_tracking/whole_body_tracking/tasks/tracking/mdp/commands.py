@@ -24,11 +24,10 @@ from isaaclab.markers.config import (  # RED_ARROW_X_MARKER_CFG,
     GREEN_ARROW_X_MARKER_CFG,
 )
 from isaaclab.utils import configclass
-from isaaclab.utils.math import euler_xyz_from_quat  # noqa: F401
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
 from isaaclab.utils.math import (
     quat_apply,
-    quat_rotate_inverse as quat_apply_inverse,
+    quat_rotate_inverse as quat_apply_inverse, # sim5.1 to sim4.5
     quat_error_magnitude,
     quat_inv,
     quat_mul,
@@ -490,55 +489,10 @@ class MotionCommand(CommandTerm):
         """
         return self.motion.joint_vel[self.future_time_steps].view(self.num_envs, -1)
 
-    def _set_time_from_global_timestamps(self, env_ids: Sequence[int], timestamps: torch.Tensor) -> None:
-        """Set (motion_ids, local time_steps, local end) from global timestamps."""
-        if len(env_ids) == 0:
-            return
-
-        if timestamps.dtype != torch.long:
-            timestamps = timestamps.long()
-        timestamps = torch.clamp(timestamps, min=0, max=int(self.motion.time_step_total) - 1)
-
-        motion_ids = self.motion.motion_ids_from_timestamps(timestamps)
-        start = self.motion.time_step_start_idx[motion_ids]
-        end = self.motion.time_step_end_idx[motion_ids]
-        local_t = timestamps - start
-
-        self.motion_ids[env_ids] = motion_ids
-        self.local_time_steps[env_ids] = local_t
-        # store local end (exclusive) to drive resampling with local time_steps
-        self.frame_end_per_env[env_ids] = end - start
-
     @property
     def anchor_lin_vel_b(self) -> torch.Tensor:
         anchor_lin_vel_b = quat_apply_inverse(self.anchor_quat_w, self.anchor_lin_vel_w)
         return anchor_lin_vel_b
-
-    def _setup_fixed_eval_motion_assignment(self) -> None:
-        """Pin each env to one motion id while preserving local/global indexing semantics.
-
-        In this script, indexing uses:
-        - `motion_ids`: per-env selected motion
-        - `local_time_steps`: per-env frame index within that motion
-        - `global_time_steps = motion_start + local_time_steps`
-        """
-        motion_num = int(getattr(self.motion, "motion_num", 0) or 0)
-        if motion_num <= 0:
-            raise RuntimeError("MotionLoader has no motions loaded; cannot set up fixed eval motion mapping.")
-        if int(self.num_envs) != motion_num:
-            raise ValueError(
-                f"fixed_eval_motion_ids requires num_envs == motion_num, got num_envs={int(self.num_envs)} motion_num={motion_num}."
-            )
-
-        self.fixed_eval_motion_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
-        self.motion_ids[:] = self.fixed_eval_motion_ids
-        self.local_time_steps.zero_()
-        self.eval_cycle_count.zero_()
-
-        start = self.motion.time_step_start_idx[self.motion_ids]
-        end = self.motion.time_step_end_idx[self.motion_ids]
-        # local end (exclusive) for each env.
-        self.frame_end_per_env[:] = end - start
 
     @property
     def anchor_ang_vel_b(self) -> torch.Tensor:
@@ -584,8 +538,52 @@ class MotionCommand(CommandTerm):
     @property
     def robot_anchor_ang_vel_w(self) -> torch.Tensor:
         return self.robot.data.body_ang_vel_w[:, self.robot_anchor_body_index]
-
     # endregion normal property
+
+    def _set_time_from_global_timestamps(self, env_ids: Sequence[int], timestamps: torch.Tensor) -> None:
+        """Set (motion_ids, local time_steps, local end) from global timestamps."""
+        if len(env_ids) == 0:
+            return
+
+        if timestamps.dtype != torch.long:
+            timestamps = timestamps.long()
+        timestamps = torch.clamp(timestamps, min=0, max=int(self.motion.time_step_total) - 1)
+
+        motion_ids = self.motion.motion_ids_from_timestamps(timestamps)
+        start = self.motion.time_step_start_idx[motion_ids]
+        end = self.motion.time_step_end_idx[motion_ids]
+        local_t = timestamps - start
+
+        self.motion_ids[env_ids] = motion_ids
+        self.local_time_steps[env_ids] = local_t
+        # store local end (exclusive) to drive resampling with local time_steps
+        self.frame_end_per_env[env_ids] = end - start
+
+    def _setup_fixed_eval_motion_assignment(self) -> None:
+        """Pin each env to one motion id while preserving local/global indexing semantics.
+
+        In this script, indexing uses:
+        - `motion_ids`: per-env selected motion
+        - `local_time_steps`: per-env frame index within that motion
+        - `global_time_steps = motion_start + local_time_steps`
+        """
+        motion_num = int(getattr(self.motion, "motion_num", 0) or 0)
+        if motion_num <= 0:
+            raise RuntimeError("MotionLoader has no motions loaded; cannot set up fixed eval motion mapping.")
+        if int(self.num_envs) != motion_num:
+            raise ValueError(
+                f"fixed_eval_motion_ids requires num_envs == motion_num, got num_envs={int(self.num_envs)} motion_num={motion_num}."
+            )
+
+        self.fixed_eval_motion_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        self.motion_ids[:] = self.fixed_eval_motion_ids
+        self.local_time_steps.zero_()
+        self.eval_cycle_count.zero_()
+
+        start = self.motion.time_step_start_idx[self.motion_ids]
+        end = self.motion.time_step_end_idx[self.motion_ids]
+        # local end (exclusive) for each env.
+        self.frame_end_per_env[:] = end - start
 
     def resample_motion_files(self, env):
         self.motion.resample_motionloader(device=self.device)
@@ -778,7 +776,6 @@ class MotionCommand(CommandTerm):
             self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
 
         # Sample
-
         sampling_probabilities = self._compute_sampling_probabilities()
 
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)

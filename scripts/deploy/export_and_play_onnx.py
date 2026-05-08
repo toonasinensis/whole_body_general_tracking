@@ -6,10 +6,6 @@ import os
 import re
 import sys
 
-import numpy as np
-import onnxruntime as ort
-import torch
-
 from isaaclab.app import AppLauncher
 
 # local imports
@@ -88,6 +84,10 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 import gymnasium as gym
+
+import numpy as np
+import onnxruntime as ort
+import torch
 
 from rsl_rl.runners import OnPolicyRunner
 
@@ -418,15 +418,18 @@ def main(env_cfg, agent_cfg):
     vec_env = RslRlVecEnvWrapper(env)
     ppo_runner = OnPolicyRunner(vec_env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     ppo_runner.load(args_cli.resume_path)
+    ppo_runner.eval_mode()
 
     print(f"[INFO] Exporting ONNX to: {onnx_path}")
     export_motion_policy_as_onnx(
         vec_env.unwrapped,
-        ppo_runner.alg.get_policy(),
+        ppo_runner.alg.policy,
+        normalizer=ppo_runner.obs_normalizer,
         path=export_model_dir,
         filename=args_cli.onnx_filename,
     )
-    attach_onnx_metadata(vec_env.unwrapped, args_cli.wandb_path or "none", export_model_dir, args_cli.onnx_filename)
+    # TODO modify the attach_onnx_metadata function
+    # attach_onnx_metadata(vec_env.unwrapped, args_cli.wandb_path or "none", export_model_dir, args_cli.onnx_filename)
 
     print(f"[INFO] Loading ONNX runtime session from: {onnx_path}")
     sess_options = ort.SessionOptions()
@@ -453,7 +456,7 @@ def main(env_cfg, agent_cfg):
 
     while simulation_app.is_running():
         actions_np = ort_session.run([output_name], {input_name: obs_np})[0]
-        actions = torch.from_numpy(actions_np).to(vec_env.unwrapped.device)
+        actions = torch.from_numpy(actions_np).to(env.unwrapped.device)
         obs_dict, _, terminated, truncated, _ = env.step(actions)
         obs_np = _to_numpy_policy_obs(obs_dict)
         timestep += 1
@@ -472,7 +475,5 @@ def main(env_cfg, agent_cfg):
 
 
 if __name__ == "__main__":
-    try:
-        main()  # pyright: ignore[reportCallIssue]
-    finally:
-        simulation_app.close()
+    main()  # pyright: ignore[reportCallIssue]
+    simulation_app.close()

@@ -4,11 +4,11 @@ set -euo pipefail
 # Always run from repo root (two levels up from this script).
 # This makes paths like preprocess/... and data/... resolve correctly
 # no matter where the script is launched from.
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-INPUT_DIR="data/roban_soma_motions"
-OUTPUT_DIR="data/roban_motions"
+INPUT_DIR="data/roban_soma_motions/validate"
+OUTPUT_DIR="data/roban_motions_debug/mimic_npz"
 PATTERN="*.npz"
 OUTPUT_FPS=50
 NUM_ENVS=64

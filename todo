@@ -1,0 +1,5 @@
+
+ - [ ] The scripts/eval package remains to be checked
+ - [ ] The wandb logger in train script remains to be adapted for sim4.5
+ - [ ] The mdp files remains to be sorted
+

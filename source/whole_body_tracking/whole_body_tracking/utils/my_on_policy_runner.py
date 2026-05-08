@@ -27,12 +27,13 @@ class MotionOnPolicyRunner(OnPolicyRunner):
         self.registry_name = registry_name
 
     def save(self, path: str, infos=None):
-        # rsl_rl calls writer.save_model → wandb.save(pt). Disable that when env asks, still torch.save locally.
+        # rsl_rl calls writer.save_model --> wandb.save(pt). 
+        # Disable that when env asks, still torch.save locally.
         if (
             os.environ.get("WANDB_LOG_CHECKPOINTS", "1").strip().lower() in ("0", "false", "no", "off")
             and getattr(self, "logger_type", None) == "wandb"
             and getattr(self, "writer", None) is not None
-        ):
+        ):  # avoid uploading pt model to wandb storage
             real_save_model = self.writer.save_model
             self.writer.save_model = lambda *a, **k: None
             super().save(path, infos)
@@ -44,9 +45,8 @@ class MotionOnPolicyRunner(OnPolicyRunner):
         if (
             os.environ.get("WANDB_LOG_GIT_FILES", "1").strip().lower() in ("0", "false", "no", "off")
             and str(self.cfg.get("logger", "")).lower() == "wandb"
-        ):
+        ):  # avoid uploading pt model to wandb storage
             from rsl_rl.utils import wandb_utils
-
             real_save_file = wandb_utils.WandbSummaryWriter.save_file
             wandb_utils.WandbSummaryWriter.save_file = lambda self_w, path, iteration=None: None
             out = super().learn(num_learning_iterations, init_at_random_ep_len)

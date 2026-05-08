@@ -64,6 +64,7 @@ def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
 
 
 def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filename="policy.onnx") -> None:
+    # TODO modify the attach_onnx_metadata function
     onnx_path = os.path.join(path, filename)
     metadata = {
         "run_path": run_path,

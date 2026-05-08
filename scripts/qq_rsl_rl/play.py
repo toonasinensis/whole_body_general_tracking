@@ -166,9 +166,6 @@ def main(
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
-            print("obs shape:", obs.shape)
-            print("obs[0] =", obs[0])       # 第0个env的观测
-            print("actions =", actions[0])  # 第0个env的动作输出
 
         if args_cli.video:
             timestep += 1
