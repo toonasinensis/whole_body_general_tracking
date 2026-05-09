@@ -9,6 +9,7 @@ v_stack/
 utilities/*
 # ide configs
 pyrightconfig.json
+rsl_rl/
 
 # Omniverse
 **/*.dmp

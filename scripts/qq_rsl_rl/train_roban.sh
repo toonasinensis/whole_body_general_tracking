@@ -22,10 +22,10 @@ echo "[INFO] MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT}"
 NPROC_PER_NODE=1
 # PPO memory scales ~linearly with NUM_ENVS; 12288 is very likely to OOM on 24GB.
 # Override at runtime: NUM_ENVS=4096 bash scripts/qq_rsl_rl/train_roban.sh
-NUM_ENVS="${NUM_ENVS:-1024}"
+NUM_ENVS="${NUM_ENVS:-8192}"
 # Cap number of motions loaded to avoid dataset OOM (override if needed).
 MAX_MOTION_NUM="${MAX_MOTION_NUM:-25000}"
-MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/quick_test.txt}"
+MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/motions_crawl_stand_up.txt}"
 # Default run name = motion list filename without extension.
 RUN_NAME="${RUN_NAME:-$(basename "${MOTION_FILE_TXT}" .txt)}"
 
@@ -63,8 +63,8 @@ python -m torch.distributed.run \
   --motion_file_txt="${MOTION_FILE_TXT}" \
   --run_name="${RUN_NAME}" \
   --max_motion_num="${MAX_MOTION_NUM}" \
-  # --logger wandb \
-  # --log_project_name=roban_flat \
-  # --distributed \
-  #  --resume=true \
-  #  --resume_path="logs/rsl_rl/roban_flat/2026-04-22_23-59-52_motions_all_kept/model_79000.pt"
+  --logger wandb \
+  --log_project_name=roban_flat \
+  --resume=true \
+  --resume_path="logs/rsl_rl/roban_flat/0505_crawl_kept/model_28000.pt"
+  # --distributed
