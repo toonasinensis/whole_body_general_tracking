@@ -1,3 +1,11 @@
+# Algorithm
+
+ - commands and motion_loader: load motions from separate motion file text
+ - modify config for new rsl_rl package
+ - modify train script
+
+
+# Code Quality
 
  - [ ] The scripts/eval package remains to be checked
  - [ ] The wandb logger in train script remains to be adapted for sim4.5

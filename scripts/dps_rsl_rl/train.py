@@ -35,10 +35,37 @@ parser.add_argument(
     help="Optional txt file listing relative .npz paths under --motion_file (maps to commands.motion.dataset_txt).",
 )
 parser.add_argument(
+    "--motion_file_txt_pointer",
+    type=str,
+    default=None,
+    help=(
+        "Optional txt file whose lines are dataset_txt files. In distributed training, "
+        "commands.motion loads the line matching the process rank."
+    ),
+)
+parser.add_argument(
     "--max_motion_num",
     type=int,
     default=None,
     help="Max number of motions to load into memory (maps to commands.motion.max_motion_num). Use -1 for all.",
+)
+parser.add_argument(
+    "--adaptive_bins_log_dir",
+    type=str,
+    default=None,
+    help="Directory for commands.motion adaptive-bin JSON logs. Defaults to the run log directory.",
+)
+parser.add_argument(
+    "--fail_count_save_interval",
+    type=int,
+    default=None,
+    help="Save interval in command steps for adaptive-bin JSON logs.",
+)
+parser.add_argument(
+    "--disable_adaptive_bins",
+    action="store_true",
+    default=False,
+    help="Disable commands.motion adaptive-bin JSON logging.",
 )
 
 parser.add_argument(
@@ -88,7 +115,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
-from whole_body_tracking.utils.my_on_policy_runner import MotionOnPolicyRunner as OnPolicyRunner
+from whole_body_tracking.utils.my_on_policy_runner import MotionDeparseOnPolicyRunner
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -112,7 +139,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         registry_name += ":latest"
 
     # W&B: rsl_rl also calls wandb.save() on every checkpoint and on git diffs, which can use a lot of storage.
-    # MotionOnPolicyRunner honors WANDB_LOG_CHECKPOINTS=0 (keep scalars, skip .pt uploads) and WANDB_LOG_GIT_FILES=0.
+    # MotionDeparseOnPolicyRunner honors WANDB_LOG_CHECKPOINTS=0 and WANDB_LOG_GIT_FILES=0.
     if getattr(agent_cfg, "logger", None) is not None and str(agent_cfg.logger).lower() == "wandb":
         if getattr(agent_cfg, "wandb_project", None) in (None, ""):
             # Prefer CLI project name; fall back to env var; otherwise a safe default.
@@ -160,10 +187,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     ##################
     # configurations #
     ##################
-    env_cfg.commands.motion.motion_file = args_cli.motion_file
+    if args_cli.motion_file is not None:
+        env_cfg.commands.motion.motion_file = args_cli.motion_file
     # Optional dataset list: MotionLoader uses cfg.dataset_txt to select a subset of npz files.
     if args_cli.motion_file_txt is not None and hasattr(env_cfg.commands.motion, "dataset_txt"):
         env_cfg.commands.motion.dataset_txt = args_cli.motion_file_txt
+    # Optional dataset-list pointer: each distributed rank reads one dataset_txt path from this file.
+    if args_cli.motion_file_txt_pointer is not None and hasattr(env_cfg.commands.motion, "dataset_txt_pointer"):
+        env_cfg.commands.motion.dataset_txt_pointer = args_cli.motion_file_txt_pointer
     # Avoid OOM by capping number of motions loaded.
     if args_cli.max_motion_num is not None and hasattr(env_cfg.commands.motion, "max_motion_num"):
         env_cfg.commands.motion.max_motion_num = args_cli.max_motion_num
@@ -177,6 +208,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
+
+    if hasattr(env_cfg.commands.motion, "log_save_path"):
+        env_cfg.commands.motion.log_save_path = args_cli.adaptive_bins_log_dir or os.path.join(log_dir, "adaptive_bins")
+    if args_cli.fail_count_save_interval is not None and hasattr(env_cfg.commands.motion, "fail_count_save_interval"):
+        env_cfg.commands.motion.fail_count_save_interval = args_cli.fail_count_save_interval
+    if args_cli.disable_adaptive_bins and hasattr(env_cfg.commands.motion, "save_adaptive_bins"):
+        env_cfg.commands.motion.save_adaptive_bins = False
 
     ############################
     # create isaac environment #
@@ -201,7 +239,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env)
     # create runner from rsl-rl
-    runner = OnPolicyRunner(
+    runner = MotionDeparseOnPolicyRunner(
         env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
     )
 
@@ -221,8 +259,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    # dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    # dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)

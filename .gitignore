@@ -9,7 +9,6 @@ v_stack/
 utilities/*
 # ide configs
 pyrightconfig.json
-rsl_rl/
 
 # Omniverse
 **/*.dmp
@@ -55,3 +54,6 @@ _build
 
 artifacts/
 tea_debug.log
+
+# 3rd party
+**/.github/

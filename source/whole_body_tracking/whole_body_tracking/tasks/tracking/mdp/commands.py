@@ -74,12 +74,26 @@ class MotionLoader:
         if self.cfg.eval_mode:
             self.sample_counter = 0
 
-    def _find_npz_files(self, dir_path: Path, motion_num: int, dataset_txt=None):
-        """随机选择一个子文件夹（若存在），返回其中所有 .npz 文件路径"""
+    def _find_npz_files(self, dir_path: Path, motion_num: int, dataset_txt=None, dataset_txt_pointer=None):
+        # expert motions loads
+        if dataset_txt_pointer is not None and self.cfg.distributed: # load dataset_txt list from dataset_txt_pointer
+            with open(dataset_txt_pointer) as f:
+                dataset_txt_list = [line.strip() for line in f if line.strip()]
+            assert len(dataset_txt_list) >= self.cfg.total_rank
+            dataset_txt = dataset_txt_list[self.cfg.local_rank]
+            with open(dataset_txt) as f:
+                relative_paths = [line.strip() for line in f if line.strip()]
+            npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
+            # random.seed(42)
+            random.shuffle(npz_files)
+            if len(npz_files) > motion_num and motion_num != -1:
+                npz_files = npz_files[:motion_num]
+            return npz_files
+
+        # normal motion loading routine
         if dataset_txt is not None:
             with open(dataset_txt) as f:
                 relative_paths = [line.strip() for line in f if line.strip()]
-                # import ipdb;ipdb.set_trace()
             npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
             random.seed(42)  # 方便对比试验
             random.shuffle(npz_files)
@@ -105,7 +119,8 @@ class MotionLoader:
             else:
                 # 采样后保持排序顺序：先按motion号排序，再按z_scale排序
                 sampled_files = sorted(random.sample(npz_files, motion_num))
-        elif self.cfg.distributed:
+
+        if self.cfg.distributed:
             total_motion_num = len(npz_files)
             subset_motion_num = total_motion_num // self.cfg.total_rank
             start_idx = subset_motion_num * self.cfg.local_rank
@@ -115,16 +130,17 @@ class MotionLoader:
         else:
             print(f"加载全部共{len(npz_files)}个NPZ动作数据")
             sampled_files = npz_files
+
         return sampled_files
 
-    def load_and_cat_npz_with_filenames(self, dir_path, motion_num=25, device="cpu", dataset_txt=None):
+    def load_and_cat_npz_with_filenames(self, dir_path, motion_num=25, device="cpu", dataset_txt=None, dataset_txt_pointer=None):
         """
         加载 npz 文件，并按 batch 拼接，避免一次性占用 GPU 显存。
         batch_size: 每次拼接的帧数
         """
 
         batch_size = 1024
-        npz_file_paths = self._find_npz_files(dir_path, motion_num, dataset_txt)
+        npz_file_paths = self._find_npz_files(dir_path, motion_num, dataset_txt, dataset_txt_pointer)
         rel_npz_file_names = [os.path.relpath(f, dir_path) for f in npz_file_paths]
         tensor_keys = ["joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w"]
         tensor_lists = {k: [] for k in tensor_keys}
@@ -176,7 +192,7 @@ class MotionLoader:
 
     def resample_motionloader(self, device):
         data_dict, file_names, fps, frame_list = self.load_and_cat_npz_with_filenames(
-            self.cfg.motion_file, self.cfg.max_motion_num, device, self.cfg.dataset_txt
+            self.cfg.motion_file, self.cfg.max_motion_num, device, self.cfg.dataset_txt, self.cfg.dataset_txt_pointer
         )  # frame list是每个motion file长度的list
         self.fps = fps
 
@@ -1098,7 +1114,8 @@ class MotionCommandCfg(CommandTermCfg):
     max_motion_num: int = 999999
     resample_interval: int = 300000000000
     motion_file: str = MISSING
-    dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
+    dataset_txt: str = None      # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
+    dataset_txt_pointer: str = None # contains paths to dataset_txt files
 
     # reference motion obs configs
     anchor_body_name: str = MISSING
