@@ -25,7 +25,7 @@ NPROC_PER_NODE=1
 NUM_ENVS="${NUM_ENVS:-8192}"
 # Cap number of motions loaded to avoid dataset OOM (override if needed).
 MAX_MOTION_NUM="${MAX_MOTION_NUM:-25000}"
-MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/motions_crawl_stand_up.txt}"
+MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/motions_crawl_squat_kept.txt}"
 # Default run name = motion list filename without extension.
 RUN_NAME="${RUN_NAME:-$(basename "${MOTION_FILE_TXT}" .txt)}"
 
@@ -66,5 +66,5 @@ python -m torch.distributed.run \
   --logger wandb \
   --log_project_name=roban_flat \
   --resume=true \
-  --resume_path="logs/rsl_rl/roban_flat/0505_crawl_kept/model_28000.pt"
+  --resume_path="logs/rsl_rl/roban_flat/0509_crawl_squat_kept/model_76500.pt"
   # --distributed

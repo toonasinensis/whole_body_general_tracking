@@ -101,6 +101,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         filename="policy.onnx",
     )
     # TODO add metadata to onnx file
+    print("Onnx file exported successfully!")
     env.close()
 
 
