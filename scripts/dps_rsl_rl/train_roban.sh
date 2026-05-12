@@ -10,6 +10,8 @@ if [[ -z "${MASTER_PORT:-}" ]]; then
   export MASTER_PORT=$((29501 + RANDOM % 2000))
 fi
 echo "[INFO] MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT}"
+# USE customed rsl_rl
+export PYTHONPATH=/home/zhangqiqi/workspace/whole_body_general_tracking/rsl_rl:$PYTHONPATH
 
 # Always run under wt_env unless caller already activated an environment.
 # if [[ -z "${CONDA_DEFAULT_ENV:-}" || "${CONDA_DEFAULT_ENV}" != "wt_env" ]]; then
@@ -19,13 +21,13 @@ echo "[INFO] MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT}"
 
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 bash scripts/dps_rsl_rl/train_roban.sh
-NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 # PPO memory scales ~linearly with NUM_ENVS; 12288 is very likely to OOM on 24GB.
 # Override at runtime: NUM_ENVS=4096 bash scripts/dps_rsl_rl/train_roban.sh
 NUM_ENVS="${NUM_ENVS:-8192}"
 # Cap number of motions loaded to avoid dataset OOM (override if needed).
-MAX_MOTION_NUM="${MAX_MOTION_NUM:-20000}"
-MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/motions_crawl_squat_kept.txt}"
+MAX_MOTION_NUM="${MAX_MOTION_NUM:-5000}"
+MOTION_FILE_TXT="${MOTION_FILE_TXT:-data/roban_motions_list/motions_all_kept.txt}"
 # Optional pointer file for distributed loading. Each line should be a dataset txt path;
 # rank i uses line i through commands.motion.dataset_txt_pointer.
 MOTION_FILE_TXT_POINTER="${MOTION_FILE_TXT_POINTER:-data/roban_motions_list/motion_txt_list.txt}"
