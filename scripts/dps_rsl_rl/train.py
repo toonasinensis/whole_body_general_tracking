@@ -95,6 +95,7 @@ sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+
 """Rest everything follows."""
 
 import gymnasium as gym
@@ -173,9 +174,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.commands.motion.distributed = True
         env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
         env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
-
+        # 
         agent_cfg.device = args_cli.device
-
         # set seed to have diversity in different threads
         seed = agent_cfg.seed + app_launcher.local_rank
         env_cfg.seed = seed
