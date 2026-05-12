@@ -10,8 +10,8 @@ if [[ -z "${MASTER_PORT:-}" ]]; then
   export MASTER_PORT=$((29501 + RANDOM % 2000))
 fi
 echo "[INFO] MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT}"
-# USE customed rsl_rl
-export PYTHONPATH=/home/zhangqiqi/workspace/whole_body_general_tracking/rsl_rl:$PYTHONPATH
+# NOTE USE your customized rsl_rl path here
+export PYTHONPATH="/home/leju/workspace/sonic/rsl_rl:${PYTHONPATH:-}"
 
 # Always run under wt_env unless caller already activated an environment.
 # if [[ -z "${CONDA_DEFAULT_ENV:-}" || "${CONDA_DEFAULT_ENV}" != "wt_env" ]]; then
@@ -21,7 +21,7 @@ export PYTHONPATH=/home/zhangqiqi/workspace/whole_body_general_tracking/rsl_rl:$
 
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 bash scripts/dps_rsl_rl/train_roban.sh
-NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 # PPO memory scales ~linearly with NUM_ENVS; 12288 is very likely to OOM on 24GB.
 # Override at runtime: NUM_ENVS=4096 bash scripts/dps_rsl_rl/train_roban.sh
 NUM_ENVS="${NUM_ENVS:-8192}"
@@ -72,8 +72,8 @@ CMD=(
   --run_name="${RUN_NAME}"
   --max_motion_num="${MAX_MOTION_NUM}"
   --fail_count_save_interval="${FAIL_COUNT_SAVE_INTERVAL}"
-  --logger "${LOGGER:-wandb}"
-  --log_project_name="${LOG_PROJECT_NAME:-roban_flat}"
+  # --logger "${LOGGER:-wandb}"
+  # --log_project_name="${LOG_PROJECT_NAME:-roban_flat}"
   --distributed
 )
 

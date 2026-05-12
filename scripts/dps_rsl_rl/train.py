@@ -111,8 +111,10 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
+
+from rsl_rl.env import IsaaclabVecEnvWrapper
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
@@ -237,7 +239,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env = multi_agent_to_single_agent(env)
 
     # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env)
+    env = IsaaclabVecEnvWrapper(env)
     # create runner from rsl-rl
     runner = MotionDeparseOnPolicyRunner(
         env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name

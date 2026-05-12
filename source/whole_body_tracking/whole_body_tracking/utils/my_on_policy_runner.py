@@ -51,6 +51,7 @@ class MotionDeparseOnPolicyRunner(DeparseOnPolicyRunner):
         self.registry_name = registry_name
 
     def save(self, path: str, infos: dict | None = None) -> None:
+        # avoid updating models to wandb storage
         if os.environ.get("WANDB_LOG_CHECKPOINTS", "1").strip().lower() in ("0", "false", "no", "off"):
             real_save_model = self.logger.save_model
             self.logger.save_model = lambda *args, **kwargs: None
@@ -62,6 +63,7 @@ class MotionDeparseOnPolicyRunner(DeparseOnPolicyRunner):
             super().save(path, infos)
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
+        # avoid updating models to wandb storage
         if (
             os.environ.get("WANDB_LOG_GIT_FILES", "1").strip().lower() in ("0", "false", "no", "off")
             and str(self.cfg.get("logger", "")).lower() == "wandb"
