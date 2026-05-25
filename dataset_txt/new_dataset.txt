@@ -479,7 +479,6 @@
 210707/walk_forward_injured_L_leg_test_weight_001__A417.npz
 210707/walk_forward_injured_L_leg_test_weight_001__A417_M.npz
 210707/walk_forward_injured_torso_001__A005.npz
-210707/walk_forward_injured_torso_001__A005_M.npz
 210707/walk_forward_injured_torso_001__A006.npz
 210707/walk_forward_injured_torso_001__A006_M.npz
 210707/walk_forward_injured_torso_001__A417.npz

@@ -3,14 +3,17 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import copy
+import json
 import os
 import torch
 from typing import cast
 
 import onnx
+from rsl_rl.models.mlp_model import MLPModel
 
 from isaaclab.envs import ManagerBasedRLEnv
-from rsl_rl.models.mlp_model import MLPModel
+
 
 def export_motion_policy_as_onnx(
     env: ManagerBasedRLEnv,
@@ -23,6 +26,43 @@ def export_motion_policy_as_onnx(
         os.makedirs(path, exist_ok=True)
     policy_exporter = _OnnxMotionPolicyExporter(env, actor, verbose)
     policy_exporter.export(path, filename)
+
+
+def export_grouped_motion_policy_as_onnx(
+    env,
+    actor: torch.nn.Module,
+    path: str,
+    filename="policy.onnx",
+    verbose=False,
+    metadata: dict | None = None,
+) -> str:
+    """Export a policy that consumes named observation groups."""
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+    policy_exporter = _GroupedOnnxMotionPolicyExporter(env, actor, verbose)
+    onnx_path = policy_exporter.export(path, filename)
+    if metadata is not None:
+        append_onnx_metadata(onnx_path, metadata)
+    return onnx_path
+
+
+def resolve_policy_observation_groups(actor: torch.nn.Module, obs) -> list[str]:
+    """Return observation groups consumed by the policy actor in export order."""
+    module = getattr(actor, "backbone", actor)
+    groups = getattr(module, "obs_groups", None)
+    if groups is None:
+        groups = getattr(actor, "obs_groups", None)
+    if groups is None:
+        return list(obs.keys())
+
+    groups = list(groups)
+    obs_keys = set(obs.keys())
+    missing = [name for name in groups if name not in obs_keys]
+    if missing:
+        raise KeyError(
+            f"Policy expects observation groups {missing}, but env observations only have {list(obs.keys())}."
+        )
+    return groups
 
 
 # class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
@@ -62,6 +102,7 @@ def export_motion_policy_as_onnx(
 #             output_names=["actions"],
 #             dynamic_axes={},
 #         )
+
 
 class _OnnxMotionPolicyExporter(torch.nn.Module):
     # OnnxExporter can merge multiple NNs through defining the forward function in the class
@@ -107,6 +148,60 @@ class _OnnxMotionPolicyExporter(torch.nn.Module):
         )
 
 
+class _GroupedOnnxMotionPolicyExporter(torch.nn.Module):
+    """ONNX wrapper for ActorModel/MyModel policies with TensorDict observations."""
+
+    def __init__(self, env, actor: torch.nn.Module, verbose=False):
+        super().__init__()
+        assert not actor.is_recurrent, "The actor is recurrent, which is not supported for this ONNX export"
+        self.actor = copy.deepcopy(actor).cpu().eval()
+        self.verbose = verbose
+        obs = env.get_observations().detach().cpu()
+        self.input_names = resolve_policy_observation_groups(actor, obs)
+        self.input_shapes = {name: tuple(obs[name].shape[1:]) for name in self.input_names}
+
+    def forward(self, *inputs: torch.Tensor) -> torch.Tensor:
+        from tensordict import TensorDict
+
+        batch_size = inputs[0].shape[0]
+        obs = TensorDict({name: value for name, value in zip(self.input_names, inputs)}, batch_size=[batch_size])
+        output = self.actor(obs)
+        if isinstance(output, dict):
+            return output["actions"]
+        return output
+
+    def export(self, path, filename) -> str:
+        self.to("cpu")
+        dummy_inputs = tuple(torch.zeros((1, *self.input_shapes[name])) for name in self.input_names)
+        onnx_path = os.path.join(path, filename)
+        torch.onnx.export(
+            self,
+            dummy_inputs,
+            onnx_path,
+            export_params=True,
+            opset_version=17,
+            verbose=self.verbose,
+            input_names=self.input_names,
+            output_names=["actions"],
+            dynamic_axes={name: {0: "batch"} for name in self.input_names} | {"actions": {0: "batch"}},
+        )
+        return onnx_path
+
+
+def append_onnx_metadata(onnx_path: str, metadata: dict) -> None:
+    """Append JSON-friendly metadata to an ONNX file."""
+    model = onnx.load(onnx_path)
+    existing_keys = {entry.key for entry in model.metadata_props}
+    for key, value in metadata.items():
+        if key in existing_keys:
+            continue
+        entry = onnx.StringStringEntryProto()
+        entry.key = key
+        entry.value = json.dumps(value) if isinstance(value, (dict, list, tuple)) else str(value)
+        model.metadata_props.append(entry)
+    onnx.save(model, onnx_path)
+
+
 def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
     fmt = f"{{:.{decimals}f}}"
     return delimiter.join(
@@ -116,7 +211,7 @@ def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
 
 def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filename="policy.onnx") -> None:
     onnx_path = os.path.join(path, filename)
-    
+
     # IsaacLab terms sometimes store scalars as plain floats; normalize to a JSON/CSV-friendly value.
     joint_pos_term = env.action_manager.get_term("joint_pos")
     action_scale = getattr(joint_pos_term, "_scale", None)

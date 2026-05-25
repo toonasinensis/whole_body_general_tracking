@@ -1,6 +1,8 @@
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.utils import configclass
 
 from whole_body_tracking.robots.g1 import G1_ACTION_SCALE, G1_CYLINDER_CFG
+from whole_body_tracking.tasks.tracking import mdp
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
 
 
@@ -28,6 +30,11 @@ class G1FlatEnvCfg(TrackingEnvCfg):
             "right_elbow_link",
             "right_wrist_yaw_link",
         ]
+        self.events.delayed_termination = EventTerm(
+            func=mdp.install_delayed_termination,
+            mode="startup",
+            params={"delay_reset_env_ratio": 0.4, "max_delay_steps": 250},
+        )
 
 
 @configclass

@@ -4,6 +4,7 @@ import torch
 from typing import TYPE_CHECKING
 
 import isaaclab.utils.math as math_utils
+from isaaclab.managers import TerminationManager
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -13,6 +14,76 @@ from isaaclab.managers import SceneEntityCfg
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
 from whole_body_tracking.tasks.tracking.mdp.rewards import _get_body_indexes
+
+
+class DelayedTerminationManager(TerminationManager):
+    """Wrap ``TerminationManager`` and delay early terminations for a subset of envs."""
+
+    def __init__(
+        self,
+        base: TerminationManager,
+        delay_env_mask: torch.Tensor,
+        max_delay_steps: int,
+    ) -> None:
+        self.__dict__.update(base.__dict__)
+        self._delay_env_mask = delay_env_mask
+        self._delay_counters = torch.zeros_like(delay_env_mask, dtype=torch.long)
+        self._max_delay_steps = int(max_delay_steps)
+
+    def reset(self, env_ids=None) -> dict[str, torch.Tensor]:
+        extras = super().reset(env_ids=env_ids)
+        if env_ids is None:
+            env_ids = slice(None)
+        self._delay_counters[env_ids] = 0
+        return extras
+
+    def compute(self) -> torch.Tensor:
+        dones = super().compute()
+        if self._max_delay_steps <= 0:
+            return dones
+
+        # Delay only task failures. Time-outs should still reset immediately.
+        delay_and_terminated = self._delay_env_mask & self._terminated_buf
+        self._delay_counters[delay_and_terminated] += 1
+
+        not_ready = delay_and_terminated & (self._delay_counters < self._max_delay_steps)
+        self._terminated_buf[not_ready] = False
+
+        ready = delay_and_terminated & (self._delay_counters >= self._max_delay_steps)
+        self._delay_counters[ready] = 0
+
+        self._delay_counters[self._delay_env_mask & ~self._terminated_buf & ~not_ready] = 0
+        return self._truncated_buf | self._terminated_buf
+
+
+def install_delayed_termination(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor | None,
+    delay_reset_env_ratio: float = 0.0,
+    max_delay_steps: int = 0,
+) -> None:
+    """Startup event that installs delayed termination on a random subset of envs."""
+    del env_ids  # startup event applies globally
+
+    if isinstance(env.termination_manager, DelayedTerminationManager):
+        return
+
+    num_delay = int(env.num_envs * delay_reset_env_ratio)
+    if num_delay <= 0 or max_delay_steps <= 0:
+        return
+
+    delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    delay_indices = torch.randperm(env.num_envs, device=env.device)[:num_delay]
+    delay_mask[delay_indices] = True
+    env.termination_manager = DelayedTerminationManager(
+        base=env.termination_manager,
+        delay_env_mask=delay_mask,
+        max_delay_steps=max_delay_steps,
+    )
+    print(
+        "[install_delayed_termination] DelayedTerminationManager installed: "
+        f"{num_delay}/{env.num_envs} envs, max_delay_steps={max_delay_steps}"
+    )
 
 
 def bad_anchor_pos(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:

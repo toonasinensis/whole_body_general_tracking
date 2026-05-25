@@ -268,7 +268,11 @@ class MotionCommand(CommandTerm):
     def has_smpl_data(self) -> bool:
         if not hasattr(self, "motion"):
             return False
-        return self.motion.smpl_joints is not None and self.motion.smpl_transl is not None
+        return (
+            self.motion.smpl_joints is not None
+            and self.motion.smpl_transl is not None
+            and self.motion.smpl_poses is not None
+        )
 
     @property
     def smpl_joints(self) -> torch.Tensor:
@@ -732,8 +736,8 @@ class MotionCommand(CommandTerm):
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
         root_pos[env_ids] += rand_samples[:, 0:3]
-        # orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        # root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
+        orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
+        root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
         range_list = [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)

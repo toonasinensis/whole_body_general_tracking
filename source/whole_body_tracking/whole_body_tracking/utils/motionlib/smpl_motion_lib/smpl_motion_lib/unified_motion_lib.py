@@ -16,6 +16,7 @@ import os
 import random
 import torch
 import warnings
+import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 from tqdm import tqdm
@@ -26,6 +27,13 @@ from .loader import MotionData, load_motion_file
 from .motion_lib import SmplMotionLib
 
 _ROBOT_KEYS = ("joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w")
+
+
+def _read_npz_fps(raw: np.lib.npyio.NpzFile, path: str) -> float:
+    fps = np.asarray(raw["fps"], dtype=np.float32).reshape(-1)
+    if fps.size == 0:
+        raise ValueError(f"{path}: empty fps field")
+    return float(fps[0])
 
 
 class UnifiedMotionLib:
@@ -112,7 +120,9 @@ class UnifiedMotionLib:
 
         smpl_dir = getattr(cfg, "smpl_file_path", None)
         if smpl_dir and Path(smpl_dir).is_dir():
-            self._load_paired(npz_files, smpl_dir, cfg.motion_file, target_fps)
+            loaded_paired = self._load_paired(npz_files, smpl_dir, cfg.motion_file, target_fps)
+            if not loaded_paired:
+                self._load_robot(npz_files, cfg.motion_file, target_fps)
         else:
             self._load_robot(npz_files, cfg.motion_file, target_fps)
 
@@ -140,7 +150,28 @@ class UnifiedMotionLib:
         if dataset_txt is not None:
             with open(dataset_txt) as f:
                 relative_paths = [line.strip() for line in f if line.strip()]
-            npz_files = [dir_path + "/" + p for p in relative_paths]
+            npz_files: list[str] = []
+            skipped = 0
+            for rel_path in relative_paths:
+                candidate = Path(rel_path)
+                if not candidate.is_absolute():
+                    candidate = Path(dir_path) / rel_path
+
+                if candidate.suffix.lower() != ".npz":
+                    warnings.warn(f"Skip non-npz entry in dataset_txt: {rel_path}")
+                    skipped += 1
+                    continue
+                if not candidate.is_file():
+                    warnings.warn(f"Skip missing npz file in dataset_txt: {candidate}")
+                    skipped += 1
+                    continue
+
+                npz_files.append(str(candidate))
+
+            if not npz_files:
+                raise FileNotFoundError(
+                    f"No valid .npz files found from dataset_txt={dataset_txt}. Skipped entries: {skipped}"
+                )
             random.seed(42)
             random.shuffle(npz_files)
         else:
@@ -182,18 +213,42 @@ class UnifiedMotionLib:
         robot_lists: dict[str, list[torch.Tensor]] = {k: [] for k in _ROBOT_KEYS}
         frame_counts: list[int] = []
         rel_names: list[str] = []
+        skipped = 0
+        first_errors: list[str] = []
 
         for p in tqdm(npz_files, desc="Loading robot NPZ"):
-            raw = np.load(str(p), allow_pickle=True)
-            npz_fps = float(raw["fps"])
-            tensors = {k: torch.from_numpy(np.asarray(raw[k], dtype=np.float32)) for k in _ROBOT_KEYS}
-            if abs(npz_fps - target_fps) > 1e-3:
-                tensors = {k: interpolate_linear(v, npz_fps, target_fps) for k, v in tensors.items()}
-            n = tensors["joint_pos"].shape[0]
-            for k in _ROBOT_KEYS:
-                robot_lists[k].append(tensors[k][:n])
-            frame_counts.append(n)
-            rel_names.append(os.path.relpath(str(p), base_dir))
+            try:
+                raw = np.load(str(p), allow_pickle=True)
+                npz_fps = _read_npz_fps(raw, str(p))
+                tensors = {k: torch.from_numpy(np.asarray(raw[k], dtype=np.float32)) for k in _ROBOT_KEYS}
+                if abs(npz_fps - target_fps) > 1e-3:
+                    tensors = {k: interpolate_linear(v, npz_fps, target_fps) for k, v in tensors.items()}
+                n = tensors["joint_pos"].shape[0]
+                if n <= 0:
+                    raise ValueError("empty motion frames")
+
+                for k in _ROBOT_KEYS:
+                    robot_lists[k].append(tensors[k][:n])
+                frame_counts.append(n)
+                rel_names.append(os.path.relpath(str(p), base_dir))
+            except (zipfile.BadZipFile, KeyError, ValueError, OSError) as exc:
+                warnings.warn(f"Skip invalid npz '{p}': {exc}")
+                skipped += 1
+                if len(first_errors) < 5:
+                    first_errors.append(f"{p}: {exc}")
+
+        if not frame_counts:
+            details = "\n  - ".join(first_errors) if first_errors else "No readable files."
+            raise RuntimeError(
+                "No valid robot npz motions were loaded. "
+                f"Total input files: {len(npz_files)}, skipped: {skipped}.\n"
+                f"First errors:\n  - {details}"
+            )
+
+        if skipped > 0:
+            warnings.warn(
+                f"[UnifiedMotionLib] Loaded {len(frame_counts)}/{len(npz_files)} robot npz files, skipped {skipped}."
+            )
 
         self._set_robot_tensors(robot_lists, frame_counts, rel_names, target_fps)
 
@@ -203,7 +258,7 @@ class UnifiedMotionLib:
         smpl_dir: str,
         base_dir: str,
         target_fps: float,
-    ) -> None:
+    ) -> bool:
         """Load paired robot NPZ + SMPL PKL files, aligned to the same frame count.
 
         For each valid pair:
@@ -220,11 +275,13 @@ class UnifiedMotionLib:
         common = sorted(set(robot_map) & set(smpl_map))
 
         if not common:
-            raise ValueError(
-                "No matching stems between NPZ dir and PKL dir.\n"
+            warnings.warn(
+                "No matching stems between NPZ files and SMPL PKL files. "
+                "Falling back to robot-only motion loading.\n"
                 f"  NPZ stems (first 5): {sorted(robot_map)[:5]}\n"
                 f"  PKL stems (first 5): {sorted(smpl_map)[:5]}"
             )
+            return False
 
         robot_lists: dict[str, list[torch.Tensor]] = {k: [] for k in _ROBOT_KEYS}
         valid_smpl_motions: list[MotionData] = []
@@ -235,7 +292,7 @@ class UnifiedMotionLib:
         for stem in tqdm(common, desc="Loading paired motions"):
             try:
                 raw = np.load(robot_map[stem], allow_pickle=True)
-                npz_fps = float(raw["fps"])
+                npz_fps = _read_npz_fps(raw, robot_map[stem])
                 tensors = {k: torch.from_numpy(np.asarray(raw[k], dtype=np.float32)) for k in _ROBOT_KEYS}
                 if abs(npz_fps - target_fps) > 1e-3:
                     tensors = {k: interpolate_linear(v, npz_fps, target_fps) for k, v in tensors.items()}
@@ -274,7 +331,10 @@ class UnifiedMotionLib:
                 skipped += 1
 
         if not frame_counts:
-            raise RuntimeError("No paired motions loaded successfully.")
+            warnings.warn(
+                "No paired motions loaded successfully after filtering. Falling back to robot-only motion loading."
+            )
+            return False
 
         print(f"[UnifiedMotionLib] Loaded {len(frame_counts)}/{len(common)} paired motions, skipped {skipped}")
 
@@ -287,6 +347,8 @@ class UnifiedMotionLib:
 
         if self.device != "cpu":
             self._smpl_lib.to_device(self.device)
+
+        return True
 
     # ------------------------------------------------------------------
     # Internal helpers

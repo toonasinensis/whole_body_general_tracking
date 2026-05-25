@@ -229,12 +229,53 @@ class ObservationsCfg:
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         actions = ObsTerm(func=mdp.last_action)
 
+    @configclass
+    class AmpCfg(ObsGroup):
+        body_pos_b = ObsTerm(
+            func=mdp.amp_robot_body_pos_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+        body_ori_b = ObsTerm(
+            func=mdp.amp_robot_body_ori_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+        body_lin_vel_b = ObsTerm(
+            func=mdp.amp_robot_body_lin_vel_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+        body_ang_vel_b = ObsTerm(
+            func=mdp.amp_robot_body_ang_vel_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+
+        def __post_init__(self):
+            self.history_length = 1
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
     # observation groups
     # policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
     rbt_cmd_mf: RbtCmdMfCfg = RbtCmdMfCfg()
     smpl_cmd_mf: SmplCmdMfCfg = SmplCmdMfCfg()
     prop: PropCfg = PropCfg()
+    amp: AmpCfg | None = None
 
 
 @configclass

@@ -1,7 +1,24 @@
 from isaaclab.utils import configclass
 
 from whole_body_tracking.robots.g1 import G1_ACTION_SCALE, G1_CYLINDER_CFG
-from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
+from whole_body_tracking.tasks.tracking.tracking_env_cfg import ObservationsCfg, TrackingEnvCfg
+
+G1_AMP_ANCHOR_BODY_NAME = "torso_link"
+G1_AMP_BODY_NAMES = [
+    "pelvis",
+    "left_hip_roll_link",
+    "left_knee_link",
+    "left_ankle_roll_link",
+    "right_hip_roll_link",
+    "right_knee_link",
+    "right_ankle_roll_link",
+    "left_shoulder_roll_link",
+    "left_elbow_link",
+    "left_wrist_yaw_link",
+    "right_shoulder_roll_link",
+    "right_elbow_link",
+    "right_wrist_yaw_link",
+]
 
 
 @configclass
@@ -28,6 +45,11 @@ class G1FlatEnvCfg(TrackingEnvCfg):
             "right_elbow_link",
             "right_wrist_yaw_link",
         ]
+        # self.events.delayed_termination = EventTerm(
+        #     func=mdp.install_delayed_termination,
+        #     mode="startup",
+        #     params={"delay_reset_env_ratio": 1.0, "max_delay_steps": 250},
+        # )
 
 
 @configclass
@@ -36,3 +58,19 @@ class G1FlatWoStateEstimationEnvCfg(G1FlatEnvCfg):
         super().__post_init__()
         self.observations.policy.motion_anchor_pos_b = None
         self.observations.policy.base_lin_vel = None
+
+
+@configclass
+class G1FlatAMPEnvCfg(G1FlatEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.amp = ObservationsCfg.AmpCfg()
+        for term in (
+            self.observations.amp.body_pos_b,
+            self.observations.amp.body_ori_b,
+            self.observations.amp.body_lin_vel_b,
+            self.observations.amp.body_ang_vel_b,
+        ):
+            term.params["asset_name"] = "robot"
+            term.params["anchor_body_name"] = G1_AMP_ANCHOR_BODY_NAME
+            term.params["body_names"] = tuple(G1_AMP_BODY_NAMES)

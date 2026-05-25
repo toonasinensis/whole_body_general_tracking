@@ -20,7 +20,7 @@ conda run -n my_env python preprocess/test_mimic_motions_viser.py \
 
   python preprocess/test_mimic_motions_viser.py \
     --robot_cfg g1 \
-    --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/high_jump.txt \
+    --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt \
     --motion_dir /home/thl/Documents/g1-mimic-npz
 
 """
@@ -338,7 +338,7 @@ def pt_colors(num_pts: int, selected: bool) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     args = parse_args()
     preset = ROBOT_PRESETS[args.robot_cfg]
     body_names: list[str] = list(preset["body_names"])
@@ -529,6 +529,9 @@ def main() -> None:
     # Animation loop
     # ------------------------------------------------------------------
     frame_cursor = np.zeros(len(motions), dtype=np.float64)
+    last_frame_idx = np.full(len(motions), -1, dtype=np.int64)  # track rendered frame per robot
+    last_sel = -1
+    last_show_labels = True
     t_prev = time.time()
 
     print(f"[INFO] viser running at http://localhost:{args.port}")
@@ -541,52 +544,73 @@ def main() -> None:
             t_prev = t_now
 
             if playing.value:
+                spd = float(speed.value)
                 for i, motion in enumerate(motions):
-                    frame_cursor[i] += float(speed.value) * motion.fps * dt
+                    frame_cursor[i] += spd * motion.fps * dt
 
-            for i, motion in enumerate(motions):
-                T = int(motion.body_pos.shape[0])
-                if T == 0:
-                    continue
-                t = int(frame_cursor[i]) % T
-                body = motion.body_pos[t]
-                anchor_pos = body[anchor_idx]
-                is_sel = i == selected_idx["value"]
-                h = handles[i]
+            sel = selected_idx["value"]
+            prev_sel = last_sel
+            sel_changed = sel != prev_sel
+            last_sel = sel
 
-                if use_mesh:
-                    # root pose = grid_offset + (anchor_pos – anchor at t=0)
-                    root_pos = offsets[i].copy()
-                    root_pos[:2] += (anchor_pos - motion.anchor_origin)[:2]
-                    root_pos[2] = anchor_pos[2]
+            labels_visible = bool(show_labels.value)
+            labels_changed = labels_visible != last_show_labels
+            last_show_labels = labels_visible
 
-                    # URDF quaternion: body_quat_w is (w, x, y, z) as stored by Isaac
-                    quat_wxyz = motion.body_quat[t, anchor_idx]  # [w, x, y, z]
+            # Batch all WebSocket messages into a single send per frame.
+            with server.atomic():
+                for i, motion in enumerate(motions):
+                    T = int(motion.body_pos.shape[0])
+                    if T == 0:
+                        continue
+                    t = int(frame_cursor[i]) % T
+                    is_sel = i == sel
+                    # Color changes only matter for skeleton mode and only affect the
+                    # previously-selected and newly-selected robot.
+                    affects_color = sel_changed and not use_mesh and (i == sel or i == prev_sel)  # noqa: SIM109
+                    frame_changed = t != last_frame_idx[i]
 
-                    h.urdf_base_frame.position = tuple(root_pos.tolist())
-                    h.urdf_base_frame.wxyz = tuple(quat_wxyz.tolist())
-                    h.frame.position = tuple((root_pos + np.array([0, 0, 0], dtype=np.float32)).tolist())
+                    if not frame_changed and not affects_color and not labels_changed:
+                        continue
 
-                    if npz_to_urdf_perm is not None:
-                        h.viser_urdf.update_cfg(motion.joint_pos[t][npz_to_urdf_perm])
-                else:
-                    body_w = body.copy()
-                    body_w[:, :2] += offsets[i, :2]
-                    seg = body_w[edge_idx]
-                    h.frame.position = tuple(body_w[anchor_idx].tolist())
-                    h.lines.points = seg
-                    h.lines.colors = seg_colors(edge_idx.shape[0], is_sel)
-                    h.points.points = body_w
-                    h.points.colors = pt_colors(body_w.shape[0], is_sel)
+                    h = handles[i]
 
-                # Keep label above the robot's head
-                label_pos = offsets[i].copy()
-                label_pos[:2] += (anchor_pos - motion.anchor_origin)[:2]
-                label_pos[2] = anchor_pos[2] + 1.2
-                h.label.position = tuple(label_pos.tolist())
-                h.label.visible = bool(show_labels.value)
+                    if frame_changed:
+                        last_frame_idx[i] = t
+                        body = motion.body_pos[t]
+                        anchor_pos = body[anchor_idx]
 
-            time.sleep(1.0 / 60.0)
+                        if use_mesh:
+                            root_pos = offsets[i].copy()
+                            root_pos[:2] += (anchor_pos - motion.anchor_origin)[:2]
+                            root_pos[2] = anchor_pos[2]
+                            quat_wxyz = motion.body_quat[t, anchor_idx]  # [w, x, y, z]
+                            h.urdf_base_frame.position = tuple(root_pos.tolist())
+                            h.urdf_base_frame.wxyz = tuple(quat_wxyz.tolist())
+                            h.frame.position = tuple(root_pos.tolist())
+                            if npz_to_urdf_perm is not None:
+                                h.viser_urdf.update_cfg(motion.joint_pos[t][npz_to_urdf_perm])
+                        else:
+                            body_w = body.copy()
+                            body_w[:, :2] += offsets[i, :2]
+                            seg = body_w[edge_idx]
+                            h.frame.position = tuple(body_w[anchor_idx].tolist())
+                            h.lines.points = seg
+                            h.points.points = body_w
+
+                        label_pos = offsets[i].copy()
+                        label_pos[:2] += (anchor_pos - motion.anchor_origin)[:2]
+                        label_pos[2] = anchor_pos[2] + 1.2
+                        h.label.position = tuple(label_pos.tolist())
+
+                    if affects_color:
+                        h.lines.colors = seg_colors(edge_idx.shape[0], is_sel)
+                        h.points.colors = pt_colors(len(body_names), is_sel)
+
+                    if labels_changed:
+                        h.label.visible = labels_visible
+
+            time.sleep(1.0 / 30.0)
 
     except KeyboardInterrupt:
         pass
