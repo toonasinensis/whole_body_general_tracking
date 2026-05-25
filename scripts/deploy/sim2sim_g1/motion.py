@@ -34,22 +34,29 @@ class MotionData:
         )
 
 
-def first_motion_file(motion_file: str, dataset_txt: str | None) -> str:
+def motion_files(motion_file: str, dataset_txt: str | None) -> list[str]:
     root = Path(motion_file)
     if dataset_txt:
+        files: list[str] = []
         for line in Path(dataset_txt).read_text().splitlines():
-            line = line.strip()
+            line = line.split("#", 1)[0].strip()
             if not line:
                 continue
             p = Path(line)
-            return str(p if p.is_absolute() else root / p)
+            files.append(str(p if p.is_absolute() else root / p))
+        if files:
+            return files
         raise ValueError(f"No motion entries in dataset txt: {dataset_txt}")
     if root.is_file():
-        return str(root)
+        return [str(root)]
     files = sorted(root.rglob("*.npz"))
     if not files:
         raise FileNotFoundError(f"No .npz files found under: {motion_file}")
-    return str(files[0])
+    return [str(path) for path in files]
+
+
+def first_motion_file(motion_file: str, dataset_txt: str | None) -> str:
+    return motion_files(motion_file, dataset_txt)[0]
 
 
 def future_indices(t: int, offsets: list[int], total: int) -> np.ndarray:
@@ -61,7 +68,11 @@ def motion_body_index(meta: dict, body_name: str | None = None) -> tuple[str, in
     name = body_name or meta.get("root_body_name") or body_names[0]
     if name not in body_names:
         raise ValueError(f"Motion body '{name}' is not in motion_body_names: {body_names}")
-    return name, body_names.index(name)
+    body_index = body_names.index(name)
+    motion_body_indices = meta.get("motion_body_indices")
+    if motion_body_indices is not None:
+        body_index = int(motion_body_indices[body_index])
+    return name, body_index
 
 
 def motion_frame_root_state(
@@ -140,8 +151,7 @@ def motion_groups(
 
 
 def motion_anchor_ori_mf(motion: MotionData, future: np.ndarray, meta: dict) -> np.ndarray:
-    body_names = list(meta["motion_body_names"])
-    anchor_idx = body_names.index(meta["anchor_body_name"])
+    _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
     return motion["body_quat_w"][future, anchor_idx, :]
 
 

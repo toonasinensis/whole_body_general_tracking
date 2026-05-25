@@ -8,7 +8,7 @@ TASK="${TASK:-FM-G1}"
 NUM_ENVS="${NUM_ENVS:-1}"
 RESUME_PATH="${RESUME_PATH:-${ROOT_DIR}/whole_body_tracking/logs/rsl_rl/g1_flat/2026-05-22_23-15-00/model_39000.pt}"
 MOTION_FILE="${MOTION_FILE:-/home/thl/Documents/g1-mimic-npz}"
-DATASET_TXT="${DATASET_TXT:-/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/fall.txt}"
+DATASET_TXT="${DATASET_TXT:-/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt}"
 SMPL_FILE_PATH="${SMPL_FILE_PATH:-/home/thl/Downloads/data/output/smpl_filtered}"
 ENCODER_MODE="${ENCODER_MODE:-robot}"
 ONNX_DIR="${ONNX_DIR:-$(dirname "${RESUME_PATH}")/exported}"
@@ -18,6 +18,8 @@ EXPORT_ONNX="${EXPORT_ONNX:-0}"
 RENDER="${RENDER:-1}"
 DEBUG_IMU="${DEBUG_IMU:-0}"
 SHOW_REFERENCE="${SHOW_REFERENCE:-1}"
+METRICS_CSV="${METRICS_CSV:-}"
+METRICS_TAG="${METRICS_TAG:-}"
 
 cd "${ROOT_DIR}"
 
@@ -59,6 +61,14 @@ if [[ "${SHOW_REFERENCE}" == "0" ]]; then
   REFERENCE_ARGS=(--no_show_reference)
 fi
 
+METRICS_ARGS=()
+if [[ -n "${METRICS_CSV}" ]]; then
+  METRICS_ARGS=(--metrics_csv "${METRICS_CSV}")
+fi
+if [[ -n "${METRICS_TAG}" ]]; then
+  METRICS_ARGS+=(--metrics_tag "${METRICS_TAG}")
+fi
+
 ${SIM2SIM_PYTHON} whole_body_tracking/scripts/deploy/sim2sim_g1_mujoco.py \
   --onnx_path "${ONNX_PATH}" \
   --motion_file "${MOTION_FILE}" \
@@ -66,4 +76,5 @@ ${SIM2SIM_PYTHON} whole_body_tracking/scripts/deploy/sim2sim_g1_mujoco.py \
   "${RENDER_ARGS[@]}" \
   "${IMU_DEBUG_ARGS[@]}" \
   "${REFERENCE_ARGS[@]}" \
+  "${METRICS_ARGS[@]}" \
   "$@"

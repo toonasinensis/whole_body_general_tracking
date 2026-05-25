@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import numpy as np
-import time
 
-from sim2sim_g1.math_utils import as_vector, quat_apply_inverse
-from sim2sim_g1.motion import MotionData, first_motion_file, motion_frame_root_state, motion_local_step_summary
+# import time
+from datetime import datetime
+from pathlib import Path
+
+from sim2sim_g1.math_utils import as_vector
+from sim2sim_g1.metrics import (
+    METRIC_NAMES,
+    MotionMetricAccumulator,
+    motion_tracking_metrics,
+    resolve_motion_body_indices,
+)
+from sim2sim_g1.motion import MotionData, motion_files, motion_frame_root_state, motion_local_step_summary
 from sim2sim_g1.mujoco_robot import G1_MJCF  # noqa: F401
 from sim2sim_g1.mujoco_robot import (  # print_joint_map,; name_to_joint_ids,
     action_to_target,
@@ -14,6 +24,7 @@ from sim2sim_g1.mujoco_robot import (  # print_joint_map,; name_to_joint_ids,
     initialize_default_pose,
     initialize_from_motion,
     name_to_actuator_ids,
+    name_to_body_ids,
     name_to_joint_qvel_addrs,
 )
 from sim2sim_g1.observations import (  # print_obs_layout,
@@ -34,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--motion_file", required=True)
     parser.add_argument("--dataset_txt", default=None)
     parser.add_argument("--xml_path", default=str(G1_MJCF))
-    parser.add_argument("--steps", type=int, default=2000)
+    parser.add_argument("--steps", type=int, default=20000000)
     parser.add_argument("--decimation", type=int, default=None)
     parser.add_argument("--kp", type=float, default=None, help="Override metadata joint stiffness with a scalar value.")
     parser.add_argument("--kd", type=float, default=None, help="Override metadata joint damping with a scalar value.")
@@ -89,6 +100,16 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Print MuJoCo rollout progress every N policy steps. Set <=0 to disable.",
     )
+    parser.add_argument(
+        "--metrics_csv",
+        default=None,
+        help=(
+            "CSV path for per-motion mean tracking metrics. Defaults to "
+            "<dataset_txt>.sim2sim_metrics[_tag]_<timestamp>.csv when --dataset_txt is set. "
+            "Set to an empty string to disable."
+        ),
+    )
+    parser.add_argument("--metrics_tag", default=None, help="Optional tag inserted into the default metrics CSV name.")
     args = parser.parse_args()
     if args.no_render:
         args.render = False
@@ -153,6 +174,92 @@ def print_motion_alignment_debug(
     print("====================================================")
 
 
+def _metrics_csv_path(args: argparse.Namespace) -> Path | None:
+    if args.metrics_csv == "":
+        return None
+    if args.metrics_csv is not None:
+        return Path(args.metrics_csv).expanduser()
+    if args.dataset_txt:
+        dataset_path = Path(args.dataset_txt).expanduser()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tag = _safe_filename_part(args.metrics_tag or "")
+        suffix = f".sim2sim_metrics_{timestamp}.csv" if not tag else f".sim2sim_metrics_{tag}_{timestamp}.csv"
+        return dataset_path.with_suffix(dataset_path.suffix + suffix)
+    return None
+
+
+def _safe_filename_part(value: str) -> str:
+    safe = []
+    for char in value.strip():
+        if char.isalnum() or char in ("-", "_", "."):
+            safe.append(char)
+        elif char.isspace():
+            safe.append("_")
+    return "".join(safe).strip("._-")
+
+
+def _write_metrics_csv(path: Path, rows: list[dict[str, float | int | str]]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["motion_index", "motion_file", "num_frames", "samples", *METRIC_NAMES]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _motion_meta_for_rollout(motion: MotionData, meta: dict, model, body_ids: np.ndarray) -> dict:
+    body_names = list(meta["motion_body_names"])
+    motion_body_indices = resolve_motion_body_indices(
+        motion_body_count=int(motion["body_pos_w"].shape[1]),
+        selected_body_count=len(body_names),
+        model_nbody=int(model.nbody),
+        body_ids=body_ids,
+    )
+    motion_meta = dict(meta)
+    motion_meta["motion_body_indices"] = motion_body_indices.tolist()
+    return motion_meta
+
+
+def _validate_motion_for_rollout(motion: MotionData, meta: dict, joint_count: int) -> None:
+    required = ("joint_pos", "body_pos_w", "body_quat_w")
+    missing = [name for name in required if name not in motion]
+    if missing:
+        raise ValueError(f"Motion {motion.path} is missing required fields: {missing}")
+    if int(motion["joint_pos"].shape[1]) != joint_count:
+        raise ValueError(
+            f"Motion {motion.path} joint_pos dim {motion['joint_pos'].shape[1]} "
+            f"does not match policy/MuJoCo joint dim {joint_count}."
+        )
+    motion_body_indices = np.asarray(meta["motion_body_indices"], dtype=np.int64)
+    body_dim = int(motion["body_pos_w"].shape[1])
+    quat_body_dim = int(motion["body_quat_w"].shape[1])
+    if body_dim != quat_body_dim or motion_body_indices.size == 0 or int(motion_body_indices.max()) >= body_dim:
+        raise ValueError(
+            f"Motion {motion.path} body dim cannot cover selected motion_body_indices "
+            f"{motion_body_indices.tolist()}: body_pos_w={motion['body_pos_w'].shape}, "
+            f"body_quat_w={motion['body_quat_w'].shape}."
+        )
+    anchor_name = meta["anchor_body_name"]
+    if anchor_name not in list(meta["motion_body_names"]):
+        raise ValueError(f"anchor_body_name '{anchor_name}' is not in motion_body_names.")
+
+
+def _new_reference_player(args, model, motion: MotionData, meta: dict, joint_qpos: np.ndarray):
+    if not (args.render and args.show_reference):
+        return None
+    alpha = float(np.clip(args.reference_alpha, 0.0, 1.0))
+    return ReferenceMotionPlayer(
+        model,
+        motion,
+        meta,
+        joint_qpos,
+        root_body_name=args.reference_root_body,
+        rgba=np.asarray([0.2, 0.7, 1.0, alpha], dtype=np.float32),
+    )
+
+
 def main() -> None:
     args = parse_args()
 
@@ -167,39 +274,40 @@ def main() -> None:
             "This script currently feeds zero SMPL observations."
         )
 
-    motion_path = first_motion_file(args.motion_file, args.dataset_txt)
-    print(f"[INFO] Motion: {motion_path}")
-    motion = MotionData(motion_path)
+    motion_paths = motion_files(args.motion_file, args.dataset_txt)
+    if not motion_paths:
+        raise ValueError("No motion files to run.")
+    metrics_csv_path = _metrics_csv_path(args)
+    print(f"[INFO] Motion count: {len(motion_paths)}")
+    if metrics_csv_path is not None:
+        print(f"[INFO] Metrics CSV: {metrics_csv_path}")
+
+    first_motion = MotionData(motion_paths[0])
+    motion = first_motion
+    print(f"[INFO] Motion 1/{len(motion_paths)}: {motion.path}")
     motion.print_config()
 
     model = mujoco.MjModel.from_xml_path(args.xml_path)
     model.opt.timestep = float(meta.get("sim_dt", model.opt.timestep))
     data = mujoco.MjData(model)
     joint_names = list(meta["action_joint_names"])
+    body_names = list(meta["motion_body_names"])
     # joint_ids = name_to_joint_ids(model, joint_names)
     actuator_ids = name_to_actuator_ids(model, joint_names)
     joint_qpos, joint_qvel = name_to_joint_qvel_addrs(model, joint_names)
+    body_ids = name_to_body_ids(model, body_names)
     imu_reader = ImuReader(
         model,
         quat_sensor_name=args.imu_quat_sensor,
         gyro_sensor_name=args.imu_gyro_sensor,
     )
-    reference_player = None
-    if args.render and args.show_reference:
-        alpha = float(np.clip(args.reference_alpha, 0.0, 1.0))
-        reference_player = ReferenceMotionPlayer(
-            model,
-            motion,
-            meta,
-            joint_qpos,
-            root_body_name=args.reference_root_body,
-            rgba=np.asarray([0.2, 0.7, 1.0, alpha], dtype=np.float32),
-        )
     torque_limits = np.asarray(model.actuator_ctrlrange[actuator_ids], dtype=np.float64)
 
+    motion_meta = _motion_meta_for_rollout(motion, meta, model, body_ids)
+    _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
     default_joint_pos = as_vector(meta, "default_joint_pos", len(joint_names), 0.0)
     if args.init_from_motion:
-        init_root_body = initialize_from_motion(data, motion, meta, joint_qpos, joint_qvel, args.init_root_body)
+        init_root_body = initialize_from_motion(data, motion, motion_meta, joint_qpos, joint_qvel, args.init_root_body)
         print(f"[INFO] Initialized MuJoCo state from motion frame 0 using root body: {init_root_body}")
     else:
         initialize_default_pose(data, meta, joint_names, joint_qpos)
@@ -208,8 +316,6 @@ def main() -> None:
     imu_reader.print_config()
     if args.debug_imu:
         print_imu_debug(data, imu_reader)
-    if reference_player is not None:
-        reference_player.print_config()
 
     action_scale = as_vector(meta, "action_scale", len(joint_names), 1.0)
     action_offset = as_vector(meta, "action_offset", len(joint_names), 0.0)
@@ -221,18 +327,18 @@ def main() -> None:
     )
 
     decimation = args.decimation or int(meta.get("decimation", 1))
-    last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
-    prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
     reference_update_interval = max(1, int(args.reference_update_interval))
     # print_obs_layout(meta, prop_history, input_names)
     if args.dry_run:
-        obs = build_obs(data, motion, 0, meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history)
+        last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
+        prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+        obs = build_obs(data, motion, 0, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history)
         validate_inputs(obs, input_names, meta)
         if args.debug_motion_alignment:
             print_motion_alignment_debug(
                 data,
                 motion,
-                meta,
+                motion_meta,
                 args.init_root_body,
                 joint_qpos,
                 joint_qvel,
@@ -245,15 +351,18 @@ def main() -> None:
     policy = OnnxPolicy(args.onnx_path)
     input_names = policy.input_names
     if args.debug_motion_alignment:
+        last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
         debug_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
-        debug_obs = build_obs(data, motion, 0, meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history)
+        debug_obs = build_obs(
+            data, motion, 0, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history
+        )
         validate_inputs(debug_obs, input_names, meta)
         debug_action = policy.run(debug_obs)
         debug_target = action_to_target(debug_action, action_scale, action_offset)
         print_motion_alignment_debug(
             data,
             motion,
-            meta,
+            motion_meta,
             args.init_root_body,
             joint_qpos,
             joint_qvel,
@@ -270,63 +379,112 @@ def main() -> None:
 
         viewer_cm = mujoco.viewer.launch_passive(model, data)
         viewer = viewer_cm.__enter__()
-        if reference_player is not None:
-            reference_player.draw(viewer, 0)
     else:
         print("[INFO] MuJoCo viewer disabled. Pass --render to watch the rollout.")
 
     print(
-        f"[INFO] Running MuJoCo sim2sim: steps={args.steps}, decimation={decimation}, "
+        f"[INFO] Running MuJoCo sim2sim: max_steps_per_motion={args.steps}, decimation={decimation}, "
         f"dt={model.opt.timestep:.6f}, render={args.render}"
     )
-    start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
+    metric_rows: list[dict[str, float | int | str]] = []
 
     try:
-        for step in range(args.steps):
-            t = min(step, motion["joint_pos"].shape[0] - 1)
-            obs = build_obs(data, motion, t, meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history)
-            validate_inputs(obs, input_names, meta)
-            raw_action = policy.run(obs)
-            target = action_to_target(raw_action, action_scale, action_offset)
-            last_action = raw_action
-            root_quat, _, _ = imu_reader.read(data)
-            root_delta_w = np.asarray(data.qpos[:3], dtype=np.float64) - start_root_pos
-            root_delta_b = quat_apply_inverse(root_quat, root_delta_w[None, :])[0]
-            if args.log_interval > 0 and (step == 0 or (step + 1) % args.log_interval == 0 or step == args.steps - 1):
-                target_delta = target - action_offset
-                print(
-                    f"[INFO] step {step + 1:>5}/{args.steps}: "
-                    f"root_delta_w={root_delta_w.tolist()}, "
-                    f"root_delta_b={root_delta_b.tolist()}, "
-                    f"raw_action_norm={np.linalg.norm(raw_action):.4f}, "
-                    f"target_delta_norm={np.linalg.norm(target_delta):.4f}, "
-                    f"qpos_target_err={np.linalg.norm(target - data.qpos[joint_qpos]):.4f}, "
-                    f"obs_prop_norm={np.linalg.norm(obs['prop']):.4f}"
-                )
-            if viewer is not None and reference_player is not None and step % reference_update_interval == 0:
-                reference_player.draw(viewer, t)
+        for motion_index, motion_path in enumerate(motion_paths):
+            if motion_index == 0:
+                motion = first_motion
+            else:
+                motion = MotionData(motion_path)
+                print(f"[INFO] Motion {motion_index + 1}/{len(motion_paths)}: {motion.path}")
+                motion.print_config()
+            motion_meta = _motion_meta_for_rollout(motion, meta, model, body_ids)
+            _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
 
-            time.sleep(decimation * model.opt.timestep)
-            if viewer is not None:
+            if args.init_from_motion:
+                init_root_body = initialize_from_motion(
+                    data, motion, motion_meta, joint_qpos, joint_qvel, args.init_root_body
+                )
+                print(f"[INFO] Aligned MuJoCo state to motion frame 0 using root body: {init_root_body}")
+            else:
+                initialize_default_pose(data, meta, joint_names, joint_qpos)
+                print("[INFO] Reset MuJoCo state to default standing pose.")
+            mujoco.mj_forward(model, data)
+
+            reference_player = _new_reference_player(args, model, motion, motion_meta, joint_qpos)
+            if reference_player is not None:
+                reference_player.print_config()
+            if viewer is not None and reference_player is not None:
+                reference_player.draw(viewer, 0)
                 viewer.sync()
 
-            for _ in range(decimation):
-                apply_pd_control(
-                    data,
-                    actuator_ids,
-                    joint_qpos,
-                    joint_qvel,
-                    target,
-                    kp,
-                    kd,
-                    torque_limits,
+            last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
+            prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+            # start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
+            rollout_steps = min(max(int(args.steps), 0), int(motion.num_frames))
+            accumulator = MotionMetricAccumulator(
+                motion_index=motion_index,
+                motion_file=motion.path,
+                num_frames=motion.num_frames,
+            )
+            print(
+                f"[INFO] Running motion {motion_index + 1}/{len(motion_paths)}: "
+                f"policy_steps={rollout_steps}, frames={motion.num_frames}"
+            )
+
+            for step in range(rollout_steps):
+                t = step
+                metrics = motion_tracking_metrics(model, data, motion, t, motion_meta, joint_qpos, joint_qvel, body_ids)
+                accumulator.update(metrics)
+
+                obs = build_obs(
+                    data, motion, t, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
                 )
-                mujoco.mj_step(model, data)
+                validate_inputs(obs, input_names, meta)
+                raw_action = policy.run(obs)
+                target = action_to_target(raw_action, action_scale, action_offset)
+                last_action = raw_action
+
+                if viewer is not None and reference_player is not None and step % reference_update_interval == 0:
+                    reference_player.draw(viewer, t)
+                # input("Press Enter to step the simulation...")  # Step on Enter key press
+                if viewer is not None:
+                    # time.sleep(decimation * model.opt.timestep)
+                    viewer.sync()
+
+                for _ in range(decimation):
+                    apply_pd_control(
+                        data,
+                        actuator_ids,
+                        joint_qpos,
+                        joint_qvel,
+                        target,
+                        kp,
+                        kd,
+                        torque_limits,
+                    )
+                    mujoco.mj_step(model, data)
+
+            row = accumulator.row()
+            metric_rows.append(row)
+            if metrics_csv_path is not None:
+                _write_metrics_csv(metrics_csv_path, metric_rows)
+                print(
+                    f"[INFO] Updated metrics CSV: {metrics_csv_path} ({len(metric_rows)}/{len(motion_paths)} motions)"
+                )
+            print(
+                "[INFO] Motion metrics mean: "
+                f"error_anchor_pos={float(row['error_anchor_pos']):.6f}, "
+                f"error_body_pos={float(row['error_body_pos']):.6f}, "
+                f"error_joint_pos={float(row['error_joint_pos']):.6f}, "
+                f"samples={int(row['samples'])}"
+            )
 
         print(
-            f"[INFO] sim2sim completed: policy_steps={args.steps}, "
-            f"sim_time={args.steps * decimation * model.opt.timestep:.3f}s"
+            f"[INFO] sim2sim completed: motions={len(motion_paths)}, "
+            f"policy_steps={sum(int(row['samples']) for row in metric_rows)}, "
+            f"sim_time={sum(int(row['samples']) for row in metric_rows) * decimation * model.opt.timestep:.3f}s"
         )
+        if metrics_csv_path is not None:
+            print(f"[INFO] Wrote per-motion mean metrics: {metrics_csv_path}")
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)

@@ -37,6 +37,9 @@ class ReferenceMotionPlayer:
                 f"Reference root body '{self.root_body_name}' is not in motion_body_names: {self.motion_body_names}"
             )
         self.root_body_index = self.motion_body_names.index(self.root_body_name)
+        motion_body_indices = meta.get("motion_body_indices")
+        if motion_body_indices is not None:
+            self.root_body_index = int(motion_body_indices[self.root_body_index])
         if int(motion["joint_pos"].shape[1]) != len(self.joint_qpos):
             raise ValueError(
                 f"Reference joint_pos dim {motion['joint_pos'].shape[1]} does not match MuJoCo joint dim "

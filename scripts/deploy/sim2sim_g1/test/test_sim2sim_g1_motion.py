@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sim2sim_g1.motion import MotionData, first_motion_file, future_indices, motion_groups
+from sim2sim_g1.motion import MotionData, first_motion_file, future_indices, motion_files, motion_groups
 
 
 def test_motion_data_preloads_npz(tmp_path) -> None:
@@ -28,6 +28,16 @@ def test_first_motion_file_uses_dataset_txt(tmp_path) -> None:
     dataset.write_text("a/b/demo.npz\n")
 
     assert first_motion_file(str(root), str(dataset)) == str(root / "a/b/demo.npz")
+
+
+def test_motion_files_expands_dataset_txt_and_ignores_comments(tmp_path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    dataset = tmp_path / "dataset.txt"
+    absolute = tmp_path / "absolute.npz"
+    dataset.write_text(f"\n# skipped\na/b/demo.npz\n{absolute}  # inline comment\n")
+
+    assert motion_files(str(root), str(dataset)) == [str(root / "a/b/demo.npz"), str(absolute)]
 
 
 def test_future_indices_clips_to_motion_length() -> None:
