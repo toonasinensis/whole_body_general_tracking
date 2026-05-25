@@ -232,12 +232,12 @@ def motion_anchor_pos_z(env: ManagerBasedEnv, command_name: str) -> torch.Tensor
 
 def motion_joint_pos_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
-    return command.joint_pos_future.view(env.num_envs, -1) * 0.0  # zero out for ablation
+    return command.joint_pos_future.view(env.num_envs, -1)  # zero out for ablation
 
 
 def motion_joint_vel_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
-    return command.joint_vel_future.view(env.num_envs, -1) * 0.0  # zero out for ablation
+    return command.joint_vel_future.view(env.num_envs, -1)  # zero out for ablation
 
 
 def motion_anchor_ori_b_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
@@ -248,7 +248,7 @@ def motion_anchor_ori_b_mf(env: ManagerBasedEnv, command_name: str) -> torch.Ten
         ref_root_quat.view(env.num_envs, command.num_future_frames, 4),
     )
     mat = matrix_from_quat(root_rot_dif)
-    root_rot_dif_l_mat = mat[..., :2].reshape(mat.shape[0], -1) * 0.0  # zero out for ablation
+    root_rot_dif_l_mat = mat[..., :2].reshape(mat.shape[0], -1)  # zero out for ablation
     return root_rot_dif_l_mat
 
 
