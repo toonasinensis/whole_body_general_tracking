@@ -5,14 +5,18 @@
 
 import copy
 import json
+import numbers
 import os
 import torch
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import onnx
 from rsl_rl.models.mlp_model import MLPModel
 
-from isaaclab.envs import ManagerBasedRLEnv
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+else:
+    ManagerBasedRLEnv = object
 
 
 def export_motion_policy_as_onnx(
@@ -42,7 +46,13 @@ def export_grouped_motion_policy_as_onnx(
     policy_exporter = _GroupedOnnxMotionPolicyExporter(env, actor, verbose)
     onnx_path = policy_exporter.export(path, filename)
     if metadata is not None:
-        append_onnx_metadata(onnx_path, metadata)
+        export_metadata = {
+            "input_names": policy_exporter.input_names,
+            "input_groups": policy_exporter.input_names,
+            "input_shapes": {name: list(shape) for name, shape in policy_exporter.input_shapes.items()},
+        }
+        export_metadata.update(metadata)
+        append_onnx_metadata(onnx_path, export_metadata)
     return onnx_path
 
 
@@ -166,9 +176,9 @@ class _GroupedOnnxMotionPolicyExporter(torch.nn.Module):
         batch_size = inputs[0].shape[0]
         obs = TensorDict({name: value for name, value in zip(self.input_names, inputs)}, batch_size=[batch_size])
         output = self.actor(obs)
-        if isinstance(output, dict):
-            return output["actions"]
-        return output
+        actions = output["actions"] if isinstance(output, dict) else output
+        input_guard = sum(value.reshape(batch_size, -1).sum(dim=1, keepdim=True) for value in inputs)
+        return actions + input_guard * 0.0
 
     def export(self, path, filename) -> str:
         self.to("cpu")
@@ -188,17 +198,44 @@ class _GroupedOnnxMotionPolicyExporter(torch.nn.Module):
         return onnx_path
 
 
+def _metadata_to_jsonable(value):
+    """Convert common numpy/torch values into JSON-serializable Python values."""
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - numpy is available in normal IsaacLab runs.
+        np = None
+
+    if torch.is_tensor(value):
+        value = value.detach().cpu()
+        return value.tolist() if value.ndim > 0 else value.item()
+    if isinstance(value, torch.Size):
+        return list(value)
+    if np is not None and isinstance(value, np.ndarray):
+        return value.tolist()
+    if np is not None and isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(_metadata_to_jsonable(k)): _metadata_to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_metadata_to_jsonable(item) for item in value]
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
 def append_onnx_metadata(onnx_path: str, metadata: dict) -> None:
     """Append JSON-friendly metadata to an ONNX file."""
     model = onnx.load(onnx_path)
-    existing_keys = {entry.key for entry in model.metadata_props}
+    existing = {entry.key: entry for entry in model.metadata_props}
     for key, value in metadata.items():
-        if key in existing_keys:
-            continue
-        entry = onnx.StringStringEntryProto()
-        entry.key = key
+        entry = existing.get(key)
+        if entry is None:
+            entry = model.metadata_props.add()
+            entry.key = key
+        value = _metadata_to_jsonable(value)
         entry.value = json.dumps(value) if isinstance(value, (dict, list, tuple)) else str(value)
-        model.metadata_props.append(entry)
     onnx.save(model, onnx_path)
 
 

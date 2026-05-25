@@ -1,1 +1,1 @@
-lafan/fallAndGetUp1_subject1.npz
+lafan/walk3_subject1.npz

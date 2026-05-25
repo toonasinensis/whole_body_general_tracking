@@ -1,383 +1,34 @@
 from __future__ import annotations
 
 import argparse
-import json
 import numpy as np
 import time
-from pathlib import Path
 
-import onnx
-
-G1_PROP_TERM_ORDER = ("projected_gravity", "base_ang_vel", "joint_pos", "joint_vel", "actions")
-
-G1_MJCF = (
-    Path(__file__).resolve().parents[2]
-    / "source/whole_body_tracking/whole_body_tracking/assets/unitree_description/mjcf/g1.xml"
+from sim2sim_g1.math_utils import as_vector, quat_apply_inverse
+from sim2sim_g1.motion import MotionData, first_motion_file, motion_frame_root_state, motion_local_step_summary
+from sim2sim_g1.mujoco_robot import G1_MJCF  # noqa: F401
+from sim2sim_g1.mujoco_robot import (  # print_joint_map,; name_to_joint_ids,
+    action_to_target,
+    apply_pd_control,
+    gains_from_metadata,
+    initialize_default_pose,
+    initialize_from_motion,
+    name_to_actuator_ids,
+    name_to_joint_qvel_addrs,
 )
-
-
-def _metadata(path: str) -> dict:
-    model = onnx.load(path)
-    out = {}
-    for entry in model.metadata_props:
-        try:
-            out[entry.key] = json.loads(entry.value)
-        except json.JSONDecodeError:
-            out[entry.key] = entry.value
-    return out
-
-
-def _onnx_input_names(path: str) -> list[str]:
-    model = onnx.load(path)
-    initializer_names = {initializer.name for initializer in model.graph.initializer}
-    return [inp.name for inp in model.graph.input if inp.name not in initializer_names]
-
-
-def _first_motion_file(motion_file: str, dataset_txt: str | None) -> str:
-    root = Path(motion_file)
-    if dataset_txt:
-        for line in Path(dataset_txt).read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            p = Path(line)
-            return str(p if p.is_absolute() else root / p)
-        raise ValueError(f"No motion entries in dataset txt: {dataset_txt}")
-    if root.is_file():
-        return str(root)
-    files = sorted(root.rglob("*.npz"))
-    if not files:
-        raise FileNotFoundError(f"No .npz files found under: {motion_file}")
-    return str(files[0])
-
-
-def _name_to_joint_qvel_addrs(model, joint_names: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    import mujoco
-
-    qpos_addrs = []
-    qvel_addrs = []
-    for name in joint_names:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if jid < 0:
-            raise ValueError(f"Joint '{name}' from ONNX metadata not found in MuJoCo model.")
-        qpos_addrs.append(model.jnt_qposadr[jid])
-        qvel_addrs.append(model.jnt_dofadr[jid])
-    return np.asarray(qpos_addrs, dtype=np.int32), np.asarray(qvel_addrs, dtype=np.int32)
-
-
-def _name_to_joint_ids(model, joint_names: list[str]) -> np.ndarray:
-    import mujoco
-
-    ids = []
-    for name in joint_names:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if jid < 0:
-            raise ValueError(f"Joint '{name}' from ONNX metadata not found in MuJoCo model.")
-        ids.append(jid)
-    return np.asarray(ids, dtype=np.int32)
-
-
-def _name_to_body_ids(model, body_names: list[str]) -> np.ndarray:
-    import mujoco
-
-    ids = []
-    for name in body_names:
-        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
-        if bid < 0:
-            raise ValueError(f"Body '{name}' from ONNX metadata not found in MuJoCo model.")
-        ids.append(bid)
-    return np.asarray(ids, dtype=np.int32)
-
-
-def _as_vector(meta: dict, key: str, size: int, default: float = 0.0) -> np.ndarray:
-    value = meta.get(key, default)
-    arr = np.asarray(value, dtype=np.float64)
-    if arr.ndim == 0:
-        return np.full(size, float(arr), dtype=np.float64)
-    if arr.ndim > 1:
-        arr = arr.reshape(-1)
-    if arr.size != size:
-        raise ValueError(f"Metadata '{key}' has {arr.size} values, expected {size}.")
-    return arr
-
-
-def _resize_or_zero(values: np.ndarray, dim: int) -> np.ndarray:
-    values = np.asarray(values, dtype=np.float32).reshape(1, -1)
-    if values.shape[1] == dim:
-        return values
-    out = np.zeros((1, dim), dtype=np.float32)
-    width = min(dim, values.shape[1])
-    out[:, :width] = values[:, :width]
-    return out
-
-
-def _quat_inv(q: np.ndarray) -> np.ndarray:
-    out = q.copy()
-    out[..., 1:] *= -1.0
-    norm_sq = np.sum(q * q, axis=-1, keepdims=True)
-    return out / np.clip(norm_sq, 1.0e-9, None)
-
-
-def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-    w1, x1, y1, z1 = np.moveaxis(q1, -1, 0)
-    w2, x2, y2, z2 = np.moveaxis(q2, -1, 0)
-    return np.stack(
-        [
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-        ],
-        axis=-1,
-    )
-
-
-def _quat_apply_inverse(q: np.ndarray, v: np.ndarray) -> np.ndarray:
-    xyz = q[..., 1:]
-    t = 2.0 * np.cross(xyz, v)
-    return v - q[..., :1] * t + np.cross(xyz, t)
-
-
-def _matrix_from_quat(q: np.ndarray) -> np.ndarray:
-    r, i, j, k = np.moveaxis(q, -1, 0)
-    two_s = 2.0 / np.clip(np.sum(q * q, axis=-1), 1.0e-9, None)
-    mat = np.stack(
-        [
-            1 - two_s * (j * j + k * k),
-            two_s * (i * j - k * r),
-            two_s * (i * k + j * r),
-            two_s * (i * j + k * r),
-            1 - two_s * (i * i + k * k),
-            two_s * (j * k - i * r),
-            two_s * (i * k - j * r),
-            two_s * (j * k + i * r),
-            1 - two_s * (i * i + j * j),
-        ],
-        axis=-1,
-    )
-    return mat.reshape(q.shape[:-1] + (3, 3))
-
-
-def _future_indices(t: int, offsets: list[int], total: int) -> np.ndarray:
-    return np.clip(t + np.asarray(offsets, dtype=np.int64), 0, total - 1)
-
-
-def _motion_groups(
-    motion: np.lib.npyio.NpzFile,
-    t: int,
-    meta: dict,
-    robot_anchor_quat_w: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    offsets = meta["future_step_num"]
-    future = _future_indices(t, offsets, motion["joint_pos"].shape[0])
-    target_quat = _motion_anchor_ori_mf(motion, future, meta).reshape(1, len(offsets), 4)
-    robot_anchor = np.repeat(robot_anchor_quat_w[:, None, :], len(offsets), axis=1)
-    rel_quat = _quat_mul(_quat_inv(robot_anchor), target_quat)
-    rel_6d = _matrix_from_quat(rel_quat)[..., :2].reshape(1, -1).astype(np.float32)
-    rbt_cmd_mf = np.concatenate(
-        [
-            motion["joint_pos"][future].reshape(1, -1),
-            motion["joint_vel"][future].reshape(1, -1),
-            rel_6d,
-        ],
-        axis=-1,
-    ).astype(np.float32)
-    rbt_dim = int(np.prod(meta["observation_shapes"].get("rbt_cmd_mf", rbt_cmd_mf.shape[1:])))
-    if rbt_cmd_mf.shape[1] != rbt_dim:
-        raise ValueError(
-            f"Built rbt_cmd_mf with dim {rbt_cmd_mf.shape[1]}, but ONNX metadata expects {rbt_dim}. "
-            "Check motion joint order/future_step_num and the exported task config."
-        )
-    smpl_dim = int(np.prod(meta["observation_shapes"].get("smpl_cmd_mf", [0])))
-    smpl_cmd_mf = _build_smpl_cmd_mf(motion, future, meta, robot_anchor_quat_w, smpl_dim)
-    return rbt_cmd_mf, smpl_cmd_mf
-
-
-def _motion_anchor_ori_mf(motion: np.lib.npyio.NpzFile, future: np.ndarray, meta: dict) -> np.ndarray:
-    body_names = list(meta["motion_body_names"])
-    anchor_idx = body_names.index(meta["anchor_body_name"])
-    # MuJoCo root orientation is used as robot anchor orientation in the caller.  Here we encode target anchor
-    # orientation in world frame; robot-relative correction is applied in build_obs().
-    return motion["body_quat_w"][future, anchor_idx, :]
-
-
-def _build_smpl_cmd_mf(
-    motion: np.lib.npyio.NpzFile,
-    future: np.ndarray,
-    meta: dict,
-    robot_anchor_quat_w: np.ndarray,
-    smpl_dim: int,
-) -> np.ndarray:
-    if smpl_dim == 0:
-        return np.zeros((1, 0), dtype=np.float32)
-    if "smpl_joints" not in motion.files:
-        return np.zeros((1, smpl_dim), dtype=np.float32)
-
-    joints = np.asarray(motion["smpl_joints"][future], dtype=np.float32)
-    joints = joints.reshape(1, joints.shape[0], 24, 3)
-    root_quat_dim = 6 * len(future)
-    if "smpl_poses" in motion.files:
-        # Full SMPL root orientation parity with IsaacLab needs its axis-angle conversion path.
-        # Keep the dimensional contract explicit until that deployment dependency is wired in.
-        root_6d = np.zeros((1, root_quat_dim), dtype=np.float32)
-    else:
-        root_6d = np.zeros((1, root_quat_dim), dtype=np.float32)
-    local_joints = joints.reshape(1, -1)
-    return _resize_or_zero(np.concatenate([local_joints, root_6d], axis=-1), smpl_dim)
-
-
-class HistoryBuffer:
-    def __init__(self, dim: int, length: int):
-        self.dim = int(dim)
-        self.length = max(1, int(length))
-        self._values = np.zeros((self.length, self.dim), dtype=np.float32)
-        self._filled = False
-
-    def update(self, value: np.ndarray) -> np.ndarray:
-        value = np.asarray(value, dtype=np.float32).reshape(-1)
-        if value.shape[0] != self.dim:
-            raise ValueError(f"History value dim {value.shape[0]} does not match expected dim {self.dim}.")
-        if not self._filled:
-            self._values[:] = value
-            self._filled = True
-        else:
-            self._values[:-1] = self._values[1:]
-            self._values[-1] = value
-        return self.value()
-
-    def value(self) -> np.ndarray:
-        return self._values.reshape(1, -1).astype(np.float32)
-
-
-class TermMajorHistory:
-    def __init__(self, term_dims: list[tuple[str, int, int]]):
-        self.term_dims = term_dims
-        self.buffers = {name: HistoryBuffer(dim, history_len) for name, dim, history_len in term_dims}
-
-    @property
-    def dim(self) -> int:
-        return sum(dim * history_len for _, dim, history_len in self.term_dims)
-
-    @property
-    def max_history_length(self) -> int:
-        return max((history_len for _, _, history_len in self.term_dims), default=1)
-
-    def update(self, values: dict[str, np.ndarray]) -> np.ndarray:
-        pieces = []
-        for name, _, _ in self.term_dims:
-            if name not in values:
-                raise KeyError(f"Missing prop observation term '{name}'.")
-            pieces.append(self.buffers[name].update(values[name]))
-        return np.concatenate(pieces, axis=-1).astype(np.float32)
-
-
-def _shape_dim(shape: list[int] | tuple[int, ...]) -> int:
-    return int(np.prod(shape)) if shape else 0
-
-
-def _fallback_prop_terms(prop_dim: int, num_joints: int) -> list[tuple[str, int, int]]:
-    base_dims = {
-        "projected_gravity": 3,
-        "base_ang_vel": 3,
-        "joint_pos": num_joints,
-        "joint_vel": num_joints,
-        "actions": num_joints,
-    }
-    single_dim = sum(base_dims.values())
-    if prop_dim % single_dim != 0:
-        raise ValueError(f"prop dim {prop_dim} is not divisible by fallback single-frame dim {single_dim}.")
-    history_len = prop_dim // single_dim
-    return [(name, base_dims[name], history_len) for name in G1_PROP_TERM_ORDER]
-
-
-def _prop_terms_from_metadata(meta: dict, num_joints: int) -> list[tuple[str, int, int]]:
-    prop_dim = int(np.prod(meta["observation_shapes"].get("prop", [0])))
-    observation_terms = meta.get("observation_terms", {})
-    prop_terms = observation_terms.get("prop", {}).get("terms", [])
-    if not prop_terms:
-        return _fallback_prop_terms(prop_dim, num_joints)
-
-    out = []
-    for term in prop_terms:
-        name = term["name"]
-        shape = term.get("shape", [])
-        base_shape = term.get("base_shape", shape)
-        history_len = max(1, int(term.get("history_length", 0)))
-        term_dim = _shape_dim(base_shape)
-        if term_dim <= 0:
-            term_dim = _shape_dim(shape)
-            if history_len > 1 and term_dim % history_len == 0:
-                term_dim //= history_len
-        out.append((name, term_dim, history_len))
-
-    total = sum(dim * history_len for _, dim, history_len in out)
-    if total != prop_dim:
-        raise ValueError(f"prop metadata describes dim {total}, but ONNX metadata expects {prop_dim}: {out}")
-    return out
-
-
-def _print_obs_layout(meta: dict, prop_history: TermMajorHistory, input_names: list[str]) -> None:
-    shapes = meta.get("observation_shapes", {})
-    print("[INFO] ONNX inputs:", input_names)
-    print(f"[INFO] prop dim: {prop_history.dim}, history max length: {prop_history.max_history_length}")
-    for name, dim, history_len in prop_history.term_dims:
-        print(f"[INFO]   prop/{name}: base_dim={dim}, history={history_len}, flat_dim={dim * history_len}")
-    for name in input_names:
-        print(f"[INFO]   input/{name}: expected_shape={tuple(shapes.get(name, []))}")
-
-
-def _action_to_target(raw_action: np.ndarray, action_scale: np.ndarray, action_offset: np.ndarray) -> np.ndarray:
-    return raw_action[0].astype(np.float64) * action_scale + action_offset
-
-
-def _build_obs(
-    data,
-    motion,
-    t: int,
-    meta: dict,
-    body_ids: np.ndarray,
-    joint_qpos: np.ndarray,
-    joint_qvel: np.ndarray,
-    last_action: np.ndarray,
-    prop_history: TermMajorHistory,
-):
-    root_quat = data.xquat[body_ids[0]][None, :]
-    root_ang_vel_b = _quat_apply_inverse(root_quat, data.qvel[3:6][None, :])
-    gravity_b = _quat_apply_inverse(root_quat, np.asarray([[0.0, 0.0, -1.0]], dtype=np.float64))
-    default_joint_pos = _as_vector(meta, "default_joint_pos", len(joint_qpos), 0.0)
-    default_joint_vel = _as_vector(meta, "default_joint_vel", len(joint_qvel), 0.0)
-    qpos = data.qpos[joint_qpos][None, :]
-    qvel = data.qvel[joint_qvel][None, :]
-    prop_terms = {
-        "projected_gravity": gravity_b,
-        "base_ang_vel": root_ang_vel_b,
-        "joint_pos": qpos - default_joint_pos[None, :],
-        "joint_vel": qvel - default_joint_vel[None, :],
-        "actions": last_action,
-    }
-
-    prop = prop_history.update(prop_terms)
-    rbt_cmd_mf, smpl_cmd_mf = _motion_groups(motion, t, meta, root_quat)
-    return {
-        "prop": prop.astype(np.float32),
-        "rbt_cmd_mf": rbt_cmd_mf,
-        "smpl_cmd_mf": smpl_cmd_mf,
-    }
-
-
-def _validate_inputs(obs: dict[str, np.ndarray], input_names: list[str], meta: dict) -> None:
-    shapes = meta.get("observation_shapes", {})
-    missing = [name for name in input_names if name not in obs]
-    if missing:
-        raise KeyError(f"ONNX expects unsupported input groups: {missing}")
-    for name in input_names:
-        expected = tuple(shapes.get(name, obs[name].shape[1:]))
-        got = tuple(obs[name].shape[1:])
-        if got != expected:
-            raise ValueError(f"Observation group '{name}' has shape {got}, expected {expected}.")
-
-
-def main() -> None:
+from sim2sim_g1.observations import (  # print_obs_layout,
+    ImuReader,
+    TermMajorHistory,
+    build_obs,
+    print_imu_debug,
+    prop_terms_from_metadata,
+    validate_inputs,
+)
+from sim2sim_g1.onnx_policy import OnnxPolicy, load_metadata, onnx_input_names, validate_grouped_onnx_contract
+from sim2sim_g1.viewer import ReferenceMotionPlayer
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run G1 ONNX policy in MuJoCo.")
     parser.add_argument("--onnx_path", required=True)
     parser.add_argument("--motion_file", required=True)
@@ -385,57 +36,232 @@ def main() -> None:
     parser.add_argument("--xml_path", default=str(G1_MJCF))
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--decimation", type=int, default=None)
-    parser.add_argument("--kp", type=float, default=60.0)
-    parser.add_argument("--kd", type=float, default=2.0)
+    parser.add_argument("--kp", type=float, default=None, help="Override metadata joint stiffness with a scalar value.")
+    parser.add_argument("--kd", type=float, default=None, help="Override metadata joint damping with a scalar value.")
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--no_render", action="store_true", help="Disable MuJoCo viewer when wrapper enables --render.")
+    parser.add_argument("--imu_quat_sensor", default="base_quat", help="MuJoCo framequat sensor name.")
+    parser.add_argument("--imu_gyro_sensor", default="base_gyro", help="MuJoCo gyro sensor name.")
+    parser.add_argument("--debug_imu", action="store_true", help="Print XML sensor IMU values once at startup.")
+    parser.add_argument(
+        "--debug_motion_alignment",
+        action="store_true",
+        help="Print motion/root/obs/action alignment values once at startup.",
+    )
+    parser.add_argument(
+        "--init_from_motion",
+        action="store_true",
+        default=True,
+        help="Initialize MuJoCo root, joints, and velocities from motion frame 0.",
+    )
+    parser.add_argument("--no_init_from_motion", action="store_false", dest="init_from_motion")
+    parser.add_argument(
+        "--init_root_body",
+        default=None,
+        help="Motion body used to initialize the floating base. Defaults to metadata root body or first motion body.",
+    )
+    parser.add_argument(
+        "--show_reference",
+        action="store_true",
+        default=True,
+        help="Render a translucent G1 that follows the reference motion in the MuJoCo viewer.",
+    )
+    parser.add_argument("--no_show_reference", action="store_false", dest="show_reference")
+    parser.add_argument("--reference_root_body", default=None, help="Motion body used as reference floating-base root.")
+    parser.add_argument("--reference_alpha", type=float, default=0.35, help="Transparency for the reference G1.")
+    parser.add_argument(
+        "--reference_update_interval",
+        type=int,
+        default=1,
+        help="Update translucent reference geoms every N policy steps. Increase this if the viewer is slow.",
+    )
+    parser.add_argument(
+        "--print_joint_map",
+        action="store_true",
+        default=True,
+        help="Print ONNX/action joint order mapped to MuJoCo joint ids and qpos/qvel addresses.",
+    )
+    parser.add_argument("--no_print_joint_map", action="store_false", dest="print_joint_map")
     parser.add_argument("--dry_run", action="store_true", help="Build and validate one observation, then exit.")
+    parser.add_argument(
+        "--log_interval",
+        type=int,
+        default=100,
+        help="Print MuJoCo rollout progress every N policy steps. Set <=0 to disable.",
+    )
     args = parser.parse_args()
+    if args.no_render:
+        args.render = False
+    return args
+
+
+def print_motion_alignment_debug(
+    data,
+    motion: MotionData,
+    meta: dict,
+    init_root_body: str | None,
+    joint_qpos: np.ndarray,
+    joint_qvel: np.ndarray,
+    default_joint_pos: np.ndarray,
+    obs: dict[str, np.ndarray],
+    raw_action: np.ndarray | None = None,
+    target: np.ndarray | None = None,
+) -> None:
+    root_body, root_idx, motion_pos0, motion_quat0, motion_lin_vel0, motion_ang_vel0 = motion_frame_root_state(
+        motion, meta, 0, init_root_body
+    )
+    summary = motion_local_step_summary(motion, meta, init_root_body)
+    joint_pos0 = np.asarray(motion["joint_pos"][0], dtype=np.float64)
+    joint_vel0 = (
+        np.asarray(motion["joint_vel"][0], dtype=np.float64) if "joint_vel" in motion else np.zeros_like(joint_pos0)
+    )
+    sim_joint_pos = np.asarray(data.qpos[joint_qpos], dtype=np.float64)
+    sim_joint_vel = np.asarray(data.qvel[joint_qvel], dtype=np.float64)
+
+    print("========== SIM2SIM MOTION ALIGNMENT DEBUG ==========")
+    print(f"[SIMDBG] root body: {root_body} index={root_idx}")
+    print(f"[SIMDBG] motion frame0 root pos: {motion_pos0.tolist()}")
+    print(f"[SIMDBG] motion frame0 root quat wxyz: {motion_quat0.tolist()}")
+    print(f"[SIMDBG] motion frame0 root lin_vel: {motion_lin_vel0.tolist()}")
+    print(f"[SIMDBG] motion frame0 root ang_vel: {motion_ang_vel0.tolist()}")
+    print(f"[SIMDBG] mujoco qpos root pos: {np.asarray(data.qpos[:3]).tolist()}")
+    print(f"[SIMDBG] mujoco qpos root quat wxyz: {np.asarray(data.qpos[3:7]).tolist()}")
+    print(f"[SIMDBG] mujoco qvel root lin_vel: {np.asarray(data.qvel[:3]).tolist()}")
+    print(f"[SIMDBG] mujoco qvel root ang_vel: {np.asarray(data.qvel[3:6]).tolist()}")
+    print(f"[SIMDBG] motion local step mean xyz: {summary['mean'].tolist()}")
+    print(f"[SIMDBG] motion local step min xyz: {summary['min'].tolist()}")
+    print(f"[SIMDBG] motion local step max xyz: {summary['max'].tolist()}")
+    print(f"[SIMDBG] motion world total delta xyz: {summary['total'].tolist()}")
+    print(f"[SIMDBG] motion joint0-default norm: {np.linalg.norm(joint_pos0 - default_joint_pos):.6f}")
+    print(f"[SIMDBG] mujoco joint-motion0 norm: {np.linalg.norm(sim_joint_pos - joint_pos0):.6f}")
+    print(f"[SIMDBG] mujoco joint_vel-motion0 norm: {np.linalg.norm(sim_joint_vel - joint_vel0):.6f}")
+    for name, value in obs.items():
+        print(
+            f"[SIMDBG] obs/{name}: shape={value.shape}, "
+            f"norm={np.linalg.norm(value):.6f}, min={float(np.min(value)):.6f}, max={float(np.max(value)):.6f}"
+        )
+    if raw_action is not None:
+        print(
+            f"[SIMDBG] raw_action: shape={raw_action.shape}, norm={np.linalg.norm(raw_action):.6f},"
+            f" min={float(np.min(raw_action)):.6f}, max={float(np.max(raw_action)):.6f}"
+        )
+    if target is not None:
+        print(
+            f"[SIMDBG] target: shape={target.shape}, "
+            f"norm={np.linalg.norm(target):.6f}, min={float(np.min(target)):.6f}, max={float(np.max(target)):.6f}"
+        )
+    print("====================================================")
+
+
+def main() -> None:
+    args = parse_args()
 
     import mujoco
 
-    meta = _metadata(args.onnx_path)
+    meta = load_metadata(args.onnx_path)
+    input_names = onnx_input_names(args.onnx_path)
+    validate_grouped_onnx_contract(input_names, meta)
     if meta.get("encoder_mode") not in (None, "robot", "encoder_g1", "g1"):
         print(
             f"[WARN] ONNX encoder_mode={meta.get('encoder_mode')} needs non-zero smpl_cmd_mf. "
             "This script currently feeds zero SMPL observations."
         )
 
-    motion_path = _first_motion_file(args.motion_file, args.dataset_txt)
-    motion = np.load(motion_path)
+    motion_path = first_motion_file(args.motion_file, args.dataset_txt)
     print(f"[INFO] Motion: {motion_path}")
+    motion = MotionData(motion_path)
+    motion.print_config()
 
     model = mujoco.MjModel.from_xml_path(args.xml_path)
     model.opt.timestep = float(meta.get("sim_dt", model.opt.timestep))
     data = mujoco.MjData(model)
     joint_names = list(meta["action_joint_names"])
-    joint_ids = _name_to_joint_ids(model, joint_names)
-    joint_qpos, joint_qvel = _name_to_joint_qvel_addrs(model, joint_names)
-    body_ids = _name_to_body_ids(model, list(meta["motion_body_names"]))
-    torque_limits = np.asarray(model.jnt_actfrcrange[joint_ids], dtype=np.float64)
+    # joint_ids = name_to_joint_ids(model, joint_names)
+    actuator_ids = name_to_actuator_ids(model, joint_names)
+    joint_qpos, joint_qvel = name_to_joint_qvel_addrs(model, joint_names)
+    imu_reader = ImuReader(
+        model,
+        quat_sensor_name=args.imu_quat_sensor,
+        gyro_sensor_name=args.imu_gyro_sensor,
+    )
+    reference_player = None
+    if args.render and args.show_reference:
+        alpha = float(np.clip(args.reference_alpha, 0.0, 1.0))
+        reference_player = ReferenceMotionPlayer(
+            model,
+            motion,
+            meta,
+            joint_qpos,
+            root_body_name=args.reference_root_body,
+            rgba=np.asarray([0.2, 0.7, 1.0, alpha], dtype=np.float32),
+        )
+    torque_limits = np.asarray(model.actuator_ctrlrange[actuator_ids], dtype=np.float64)
 
-    default_joint_pos = _as_vector(meta, "default_joint_pos", len(joint_names), 0.0)
-    data.qpos[2] = 0.793
-    data.qpos[joint_qpos] = default_joint_pos
+    default_joint_pos = as_vector(meta, "default_joint_pos", len(joint_names), 0.0)
+    if args.init_from_motion:
+        init_root_body = initialize_from_motion(data, motion, meta, joint_qpos, joint_qvel, args.init_root_body)
+        print(f"[INFO] Initialized MuJoCo state from motion frame 0 using root body: {init_root_body}")
+    else:
+        initialize_default_pose(data, meta, joint_names, joint_qpos)
+        print("[INFO] Initialized MuJoCo state from default standing pose.")
     mujoco.mj_forward(model, data)
+    imu_reader.print_config()
+    if args.debug_imu:
+        print_imu_debug(data, imu_reader)
+    if reference_player is not None:
+        reference_player.print_config()
 
-    input_names = _onnx_input_names(args.onnx_path)
-    action_scale = _as_vector(meta, "action_scale", len(joint_names), 1.0)
-    action_offset = _as_vector(meta, "action_offset", len(joint_names), 0.0)
+    action_scale = as_vector(meta, "action_scale", len(joint_names), 1.0)
+    action_offset = as_vector(meta, "action_offset", len(joint_names), 0.0)
+    kp, kd = gains_from_metadata(meta, len(joint_names), args.kp, args.kd)
+    print(
+        "[INFO] PD gains: "
+        f"kp_range=({float(np.min(kp)):.4f}, {float(np.max(kp)):.4f}), "
+        f"kd_range=({float(np.min(kd)):.4f}, {float(np.max(kd)):.4f})"
+    )
+
     decimation = args.decimation or int(meta.get("decimation", 1))
     last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
-    prop_history = TermMajorHistory(_prop_terms_from_metadata(meta, len(joint_names)))
-    _print_obs_layout(meta, prop_history, input_names)
+    prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+    reference_update_interval = max(1, int(args.reference_update_interval))
+    # print_obs_layout(meta, prop_history, input_names)
     if args.dry_run:
-        obs = _build_obs(data, motion, 0, meta, body_ids, joint_qpos, joint_qvel, last_action, prop_history)
-        _validate_inputs(obs, input_names, meta)
+        obs = build_obs(data, motion, 0, meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history)
+        validate_inputs(obs, input_names, meta)
+        if args.debug_motion_alignment:
+            print_motion_alignment_debug(
+                data,
+                motion,
+                meta,
+                args.init_root_body,
+                joint_qpos,
+                joint_qvel,
+                default_joint_pos,
+                obs,
+            )
         print("[INFO] dry_run observation validation passed.")
         return
 
-    import onnxruntime as ort
-
-    sess = ort.InferenceSession(args.onnx_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
-    input_names = [inp.name for inp in sess.get_inputs()]
-    output_name = sess.get_outputs()[0].name
+    policy = OnnxPolicy(args.onnx_path)
+    input_names = policy.input_names
+    if args.debug_motion_alignment:
+        debug_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+        debug_obs = build_obs(data, motion, 0, meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history)
+        validate_inputs(debug_obs, input_names, meta)
+        debug_action = policy.run(debug_obs)
+        debug_target = action_to_target(debug_action, action_scale, action_offset)
+        print_motion_alignment_debug(
+            data,
+            motion,
+            meta,
+            args.init_root_body,
+            joint_qpos,
+            joint_qvel,
+            default_joint_pos,
+            debug_obs,
+            debug_action,
+            debug_target,
+        )
 
     viewer_cm = None
     viewer = None
@@ -444,26 +270,63 @@ def main() -> None:
 
         viewer_cm = mujoco.viewer.launch_passive(model, data)
         viewer = viewer_cm.__enter__()
+        if reference_player is not None:
+            reference_player.draw(viewer, 0)
+    else:
+        print("[INFO] MuJoCo viewer disabled. Pass --render to watch the rollout.")
+
+    print(
+        f"[INFO] Running MuJoCo sim2sim: steps={args.steps}, decimation={decimation}, "
+        f"dt={model.opt.timestep:.6f}, render={args.render}"
+    )
+    start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
 
     try:
         for step in range(args.steps):
             t = min(step, motion["joint_pos"].shape[0] - 1)
-            obs = _build_obs(data, motion, t, meta, body_ids, joint_qpos, joint_qvel, last_action, prop_history)
-            _validate_inputs(obs, input_names, meta)
-            ort_inputs = {name: obs[name] for name in input_names}
-            raw_action = sess.run([output_name], ort_inputs)[0].astype(np.float32)
-            target = _action_to_target(raw_action, action_scale, action_offset)
+            obs = build_obs(data, motion, t, meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history)
+            validate_inputs(obs, input_names, meta)
+            raw_action = policy.run(obs)
+            target = action_to_target(raw_action, action_scale, action_offset)
             last_action = raw_action
+            root_quat, _, _ = imu_reader.read(data)
+            root_delta_w = np.asarray(data.qpos[:3], dtype=np.float64) - start_root_pos
+            root_delta_b = quat_apply_inverse(root_quat, root_delta_w[None, :])[0]
+            if args.log_interval > 0 and (step == 0 or (step + 1) % args.log_interval == 0 or step == args.steps - 1):
+                target_delta = target - action_offset
+                print(
+                    f"[INFO] step {step + 1:>5}/{args.steps}: "
+                    f"root_delta_w={root_delta_w.tolist()}, "
+                    f"root_delta_b={root_delta_b.tolist()}, "
+                    f"raw_action_norm={np.linalg.norm(raw_action):.4f}, "
+                    f"target_delta_norm={np.linalg.norm(target_delta):.4f}, "
+                    f"qpos_target_err={np.linalg.norm(target - data.qpos[joint_qpos]):.4f}, "
+                    f"obs_prop_norm={np.linalg.norm(obs['prop']):.4f}"
+                )
+            if viewer is not None and reference_player is not None and step % reference_update_interval == 0:
+                reference_player.draw(viewer, t)
+
+            time.sleep(decimation * model.opt.timestep)
+            if viewer is not None:
+                viewer.sync()
+
             for _ in range(decimation):
-                q = data.qpos[joint_qpos]
-                qd = data.qvel[joint_qvel]
-                tau = args.kp * (target - q) - args.kd * qd
-                tau = np.clip(tau, torque_limits[:, 0], torque_limits[:, 1])
-                data.qfrc_applied[joint_qvel] = tau
+                apply_pd_control(
+                    data,
+                    actuator_ids,
+                    joint_qpos,
+                    joint_qvel,
+                    target,
+                    kp,
+                    kd,
+                    torque_limits,
+                )
                 mujoco.mj_step(model, data)
-                time.sleep(model.opt.timestep)
-                if viewer is not None:
-                    viewer.sync()
+
+        print(
+            f"[INFO] sim2sim completed: policy_steps={args.steps}, "
+            f"sim_time={args.steps * decimation * model.opt.timestep:.3f}s"
+        )
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)

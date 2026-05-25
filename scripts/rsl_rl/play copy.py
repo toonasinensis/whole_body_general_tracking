@@ -65,42 +65,6 @@ parser.add_argument(
 )
 parser.add_argument("--onnx_filename", type=str, default="policy.onnx", help="Filename for exported ONNX.")
 parser.add_argument("--export_only", action="store_true", default=False, help="Exit after exporting ONNX.")
-parser.add_argument(
-    "--use_onnx_policy",
-    action="store_true",
-    default=False,
-    help="Run play inference with ONNXRuntime instead of the PyTorch policy.",
-)
-parser.add_argument(
-    "--onnx_path",
-    type=str,
-    default=None,
-    help="Path to an exported grouped ONNX policy. Defaults to <checkpoint_dir>/exported/<onnx_filename>.",
-)
-parser.add_argument(
-    "--debug_compare_torch_onnx",
-    action="store_true",
-    default=False,
-    help="When using ONNX, also run PyTorch policy once per step and print action difference.",
-)
-parser.add_argument(
-    "--debug_zero_obs",
-    action="store_true",
-    default=False,
-    help="Force robot state/action to a zero-like state, print policy observations, save them, and exit.",
-)
-parser.add_argument(
-    "--debug_obs_path",
-    type=str,
-    default="/tmp/isaac_zero_obs.pt",
-    help="Output path for --debug_zero_obs TensorDict/tensors.",
-)
-parser.add_argument(
-    "--debug_obs_head",
-    type=int,
-    default=32,
-    help="Number of values to print per observation group in --debug_zero_obs.",
-)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -121,7 +85,6 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
-import numpy as np
 import os
 import torch
 
@@ -286,97 +249,8 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
     }
 
 
-def _zero_robot_state_for_debug(base_env) -> None:
-    robot = base_env.scene["robot"]
-    num_envs = base_env.num_envs
-    device = base_env.device
-    root_state = robot.data.default_root_state.clone()
-    if hasattr(base_env.scene, "env_origins"):
-        root_state[:, :3] = base_env.scene.env_origins
-    else:
-        root_state[:, :3] = 0.0
-    root_state[:, 2] += 0.793
-    root_state[:, 3:7] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(num_envs, 1)
-    root_state[:, 7:] = 0.0
-    joint_pos = torch.zeros_like(robot.data.joint_pos)
-    joint_vel = torch.zeros_like(robot.data.joint_vel)
-    robot.write_root_state_to_sim(root_state)
-    robot.write_joint_state_to_sim(joint_pos, joint_vel)
-    robot.set_joint_position_target(joint_pos)
-    robot.set_joint_velocity_target(joint_vel)
-    robot.set_joint_effort_target(torch.zeros_like(joint_pos))
-    robot.write_data_to_sim()
-    base_env.sim.forward()
-
-    if hasattr(base_env, "action_manager"):
-        try:
-            action_term = base_env.action_manager.get_term("joint_pos")
-            for name in ("_raw_actions", "_processed_actions", "_previous_actions"):
-                value = getattr(action_term, name, None)
-                if torch.is_tensor(value):
-                    value.zero_()
-        except Exception as err:
-            print(f"[WARN][debug_zero_obs] Could not zero action term internals: {err}")
-
-
-def _collect_debug_obs(env, base_env):
-    if hasattr(base_env, "observation_manager"):
-        return base_env.observation_manager.compute(update_history=True)
-    return env.get_observations()
-
-
-def _print_debug_obs(obs, path: str, head: int) -> None:
-    out = {}
-    print("[DEBUG_ZERO_OBS] Observation dump")
-    for group_name, value in obs.items():
-        tensor = value.detach().cpu() if torch.is_tensor(value) else torch.as_tensor(value)
-        first = tensor[0].reshape(-1)
-        out[group_name] = tensor
-        print(
-            f"[DEBUG_ZERO_OBS] group={group_name} shape={tuple(tensor.shape)} "
-            f"norm={float(first.norm().item()):.6f} min={float(first.min().item()):.6f} "
-            f"max={float(first.max().item()):.6f}"
-        )
-        print(f"[DEBUG_ZERO_OBS] {group_name}[:{head}] = {first[:head].tolist()}")
-    torch.save(out, path)
-    print(f"[DEBUG_ZERO_OBS] saved: {path}")
-
-
-class OnnxPolicyRunner:
-    def __init__(self, onnx_path: str, device: str):
-        import onnx
-        import onnxruntime as ort
-
-        self.onnx_path = onnx_path
-        model = onnx.load(onnx_path)
-        initializer_names = {initializer.name for initializer in model.graph.initializer}
-        self.input_names = [inp.name for inp in model.graph.input if inp.name not in initializer_names]
-        available_providers = ort.get_available_providers()
-        providers = [name for name in ("CUDAExecutionProvider", "CPUExecutionProvider") if name in available_providers]
-        if not providers:
-            providers = available_providers
-        self.session = ort.InferenceSession(onnx_path, providers=providers)
-        self.output_name = self.session.get_outputs()[0].name
-        self.device = torch.device(device)
-        print(f"[INFO]: ONNX policy enabled: {onnx_path}")
-        print(f"[INFO]: ONNX inputs: {self.input_names}")
-        print(f"[INFO]: ONNXRuntime providers: using={providers}, available={available_providers}")
-
-    def __call__(self, obs) -> torch.Tensor:
-        missing = [name for name in self.input_names if name not in obs]
-        if missing:
-            raise KeyError(f"ONNX policy expects missing observation groups: {missing}. Available: {list(obs.keys())}")
-        ort_inputs = {
-            name: obs[name].detach().cpu().numpy().astype(np.float32, copy=False) for name in self.input_names
-        }
-        actions = self.session.run([self.output_name], ort_inputs)[0].astype(np.float32)
-        return torch.from_numpy(actions).to(self.device)
-
-
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
-def main(  # noqa: C901
-    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg
-):
+def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Play with RSL-RL agent."""
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
@@ -481,19 +355,12 @@ def main(  # noqa: C901
         if motion_cmd is None:
             print("[WARN] Could not find command term 'motion'; command metrics will not be logged.")
 
-    if args_cli.debug_zero_obs:
-        _zero_robot_state_for_debug(env.unwrapped)
-        # obs = _collect_debug_obs(env, env.unwrapped)
-        # _print_debug_obs(obs, args_cli.debug_obs_path, args_cli.debug_obs_head)
-        # env.close()
-        # return
-
     # export policy to onnx/jit
     export_model_dir = args_cli.onnx_dir or os.path.join(os.path.dirname(resume_path), "exported")
-    onnx_policy_path = args_cli.onnx_path or os.path.join(export_model_dir, args_cli.onnx_filename)
     if args_cli.export_onnx:
-        print(f"[INFO]: Exporting ONNX policy to: {onnx_policy_path}")
-        onnx_policy_path = export_grouped_motion_policy_as_onnx(
+        onnx_path = os.path.join(export_model_dir, args_cli.onnx_filename)
+        print(f"[INFO]: Exporting ONNX policy to: {onnx_path}")
+        onnx_path = export_grouped_motion_policy_as_onnx(
             env,
             policy,
             path=export_model_dir,
@@ -502,13 +369,13 @@ def main(  # noqa: C901
                 env, env.unwrapped, policy, effective_encoder_mode, effective_fsq_sample_mode
             ),
         )
-        print(f"[INFO]: Exported ONNX policy: {onnx_policy_path}")
+        print(f"[INFO]: Exported ONNX policy: {onnx_path}")
         if args_cli.export_only:
             env.close()
             return
 
-    onnx_policy = OnnxPolicyRunner(onnx_policy_path, env.unwrapped.device) if args_cli.use_onnx_policy else None
-
+    # reset environment
+    # import ipdb; ipdb.set_trace()
     obs = env.get_observations()
     timestep = 0
     # simulate environment
@@ -516,31 +383,12 @@ def main(  # noqa: C901
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
-            if onnx_policy is not None:
-                actions = onnx_policy(obs)
-                if args_cli.debug_compare_torch_onnx:
-                    torch_actions = policy(obs)
-                    if isinstance(torch_actions, dict) and "actions" in torch_actions:
-                        torch_actions = torch_actions["actions"]
-                    diff = (torch_actions - actions).detach()
-                    print(
-                        f"[DEBUG_ONNX_POLICY] step={timestep} "
-                        f"onnx_norm={float(actions.norm(dim=-1).mean().item()):.6f} "
-                        f"torch_norm={float(torch_actions.norm(dim=-1).mean().item()):.6f} "
-                        f"diff_max={float(diff.abs().max().item()):.6e} "
-                        f"diff_mean={float(diff.abs().mean().item()):.6e}"
-                    )
-            else:
-                actions = policy(obs)
-                if isinstance(actions, dict) and "actions" in actions:
-                    actions = actions["actions"]
-            if args_cli.debug_zero_obs and timestep == 0:
-                _print_debug_obs(obs, args_cli.debug_obs_path, args_cli.debug_obs_head)
-                print(
-                    f"[DEBUG_ZERO_OBS] action[:{args_cli.debug_obs_head}] ="
-                    f" {actions[0, :args_cli.debug_obs_head].detach().cpu().tolist()}"
-                )
+            actions = policy(obs)
+            # env stepping
+            if isinstance(actions, dict) and "actions" in actions:
+                actions = actions["actions"]
             obs, _, _, _ = env.step(actions)
+
         timestep += 1
         if tb_writer is not None and motion_cmd is not None and timestep % tb_log_interval == 0:
             for key, value in motion_cmd.metrics.items():
