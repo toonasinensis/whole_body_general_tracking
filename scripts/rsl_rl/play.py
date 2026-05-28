@@ -101,6 +101,7 @@ parser.add_argument(
     default=32,
     help="Number of values to print per observation group in --debug_zero_obs.",
 )
+parser.add_argument("--max_steps", type=int, default=None, help="Exit play after this many environment steps.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -381,9 +382,9 @@ def main(  # noqa: C901
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    env_cfg.terminations.ee_body_pos = None
-    env_cfg.terminations.anchor_ori = None
-    env_cfg.terminations.anchor_pos = None
+    # env_cfg.terminations.ee_body_pos = None
+    # env_cfg.terminations.anchor_ori = None
+    # env_cfg.terminations.anchor_pos = None
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -554,6 +555,8 @@ def main(  # noqa: C901
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
+        if args_cli.max_steps is not None and timestep >= args_cli.max_steps:
+            break
 
     if tb_writer is not None:
         tb_writer.flush()

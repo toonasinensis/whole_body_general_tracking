@@ -7161,7 +7161,6 @@
 220721/confusion_003__A035.npz
 220721/confusion_003__A035_M.npz
 220721/confusion_003__A036.npz
-220721/confusion_003__A036_M.npz
 220721/crowd_cheer_001__A033.npz
 220721/crowd_cheer_001__A033_M.npz
 220721/crowd_cheer_001__A034.npz
@@ -38117,7 +38116,6 @@
 230112/triumph_one_handed_R_003__A438_M.npz
 230112/triumph_two_handed_001__A116.npz
 230112/triumph_two_handed_001__A116_M.npz
-230112/triumph_two_handed_001__A117.npz
 230112/triumph_two_handed_001__A117_M.npz
 230112/triumph_two_handed_001__A118.npz
 230112/triumph_two_handed_001__A118_M.npz

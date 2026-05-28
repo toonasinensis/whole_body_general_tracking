@@ -4,7 +4,7 @@ import numpy as np
 from dataclasses import dataclass, field
 
 from .math_utils import quat_inv, quat_mul
-from .motion import MotionData
+from .motion import MotionData, resolve_body_indices_from_names
 
 METRIC_NAMES = (
     "error_anchor_pos",
@@ -25,8 +25,18 @@ def resolve_motion_body_indices(
     selected_body_count: int,
     model_nbody: int,
     body_ids: np.ndarray,
+    motion: MotionData | None = None,
+    body_names: list[str] | None = None,
 ) -> np.ndarray:
     """Map selected metadata body names to columns in a motion body array."""
+    if motion is not None and body_names is not None:
+        return resolve_body_indices_from_names(
+            arrays=motion.arrays,
+            target_body_names=body_names,
+            model_nbody=model_nbody,
+            body_ids=body_ids,
+            path=motion.path,
+        )
     body_ids = np.asarray(body_ids, dtype=np.int64)
     if motion_body_count == selected_body_count:
         return np.arange(selected_body_count, dtype=np.int64)

@@ -61,20 +61,43 @@ def install_delayed_termination(
     env_ids: torch.Tensor | None,
     delay_reset_env_ratio: float = 0.0,
     max_delay_steps: int = 0,
+    use_motion_pose_range_mask: bool = True,
 ) -> None:
-    """Startup event that installs delayed termination on a random subset of envs."""
+    """Startup event that installs delayed termination on the pose-range env subset."""
     del env_ids  # startup event applies globally
 
     if isinstance(env.termination_manager, DelayedTerminationManager):
         return
 
-    num_delay = int(env.num_envs * delay_reset_env_ratio)
-    if num_delay <= 0 or max_delay_steps <= 0:
+    if delay_reset_env_ratio <= 0.0 or max_delay_steps <= 0:
         return
 
-    delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-    delay_indices = torch.randperm(env.num_envs, device=env.device)[:num_delay]
-    delay_mask[delay_indices] = True
+    delay_mask = None
+    if use_motion_pose_range_mask:
+        delay_mask = getattr(env, "_motion_pose_range_env_mask", None)
+    if delay_mask is not None:
+        delay_mask = delay_mask.to(device=env.device, dtype=torch.bool).clone()
+        if delay_reset_env_ratio > 0.0:
+            max_count = int(env.num_envs * delay_reset_env_ratio)
+            enabled = torch.where(delay_mask)[0]
+            if enabled.numel() > max_count:
+                delay_mask[enabled[max_count:]] = False
+    else:
+        ratio = delay_reset_env_ratio
+        if use_motion_pose_range_mask:
+            command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
+            pose_range_env_ratio = getattr(command_cfg, "pose_range_env_ratio", None)
+            if pose_range_env_ratio is not None:
+                ratio = min(float(delay_reset_env_ratio), float(pose_range_env_ratio))
+        num_delay = int(env.num_envs * ratio)
+        delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        if num_delay > 0:
+            delay_mask[:num_delay] = True
+
+    num_delay = int(delay_mask.sum().item())
+    if num_delay <= 0:
+        return
+
     env.termination_manager = DelayedTerminationManager(
         base=env.termination_manager,
         delay_env_mask=delay_mask,

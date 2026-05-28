@@ -252,6 +252,12 @@ def motion_anchor_ori_b_mf(env: ManagerBasedEnv, command_name: str) -> torch.Ten
     return root_rot_dif_l_mat
 
 
+def motion_anchor_z_mf(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    ref_root_posz = command.anchor_pos_w_future[:, :, 2]
+    return ref_root_posz.view(env.num_envs, -1)
+
+
 def smpl_joints_local_multi_future(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     if not command.has_smpl_data:

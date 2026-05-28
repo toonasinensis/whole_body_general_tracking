@@ -19,9 +19,12 @@ python -m torch.distributed.run \
   --nproc_per_node="${NPROC_PER_NODE}" \
   scripts/rsl_rl/train.py \
   --registry_name=test1 \
-  --task=FM-G1 \
+  --task=AMP-G1 \
   --headless \
   --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file="/home/thl/Documents/g1-mimic-npz" \
-  --dataset_txt="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/lafan1.txt"  \
+  --dataset_txt="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/walk2_subject1.txt"  \
+  --resume=True \
+  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_amp/2026-05-27_11-56-18/model_23000.pt" \
+  # --encoder_mode=robot \

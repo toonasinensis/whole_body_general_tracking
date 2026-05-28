@@ -112,10 +112,11 @@ class CommandsCfg:
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
             "z": (0.05, 0.1),
-            "roll": (-0.0, 0.0),
-            "pitch": (-0.0, 0.0),
+            "roll": (-1.0, 1.0),
+            "pitch": (-1.0, 1.0),
             "yaw": (-0.0, 0.0),
         },
+        pose_range_env_ratio=0.00,
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
@@ -189,11 +190,14 @@ class ObservationsCfg:
             func=mdp.motion_joint_pos_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
         motion_joint_vel_multi_future = ObsTerm(
-            func=mdp.motion_joint_vel_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+            func=mdp.motion_joint_vel_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.5, n_max=0.5)
         )
         motion_anchor_ori_b_multi_future = ObsTerm(
             func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
+        # motion_anchor_z_multi_future = ObsTerm(
+        #     func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        # )
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -332,6 +336,11 @@ class RewardsCfg:
         weight=0.5,
         params={"command_name": "motion", "std": 0.3},
     )
+    motion_global_anchor_pos_z = RewTerm(
+        func=mdp.motion_global_anchor_position_z_error_exp,
+        weight=1.5,
+        params={"command_name": "motion", "std": 0.3},
+    )
     motion_global_anchor_ori = RewTerm(
         func=mdp.motion_global_anchor_orientation_error_exp,
         weight=0.5,
@@ -365,7 +374,7 @@ class RewardsCfg:
     )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.01,
+        weight=-0.5,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",

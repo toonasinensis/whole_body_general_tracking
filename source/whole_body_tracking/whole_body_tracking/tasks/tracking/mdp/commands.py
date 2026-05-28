@@ -5,6 +5,7 @@ import math
 import torch
 from collections.abc import Sequence
 from dataclasses import MISSING
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -52,6 +53,8 @@ class MotionCommand(CommandTerm):
         self.body_indexes = torch.tensor(
             self.robot.find_bodies(self.cfg.body_names, preserve_order=True)[0], dtype=torch.long, device=self.device
         )
+        self.pose_range_env_mask = self._build_pose_range_env_mask()
+        setattr(self.env, "_motion_pose_range_env_mask", self.pose_range_env_mask)
 
         # Per-env local frame index within the currently selected motion.
         self.local_time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -61,6 +64,9 @@ class MotionCommand(CommandTerm):
         self.motion = UnifiedMotionLib(
             body_indexes=self.body_indexes.tolist(),
             motion_anchor_body_index=self.motion_anchor_body_index,
+            joint_names=list(getattr(self.robot.data, "joint_names", getattr(self.robot, "joint_names", []))),
+            motion_body_names=list(self.cfg.body_names),
+            all_body_names=list(self.robot.body_names),
             device=self.device,
         )
 
@@ -76,6 +82,7 @@ class MotionCommand(CommandTerm):
         self.history_success_rate_dict = {}
         self.command_step_count = 0
         self._last_bins_export_step = -1
+        self._log_run_name = self.cfg.log_run_name or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         self.metrics["error_anchor_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_rot"] = torch.zeros(self.num_envs, device=self.device)
@@ -206,6 +213,14 @@ class MotionCommand(CommandTerm):
         start = self.motion.time_step_start_idx[self.motion_ids]
         end = self.motion.time_step_end_idx[self.motion_ids]
         return end - start
+
+    def _build_pose_range_env_mask(self) -> torch.Tensor:
+        ratio = float(max(0.0, min(1.0, self.cfg.pose_range_env_ratio)))
+        count = int(self.num_envs * ratio)
+        mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        if count > 0:
+            mask[:count] = True
+        return mask
 
     @property
     def future_time_steps_init(self) -> torch.Tensor:
@@ -618,6 +633,7 @@ class MotionCommand(CommandTerm):
                 "distributed": bool(self.cfg.distributed),
                 "motions_dir": str(self.cfg.motion_file),
                 "log_save_path": str(self.cfg.log_save_path),
+                "log_run_name": str(self._log_run_name),
                 "fps": fps,
                 "motion_num": int(self.motion.motion_num),
                 "total_frames": int(self.motion.time_step_total),
@@ -631,7 +647,7 @@ class MotionCommand(CommandTerm):
             "bins_sorted": bins_sorted_indices,
         }
 
-        save_dir = Path(self.cfg.log_save_path).expanduser().resolve()
+        save_dir = Path(self.cfg.log_save_path).expanduser().resolve() / self._log_run_name
         save_dir.mkdir(parents=True, exist_ok=True)
         out_path = (
             save_dir / f"{self.cfg.adaptive_bins_file_prefix}_rank_{rank:02d}_step_{self.command_step_count:09d}.json"
@@ -726,18 +742,46 @@ class MotionCommand(CommandTerm):
         else:
             raise NotImplementedError
 
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+
         # add noise to robot states when envs are reset
         # add noise to root state
         root_pos = self.body_pos_w[:, 0].clone()
         root_ori = self.body_quat_w[:, 0].clone()
         root_lin_vel = self.body_lin_vel_w[:, 0].clone()
         root_ang_vel = self.body_ang_vel_w[:, 0].clone()
-        range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
-        ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_pos[env_ids] += rand_samples[:, 0:3]
-        orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
+        pose_env_ids = env_ids[self.pose_range_env_mask[env_ids]]
+        # import ipdb;ipdb.set_trace()
+
+        if pose_env_ids.numel() > 0:
+            range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
+            ranges = torch.tensor(range_list, device=self.device)
+            rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (pose_env_ids.numel(), 6), device=self.device)
+            if self.cfg.pose_range_init_mode == "range":
+                root_pos[pose_env_ids] += rand_samples[:, 0:3]
+                roll = rand_samples[:, 3]
+                pitch = rand_samples[:, 4]
+            elif self.cfg.pose_range_init_mode == "lying":
+                root_pos[pose_env_ids, 0:2] += rand_samples[:, 0:2]
+                height_range = torch.tensor(self.cfg.pose_range_lying_height_range, device=self.device)
+                root_pos[pose_env_ids, 2] = self._env.scene.env_origins[pose_env_ids, 2] + sample_uniform(
+                    height_range[0], height_range[1], (pose_env_ids.numel(),), device=self.device
+                )
+
+                lie_ids = torch.randint(0, 4, (pose_env_ids.numel(),), device=self.device)
+                roll = torch.zeros(pose_env_ids.numel(), device=self.device)
+                pitch = torch.zeros(pose_env_ids.numel(), device=self.device)
+                roll[lie_ids == 0] = math.pi / 2.0
+                roll[lie_ids == 1] = -math.pi / 2.0
+                pitch[lie_ids == 2] = math.pi / 2.0
+                pitch[lie_ids == 3] = -math.pi / 2.0
+            else:
+                raise ValueError(
+                    f"Unsupported pose_range_init_mode={self.cfg.pose_range_init_mode!r}. Expected 'range' or 'lying'."
+                )
+            orientations_delta = quat_from_euler_xyz(roll, pitch, rand_samples[:, 5])
+            root_ori[pose_env_ids] = quat_mul(orientations_delta, root_ori[pose_env_ids])
+            # import ipdb;ipdb.set_trace()
         range_list = [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
         rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
@@ -1014,7 +1058,11 @@ class MotionCommandCfg(CommandTermCfg):
     anchor_body_name: str = MISSING
     body_names: list[str] = MISSING
     log_save_path: str = "train_logs"
+    log_run_name: str | None = None
     pose_range: dict[str, tuple[float, float]] = {}
+    pose_range_env_ratio: float = 1.0
+    pose_range_init_mode: str = "range"
+    pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
     velocity_range: dict[str, tuple[float, float]] = {}
 
     # future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]

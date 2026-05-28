@@ -9,12 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sim2sim_g1.math_utils import as_vector
-from sim2sim_g1.metrics import (
-    METRIC_NAMES,
-    MotionMetricAccumulator,
-    motion_tracking_metrics,
-    resolve_motion_body_indices,
-)
+from sim2sim_g1.metrics import METRIC_NAMES, MotionMetricAccumulator, motion_tracking_metrics
 from sim2sim_g1.motion import MotionData, motion_files, motion_frame_root_state, motion_local_step_summary
 from sim2sim_g1.mujoco_robot import G1_MJCF  # noqa: F401
 from sim2sim_g1.mujoco_robot import (  # print_joint_map,; name_to_joint_ids,
@@ -105,7 +100,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "CSV path for per-motion mean tracking metrics. Defaults to "
-            "<dataset_txt>.sim2sim_metrics[_tag]_<timestamp>.csv when --dataset_txt is set. "
+            "<dataset_txt>.sim2sim_metrics[_tag]_<timestamp>.csv, or "
+            "<motion_file>.sim2sim_metrics[_tag]_<timestamp>.csv when --dataset_txt is empty. "
             "Set to an empty string to disable."
         ),
     )
@@ -113,6 +109,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.no_render:
         args.render = False
+    if args.dataset_txt is not None and not args.dataset_txt.strip():
+        args.dataset_txt = None
     return args
 
 
@@ -179,13 +177,13 @@ def _metrics_csv_path(args: argparse.Namespace) -> Path | None:
         return None
     if args.metrics_csv is not None:
         return Path(args.metrics_csv).expanduser()
-    if args.dataset_txt:
-        dataset_path = Path(args.dataset_txt).expanduser()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        tag = _safe_filename_part(args.metrics_tag or "")
-        suffix = f".sim2sim_metrics_{timestamp}.csv" if not tag else f".sim2sim_metrics_{tag}_{timestamp}.csv"
-        return dataset_path.with_suffix(dataset_path.suffix + suffix)
-    return None
+    source_path = Path(args.dataset_txt or args.motion_file).expanduser()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = _safe_filename_part(args.metrics_tag or "")
+    suffix = f".sim2sim_metrics_{timestamp}.csv" if not tag else f".sim2sim_metrics_{tag}_{timestamp}.csv"
+    if source_path.is_dir() or not source_path.suffix:
+        return source_path.with_name(source_path.name + suffix)
+    return source_path.with_suffix(source_path.suffix + suffix)
 
 
 def _safe_filename_part(value: str) -> str:
@@ -209,17 +207,31 @@ def _write_metrics_csv(path: Path, rows: list[dict[str, float | int | str]]) -> 
         writer.writerows(rows)
 
 
-def _motion_meta_for_rollout(motion: MotionData, meta: dict, model, body_ids: np.ndarray) -> dict:
+def _motion_meta_for_rollout(motion: MotionData, meta: dict) -> dict:
     body_names = list(meta["motion_body_names"])
-    motion_body_indices = resolve_motion_body_indices(
-        motion_body_count=int(motion["body_pos_w"].shape[1]),
-        selected_body_count=len(body_names),
+    motion_meta = dict(meta)
+    motion_meta["motion_body_indices"] = list(range(len(body_names)))
+    return motion_meta
+
+
+def _align_motion_for_rollout(
+    motion: MotionData,
+    meta: dict,
+    model,
+    joint_names: list[str],
+    body_ids: np.ndarray,
+) -> tuple[MotionData, dict]:
+    body_names = list(meta["motion_body_names"])
+    aligned_motion, align_info = motion.aligned_to(
+        joint_names=joint_names,
+        body_names=body_names,
         model_nbody=int(model.nbody),
         body_ids=body_ids,
     )
-    motion_meta = dict(meta)
-    motion_meta["motion_body_indices"] = motion_body_indices.tolist()
-    return motion_meta
+    motion_meta = _motion_meta_for_rollout(aligned_motion, meta)
+    motion_meta["motion_body_order_source"] = str(align_info.get("body_order_source", "unknown"))
+    motion_meta["motion_joint_order_source"] = str(align_info.get("joint_order_source", "unknown"))
+    return aligned_motion, motion_meta
 
 
 def _validate_motion_for_rollout(motion: MotionData, meta: dict, joint_count: int) -> None:
@@ -235,7 +247,14 @@ def _validate_motion_for_rollout(motion: MotionData, meta: dict, joint_count: in
     motion_body_indices = np.asarray(meta["motion_body_indices"], dtype=np.int64)
     body_dim = int(motion["body_pos_w"].shape[1])
     quat_body_dim = int(motion["body_quat_w"].shape[1])
-    if body_dim != quat_body_dim or motion_body_indices.size == 0 or int(motion_body_indices.max()) >= body_dim:
+    selected_body_count = len(list(meta["motion_body_names"]))
+    if (
+        body_dim != quat_body_dim
+        or body_dim != selected_body_count
+        or motion_body_indices.size != selected_body_count
+        or motion_body_indices.size == 0
+        or int(motion_body_indices.max()) >= body_dim
+    ):
         raise ValueError(
             f"Motion {motion.path} body dim cannot cover selected motion_body_indices "
             f"{motion_body_indices.tolist()}: body_pos_w={motion['body_pos_w'].shape}, "
@@ -303,7 +322,7 @@ def main() -> None:
     )
     torque_limits = np.asarray(model.actuator_ctrlrange[actuator_ids], dtype=np.float64)
 
-    motion_meta = _motion_meta_for_rollout(motion, meta, model, body_ids)
+    motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
     _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
     default_joint_pos = as_vector(meta, "default_joint_pos", len(joint_names), 0.0)
     if args.init_from_motion:
@@ -396,7 +415,7 @@ def main() -> None:
                 motion = MotionData(motion_path)
                 print(f"[INFO] Motion {motion_index + 1}/{len(motion_paths)}: {motion.path}")
                 motion.print_config()
-            motion_meta = _motion_meta_for_rollout(motion, meta, model, body_ids)
+            motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
             _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
 
             if args.init_from_motion:
@@ -447,7 +466,9 @@ def main() -> None:
                     reference_player.draw(viewer, t)
                 # input("Press Enter to step the simulation...")  # Step on Enter key press
                 if viewer is not None:
-                    # time.sleep(decimation * model.opt.timestep)
+                    import time
+
+                    time.sleep(decimation * model.opt.timestep)
                     viewer.sync()
 
                 for _ in range(decimation):

@@ -595,6 +595,10 @@ def run_simulator(
                 fname = motion.motion_names[i]
                 name_no_ext = sanitize_filename(fname)
                 save_path = os.path.join(save_dir, name_no_ext + ".npz")
+                motion_file2_save["joint_names"] = np.asarray(
+                    list(getattr(robot.data, "joint_names", getattr(robot, "joint_names", [])))
+                )
+                motion_file2_save["body_names"] = np.asarray(list(robot.body_names))
 
                 np.savez_compressed(save_path, **motion_file2_save)
 

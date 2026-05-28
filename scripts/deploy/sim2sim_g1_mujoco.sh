@@ -8,12 +8,12 @@ TASK="${TASK:-FM-G1}"
 NUM_ENVS="${NUM_ENVS:-1}"
 RESUME_PATH="${RESUME_PATH:-${ROOT_DIR}/whole_body_tracking/logs/rsl_rl/g1_flat/2026-05-22_23-15-00/model_39000.pt}"
 MOTION_FILE="${MOTION_FILE:-/home/thl/Documents/g1-mimic-npz}"
-DATASET_TXT="${DATASET_TXT:-/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt}"
-SMPL_FILE_PATH="${SMPL_FILE_PATH:-/home/thl/Downloads/data/output/smpl_filtered}"
+DATASET_TXT="${DATASET_TXT-/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt}"
+SMPL_FILE_PATH="${SMPL_FILE_PATH:-/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/up}"
 ENCODER_MODE="${ENCODER_MODE:-robot}"
 ONNX_DIR="${ONNX_DIR:-$(dirname "${RESUME_PATH}")/exported}"
 ONNX_FILENAME="${ONNX_FILENAME:-policy.onnx}"
-ONNX_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/exported/policy.onnx"
+ONNX_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/exported/policymlp.onnx"
 EXPORT_ONNX="${EXPORT_ONNX:-0}"
 RENDER="${RENDER:-1}"
 DEBUG_IMU="${DEBUG_IMU:-0}"
@@ -23,6 +23,13 @@ METRICS_TAG="${METRICS_TAG:-}"
 
 cd "${ROOT_DIR}"
 
+DATASET_ARGS=()
+if [[ -n "${DATASET_TXT}" ]]; then
+  DATASET_ARGS=(--dataset_txt "${DATASET_TXT}")
+else
+  echo "[INFO] DATASET_TXT is empty. Using all .npz files under MOTION_FILE: ${MOTION_FILE}"
+fi
+
 if [[ "${EXPORT_ONNX}" == "1" ]]; then
   echo "[INFO] EXPORT_ONNX=1, launching IsaacLab to export ONNX: ${ONNX_PATH}"
   ${ISAAC_PYTHON} whole_body_tracking/scripts/rsl_rl/play.py \
@@ -30,7 +37,7 @@ if [[ "${EXPORT_ONNX}" == "1" ]]; then
     --num_envs="${NUM_ENVS}" \
     --resume_path="${RESUME_PATH}" \
     --motion_file="${MOTION_FILE}" \
-    --dataset_txt="${DATASET_TXT}" \
+    "${DATASET_ARGS[@]}" \
     --smpl_file_path="${SMPL_FILE_PATH}" \
     --encoder_mode="${ENCODER_MODE}" \
     --export_onnx \
@@ -72,7 +79,7 @@ fi
 ${SIM2SIM_PYTHON} whole_body_tracking/scripts/deploy/sim2sim_g1_mujoco.py \
   --onnx_path "${ONNX_PATH}" \
   --motion_file "${MOTION_FILE}" \
-  --dataset_txt "${DATASET_TXT}" \
+  "${DATASET_ARGS[@]}" \
   "${RENDER_ARGS[@]}" \
   "${IMU_DEBUG_ARGS[@]}" \
   "${REFERENCE_ARGS[@]}" \

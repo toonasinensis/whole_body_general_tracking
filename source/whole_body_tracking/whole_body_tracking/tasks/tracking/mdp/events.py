@@ -91,3 +91,170 @@ def randomize_rigid_body_com(
 
     # Set the new coms
     asset.root_physx_view.set_coms(coms, env_ids)
+
+
+def assist_fallen_robots_with_upward_force(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg,
+    command_name: str = "motion",
+    force: float = 1250.0,
+    force_mode: Literal["instantaneous", "permanent"] = "permanent",
+    min_force_scale: float = 0.0,
+    z_error_threshold: float = 0.15,
+    max_height_above_reference: float = 0.05,
+    max_upward_velocity: float = 1.0,
+    gravity_z_threshold: float = 0.8,
+    use_motion_pose_range_mask: bool = True,
+    log_metrics: bool = False,
+    debug_steps: int = 0,
+    debug_interval_steps: int = 20,
+    debug_env_id: int = 0,
+) -> None:
+    """Apply an upward recovery assist force and decay it with the global timeout average."""
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=asset.device)
+    else:
+        env_ids = env_ids.to(device=asset.device, dtype=torch.long)
+    if env_ids.numel() == 0 or force <= 0.0:
+        return
+
+    command = env.command_manager.get_term(command_name)
+    active_mask = torch.ones(env.num_envs, dtype=torch.bool, device=asset.device)
+    if use_motion_pose_range_mask:
+        pose_mask = getattr(env, "_motion_pose_range_env_mask", None)
+        if pose_mask is None:
+            return
+        active_mask = pose_mask.to(device=asset.device, dtype=torch.bool)
+
+    active_env_ids = env_ids[active_mask[env_ids]]
+    if active_env_ids.numel() == 0:
+        return
+
+    # Use a cumulative timeout average over the assisted env subset as the curriculum signal.
+    # Per-episode progress makes the force jump back to full strength after every reset.
+    stats = getattr(env, "_fallen_upward_assist_timeout_stats", None)
+    if stats is None:
+        stats = {
+            "timeouts": torch.zeros((), dtype=torch.float32, device=asset.device),
+            "resets": torch.zeros((), dtype=torch.float32, device=asset.device),
+            "last_step": -1,
+        }
+        setattr(env, "_fallen_upward_assist_timeout_stats", stats)
+
+    # Interval events can run every control step. Count resets once per env step, after termination/reset.
+    current_step = int(getattr(env, "common_step_counter", 0))
+    if stats["last_step"] != current_step:
+        reset_buf = getattr(env, "reset_buf", None)
+        timeout_buf = getattr(env, "reset_time_outs", None)
+        if reset_buf is not None and timeout_buf is not None:
+            assisted_reset_ids = torch.where(reset_buf.to(asset.device) & active_mask)[0]
+            if assisted_reset_ids.numel() > 0:
+                stats["resets"] += float(assisted_reset_ids.numel())
+                stats["timeouts"] += timeout_buf[assisted_reset_ids].to(asset.device, dtype=torch.float32).sum()
+        stats["last_step"] = current_step
+
+    timeout_average = stats["timeouts"] / torch.clamp(stats["resets"], min=1.0)
+    force_scale = torch.clamp(1.0 - timeout_average, min=float(min_force_scale), max=1.0)
+
+    force_body_ids = asset_cfg.body_ids
+    if isinstance(force_body_ids, slice):
+        if asset_cfg.body_names is not None:
+            force_body_ids, _ = asset.find_bodies(asset_cfg.body_names, preserve_order=True)
+        else:
+            force_body_ids = [asset.body_names.index(command.cfg.anchor_body_name)]
+    elif isinstance(force_body_ids, int):
+        force_body_ids = [force_body_ids]
+    else:
+        force_body_ids = list(force_body_ids)
+    if len(force_body_ids) != 1:
+        raise ValueError(
+            "assist_fallen_robots_with_upward_force expects exactly one force body. "
+            f"Got body_ids={force_body_ids} from asset_cfg={asset_cfg}."
+        )
+    force_body_id = int(force_body_ids[0])
+    force_body_name = asset.body_names[force_body_id]
+
+    # Only push while the assisted robot is low or tilted, and stop as soon as it is
+    # already above the reference height or moving upward quickly.  Without this
+    # gate, a large permanent force keeps firing after overshoot because
+    # abs(reference_z - robot_z) is also large when the robot is too high.
+    anchor_body_id = asset.body_names.index(command.cfg.anchor_body_name)
+    robot_anchor_pos = asset.data.body_pos_w[:, anchor_body_id]
+    robot_anchor_quat = asset.data.body_quat_w[:, anchor_body_id]
+    robot_anchor_lin_vel = asset.data.body_lin_vel_w[:, anchor_body_id]
+    projected_gravity = math_utils.quat_apply_inverse(robot_anchor_quat, asset.data.GRAVITY_VEC_W)
+    z_error = command.anchor_pos_w[:, 2] - robot_anchor_pos[:, 2]
+    too_low = z_error > z_error_threshold
+    tilted = projected_gravity[:, 2] > -gravity_z_threshold
+    too_high = robot_anchor_pos[:, 2] > command.anchor_pos_w[:, 2] + max_height_above_reference
+    rising_fast = robot_anchor_lin_vel[:, 2] > max_upward_velocity
+    fallen = (too_low | tilted) & ~too_high & ~rising_fast
+    assist_env_ids = active_env_ids[fallen[active_env_ids]]
+
+    forces = torch.zeros((active_env_ids.numel(), 1, 3), device=asset.device)
+    torques = torch.zeros_like(forces)
+    if assist_env_ids.numel() > 0:
+        active_lookup = torch.searchsorted(active_env_ids, assist_env_ids)
+        forces[active_lookup, 0, 2] = float(force) * force_scale
+
+    if force_mode == "instantaneous":
+        # Applied for one physics substep only. With decimation=4, the average force is roughly force / 4.
+        composer = asset.instantaneous_wrench_composer
+        duty_cycle = 1.0 / max(1, int(getattr(env.cfg, "decimation", 1)))
+    elif force_mode == "permanent":
+        # Applied across the full control step. Reset first so global-to-local conversion uses the current link pose.
+        composer = asset.permanent_wrench_composer
+        composer.reset(active_env_ids)
+        duty_cycle = 1.0
+    else:
+        raise ValueError(f"Unsupported force_mode={force_mode!r}. Expected 'instantaneous' or 'permanent'.")
+
+    composer.set_forces_and_torques(
+        forces=forces,
+        torques=torques,
+        body_ids=[force_body_id],
+        env_ids=active_env_ids,
+        is_global=True,
+    )
+    if debug_steps > 0 and current_step <= debug_steps and current_step % max(1, debug_interval_steps) == 0:
+        dbg_env = int(max(0, min(debug_env_id, env.num_envs - 1)))
+        if active_mask[dbg_env]:
+            force_local = composer.composed_force_as_torch[dbg_env, force_body_id].detach()
+            link_quat = asset.data.body_link_quat_w[dbg_env, force_body_id]
+            force_world = math_utils.quat_apply(link_quat, force_local)
+            max_force = float((float(force) * force_scale).item())
+            dbg_force_matches = torch.where(active_env_ids == dbg_env)[0]
+            applied_force = 0.0
+            if dbg_force_matches.numel() > 0:
+                applied_force = float(forces[dbg_force_matches[0], 0, 2].item())
+            print(
+                "[fallen_upward_assist] "
+                f"step={current_step} env={dbg_env} mode={force_mode} duty={duty_cycle:.3f} "
+                f"force_body={force_body_name} "
+                f"anchor_body={asset.body_names[anchor_body_id]} "
+                f"fallen={bool(fallen[dbg_env].item())} "
+                f"too_low={bool(too_low[dbg_env].item())} "
+                f"tilted={bool(tilted[dbg_env].item())} "
+                f"too_high={bool(too_high[dbg_env].item())} "
+                f"rising_fast={bool(rising_fast[dbg_env].item())} "
+                f"force_max_w={[0.0, 0.0, max_force]} "
+                f"force_set_w={[0.0, 0.0, applied_force]} "
+                f"force_avg_w={[0.0, 0.0, applied_force * duty_cycle]} "
+                f"force_local={force_local.detach().cpu().tolist()} "
+                f"force_world_from_local={force_world.detach().cpu().tolist()} "
+                f"ref_z={float(command.anchor_pos_w[dbg_env, 2].item()):.4f} "
+                f"pelvis_z={float(robot_anchor_pos[dbg_env, 2].item()):.4f} "
+                f"z_error={float(z_error[dbg_env].item()):.4f} "
+                f"pelvis_vz={float(robot_anchor_lin_vel[dbg_env, 2].item()):.4f} "
+                f"projected_gravity_z={float(projected_gravity[dbg_env, 2].item()):.4f} "
+                f"timeout_avg={float(timeout_average.item()):.4f}"
+            )
+    if log_metrics:
+        env.extras.setdefault("log", {})
+        env.extras["log"]["fallen_upward_assist/force_mean"] = forces[..., 2].mean().item()
+        env.extras["log"]["fallen_upward_assist/env_ratio"] = assist_env_ids.numel() / max(1, active_env_ids.numel())
+        env.extras["log"]["fallen_upward_assist/timeout_average"] = timeout_average.item()
+        env.extras["log"]["fallen_upward_assist/force_scale"] = force_scale.item()

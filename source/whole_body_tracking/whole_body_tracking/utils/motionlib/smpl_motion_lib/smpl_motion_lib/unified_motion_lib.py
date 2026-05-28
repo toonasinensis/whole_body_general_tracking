@@ -27,6 +27,9 @@ from .loader import MotionData, load_motion_file
 from .motion_lib import SmplMotionLib
 
 _ROBOT_KEYS = ("joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w")
+_JOINT_NAME_KEYS = ("joint_names", "motion_joint_names", "robot_joint_names", "action_joint_names")
+_BODY_NAME_KEYS = ("body_names", "motion_body_names", "robot_body_names")
+_BODY_KEYS = ("body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w")
 
 
 def _read_npz_fps(raw: np.lib.npyio.NpzFile, path: str) -> float:
@@ -34,6 +37,38 @@ def _read_npz_fps(raw: np.lib.npyio.NpzFile, path: str) -> float:
     if fps.size == 0:
         raise ValueError(f"{path}: empty fps field")
     return float(fps[0])
+
+
+def _decode_name(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _read_name_list(raw: np.lib.npyio.NpzFile, keys: Sequence[str]) -> list[str] | None:
+    for key in keys:
+        if key not in raw.files:
+            continue
+        arr = np.asarray(raw[key])
+        if arr.shape == ():
+            value = arr.item()
+            if isinstance(value, (list, tuple, np.ndarray)):
+                arr = np.asarray(value)
+            else:
+                return [_decode_name(value)]
+        return [_decode_name(value) for value in arr.reshape(-1).tolist()]
+    return None
+
+
+def _name_indexes(source_names: Sequence[str], target_names: Sequence[str], path: str, kind: str) -> list[int]:
+    source_to_index = {name: index for index, name in enumerate(source_names)}
+    missing = [name for name in target_names if name not in source_to_index]
+    if missing:
+        raise ValueError(
+            f"{path}: npz {kind}_names is missing required names {missing}. "
+            f"Available {kind}_names: {list(source_names)}"
+        )
+    return [source_to_index[name] for name in target_names]
 
 
 class UnifiedMotionLib:
@@ -65,10 +100,16 @@ class UnifiedMotionLib:
         self,
         body_indexes: Sequence[int],
         motion_anchor_body_index: int,
+        joint_names: Sequence[str] | None = None,
+        motion_body_names: Sequence[str] | None = None,
+        all_body_names: Sequence[str] | None = None,
         device: str = "cpu",
     ) -> None:
         self.body_indexes = list(body_indexes)
         self.motion_anchor_body_index = motion_anchor_body_index
+        self.joint_names = list(joint_names) if joint_names is not None else None
+        self.motion_body_names = list(motion_body_names) if motion_body_names is not None else None
+        self.all_body_names = list(all_body_names) if all_body_names is not None else None
         self.device = device
 
         # Robot data tensors
@@ -221,6 +262,7 @@ class UnifiedMotionLib:
                 raw = np.load(str(p), allow_pickle=True)
                 npz_fps = _read_npz_fps(raw, str(p))
                 tensors = {k: torch.from_numpy(np.asarray(raw[k], dtype=np.float32)) for k in _ROBOT_KEYS}
+                tensors = self._align_robot_tensors(tensors, raw, str(p))
                 if abs(npz_fps - target_fps) > 1e-3:
                     tensors = {k: interpolate_linear(v, npz_fps, target_fps) for k, v in tensors.items()}
                 n = tensors["joint_pos"].shape[0]
@@ -294,6 +336,7 @@ class UnifiedMotionLib:
                 raw = np.load(robot_map[stem], allow_pickle=True)
                 npz_fps = _read_npz_fps(raw, robot_map[stem])
                 tensors = {k: torch.from_numpy(np.asarray(raw[k], dtype=np.float32)) for k in _ROBOT_KEYS}
+                tensors = self._align_robot_tensors(tensors, raw, robot_map[stem])
                 if abs(npz_fps - target_fps) > 1e-3:
                     tensors = {k: interpolate_linear(v, npz_fps, target_fps) for k, v in tensors.items()}
                 robot_n = tensors["joint_pos"].shape[0]
@@ -354,6 +397,87 @@ class UnifiedMotionLib:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _align_robot_tensors(
+        self,
+        tensors: dict[str, torch.Tensor],
+        raw: np.lib.npyio.NpzFile,
+        path: str,
+    ) -> dict[str, torch.Tensor]:
+        tensors = self._align_joint_tensors(tensors, raw, path)
+        return self._select_body_tensors(tensors, raw, path)
+
+    def _align_joint_tensors(
+        self,
+        tensors: dict[str, torch.Tensor],
+        raw: np.lib.npyio.NpzFile,
+        path: str,
+    ) -> dict[str, torch.Tensor]:
+        if self.joint_names is None:
+            return tensors
+
+        joint_names = _read_name_list(raw, _JOINT_NAME_KEYS)
+        joint_dim = int(tensors["joint_pos"].shape[1])
+        expected_dim = len(self.joint_names)
+        if joint_names is None:
+            if joint_dim != expected_dim:
+                raise ValueError(
+                    f"{path}: joint_pos dim {joint_dim} does not match expected robot joint dim {expected_dim}, "
+                    "and no joint_names metadata was found. Run scripts/attach_npz_names.py or regenerate the npz."
+                )
+            return tensors
+
+        if len(joint_names) != joint_dim:
+            raise ValueError(f"{path}: joint_names length {len(joint_names)} does not match joint_pos dim {joint_dim}.")
+        indexes = _name_indexes(joint_names, self.joint_names, path, "joint")
+        for key in ("joint_pos", "joint_vel"):
+            tensors[key] = tensors[key][:, indexes]
+        return tensors
+
+    def _select_body_tensors(
+        self,
+        tensors: dict[str, torch.Tensor],
+        raw: np.lib.npyio.NpzFile,
+        path: str,
+    ) -> dict[str, torch.Tensor]:
+        target_body_names = self.motion_body_names
+        selected_body_count = len(target_body_names) if target_body_names is not None else len(self.body_indexes)
+        body_dim = int(tensors["body_pos_w"].shape[1])
+        for key in _BODY_KEYS:
+            if int(tensors[key].shape[1]) != body_dim:
+                raise ValueError(
+                    f"{path}: body dimension mismatch. body_pos_w has {body_dim}, "
+                    f"but {key} has {int(tensors[key].shape[1])}."
+                )
+
+        body_names = _read_name_list(raw, _BODY_NAME_KEYS)
+        if body_names is not None:
+            if len(body_names) != body_dim:
+                raise ValueError(
+                    f"{path}: body_names length {len(body_names)} does not match body array dim {body_dim}."
+                )
+            if target_body_names is None:
+                indexes = list(self.body_indexes)
+            else:
+                indexes = _name_indexes(body_names, target_body_names, path, "body")
+        elif body_dim == selected_body_count:
+            indexes = list(range(selected_body_count))
+        elif self.all_body_names is not None and body_dim == len(self.all_body_names):
+            if target_body_names is None:
+                indexes = list(self.body_indexes)
+            else:
+                indexes = _name_indexes(self.all_body_names, target_body_names, path, "body")
+        elif self.body_indexes and max(self.body_indexes) < body_dim:
+            indexes = list(self.body_indexes)
+        else:
+            raise ValueError(
+                f"{path}: cannot map body array dim {body_dim} to selected body dim {selected_body_count}. "
+                "Add body_names metadata with scripts/attach_npz_names.py or regenerate the npz."
+            )
+
+        for key in _BODY_KEYS:
+            tensors[key] = tensors[key][:, indexes]
+        return tensors
+
     def _set_robot_tensors(
         self,
         robot_lists: dict[str, list[torch.Tensor]],
@@ -380,10 +504,10 @@ class UnifiedMotionLib:
         body_lvel = cat_to_device(robot_lists["body_lin_vel_w"])
         body_avel = cat_to_device(robot_lists["body_ang_vel_w"])
 
-        self._body_pos_w_sel = body_pos[:, self.body_indexes]
-        self._body_quat_w_sel = body_quat[:, self.body_indexes]
-        self._body_lin_vel_w_sel = body_lvel[:, self.body_indexes]
-        self._body_ang_vel_w_sel = body_avel[:, self.body_indexes]
+        self._body_pos_w_sel = body_pos
+        self._body_quat_w_sel = body_quat
+        self._body_lin_vel_w_sel = body_lvel
+        self._body_ang_vel_w_sel = body_avel
 
         fc = torch.tensor(frame_counts, dtype=torch.long, device=self.device)
         self.frame_list = fc

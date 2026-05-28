@@ -1,15 +1,52 @@
 from __future__ import annotations
 
 import numpy as np
+from collections.abc import Sequence
 from pathlib import Path
 
 from .math_utils import matrix_from_quat, quat_apply_inverse, quat_inv, quat_mul, resize_or_zero
+
+JOINT_NAME_KEYS = ("joint_names", "motion_joint_names", "robot_joint_names", "action_joint_names")
+BODY_NAME_KEYS = ("body_names", "motion_body_names", "robot_body_names")
+BODY_ARRAY_KEYS = ("body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w")
+
+
+def _decode_name(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _read_name_list_from_arrays(arrays: dict[str, np.ndarray], keys: Sequence[str]) -> list[str] | None:
+    for key in keys:
+        if key not in arrays:
+            continue
+        arr = np.asarray(arrays[key])
+        if arr.shape == ():
+            value = arr.item()
+            if isinstance(value, (list, tuple, np.ndarray)):
+                arr = np.asarray(value)
+            else:
+                return [_decode_name(value)]
+        return [_decode_name(value) for value in arr.reshape(-1).tolist()]
+    return None
+
+
+def _name_indexes(source_names: Sequence[str], target_names: Sequence[str], path: str, kind: str) -> list[int]:
+    source_to_index = {name: index for index, name in enumerate(source_names)}
+    missing = [name for name in target_names if name not in source_to_index]
+    if missing:
+        raise ValueError(
+            f"Motion {path} {kind}_names is missing required names {missing}. "
+            f"Available {kind}_names: {list(source_names)}"
+        )
+    return [source_to_index[name] for name in target_names]
 
 
 class MotionData:
     def __init__(self, path: str):
         self.path = str(path)
-        with np.load(path) as data:
+        with np.load(path, allow_pickle=True) as data:
             self.arrays = {name: self._load_value(data[name]) for name in data.files}
         self.files = list(self.arrays.keys())
         self.num_frames = int(self.arrays["joint_pos"].shape[0])
@@ -27,15 +64,127 @@ class MotionData:
     def __contains__(self, key: str) -> bool:
         return key in self.arrays
 
+    @property
+    def joint_names(self) -> list[str] | None:
+        return _read_name_list_from_arrays(self.arrays, JOINT_NAME_KEYS)
+
+    @property
+    def body_names(self) -> list[str] | None:
+        return _read_name_list_from_arrays(self.arrays, BODY_NAME_KEYS)
+
     def print_config(self) -> None:
         print(
             f"[INFO] Preloaded motion arrays: frames={self.num_frames}, "
             f"fields={len(self.files)}, size={self.total_bytes / (1024 * 1024):.2f} MiB"
         )
 
+    def aligned_to(
+        self,
+        *,
+        joint_names: Sequence[str],
+        body_names: Sequence[str],
+        model_nbody: int | None = None,
+        body_ids: np.ndarray | None = None,
+    ) -> tuple[MotionData, dict[str, np.ndarray | str]]:
+        arrays = dict(self.arrays)
+        info: dict[str, np.ndarray | str] = {}
+
+        source_joint_names = _read_name_list_from_arrays(arrays, JOINT_NAME_KEYS)
+        joint_dim = int(np.asarray(arrays["joint_pos"]).shape[1])
+        if source_joint_names is not None:
+            if len(source_joint_names) != joint_dim:
+                raise ValueError(
+                    f"Motion {self.path} joint_names length {len(source_joint_names)} "
+                    f"does not match joint_pos dim {joint_dim}."
+                )
+            joint_indexes = np.asarray(
+                _name_indexes(source_joint_names, joint_names, self.path, "joint"), dtype=np.int64
+            )
+            for key in ("joint_pos", "joint_vel"):
+                if key in arrays:
+                    arrays[key] = np.asarray(arrays[key])[:, joint_indexes]
+            arrays["joint_names"] = np.asarray(list(joint_names))
+            info["joint_order_source"] = "metadata"
+        elif joint_dim == len(joint_names):
+            info["joint_order_source"] = "legacy_dim"
+        else:
+            raise ValueError(
+                f"Motion {self.path} joint_pos dim {joint_dim} does not match expected joint dim {len(joint_names)}, "
+                "and no joint_names metadata was found. Run scripts/attach_npz_names.py or regenerate the npz."
+            )
+
+        body_indexes = resolve_body_indices_from_names(
+            arrays=arrays,
+            target_body_names=body_names,
+            model_nbody=model_nbody,
+            body_ids=body_ids,
+            path=self.path,
+        )
+        body_indexes = np.asarray(body_indexes, dtype=np.int64)
+        for key in BODY_ARRAY_KEYS:
+            if key in arrays:
+                arrays[key] = np.asarray(arrays[key])[:, body_indexes]
+        arrays["body_names"] = np.asarray(list(body_names))
+        info["motion_body_indices"] = body_indexes
+        info["body_order_source"] = "metadata" if self.body_names is not None else "legacy_dim"
+        return MotionData.from_arrays(self.path, arrays), info
+
+    @classmethod
+    def from_arrays(cls, path: str, arrays: dict[str, np.ndarray]):
+        obj = cls.__new__(cls)
+        obj.path = str(path)
+        obj.arrays = {name: obj._load_value(value) for name, value in arrays.items()}
+        obj.files = list(obj.arrays.keys())
+        obj.num_frames = int(obj.arrays["joint_pos"].shape[0])
+        obj.total_bytes = sum(value.nbytes for value in obj.arrays.values() if isinstance(value, np.ndarray))
+        return obj
+
+
+def resolve_body_indices_from_names(
+    *,
+    arrays: dict[str, np.ndarray],
+    target_body_names: Sequence[str],
+    model_nbody: int | None,
+    body_ids: np.ndarray | None,
+    path: str,
+) -> np.ndarray:
+    body_dim = int(np.asarray(arrays["body_pos_w"]).shape[1])
+    for key in BODY_ARRAY_KEYS:
+        if key in arrays and int(np.asarray(arrays[key]).shape[1]) != body_dim:
+            raise ValueError(
+                f"Motion {path} body dimension mismatch: body_pos_w has {body_dim}, "
+                f"but {key} has {int(np.asarray(arrays[key]).shape[1])}."
+            )
+
+    source_body_names = _read_name_list_from_arrays(arrays, BODY_NAME_KEYS)
+    if source_body_names is not None:
+        if len(source_body_names) != body_dim:
+            raise ValueError(
+                f"Motion {path} body_names length {len(source_body_names)} does not match body array dim {body_dim}."
+            )
+        return np.asarray(_name_indexes(source_body_names, target_body_names, path, "body"), dtype=np.int64)
+
+    selected_body_count = len(target_body_names)
+    if body_dim == selected_body_count:
+        return np.arange(selected_body_count, dtype=np.int64)
+    if body_ids is not None and model_nbody is not None:
+        body_ids = np.asarray(body_ids, dtype=np.int64)
+        if body_dim == int(model_nbody) - 1:
+            return body_ids - 1
+        if body_dim == int(model_nbody):
+            return body_ids
+        body_indexes = body_ids - 1
+        if body_indexes.size > 0 and int(body_indexes.max()) < body_dim:
+            return body_indexes
+    raise ValueError(
+        f"Motion {path} cannot map body dim {body_dim} to selected body dim {selected_body_count}. "
+        "Add body_names metadata with scripts/attach_npz_names.py or regenerate the npz."
+    )
+
 
 def motion_files(motion_file: str, dataset_txt: str | None) -> list[str]:
     root = Path(motion_file)
+    dataset_txt = dataset_txt.strip() if dataset_txt is not None else None
     if dataset_txt:
         files: list[str] = []
         for line in Path(dataset_txt).read_text().splitlines():
