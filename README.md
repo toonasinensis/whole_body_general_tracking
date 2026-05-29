@@ -1,17 +1,4 @@
-# BeyondMimic Motion Tracking Code
-
-[![IsaacSim](https://img.shields.io/badge/IsaacSim-4.5.0-silver.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
-[![Isaac Lab](https://img.shields.io/badge/IsaacLab-2.1.0-silver)](https://isaac-sim.github.io/IsaacLab)
-[![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://docs.python.org/3/whatsnew/3.10.html)
-[![Linux platform](https://img.shields.io/badge/platform-linux--64-orange.svg)](https://releases.ubuntu.com/20.04/)
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/license/mit)
-
-[[Website]](https://beyondmimic.github.io/)
-[[Arxiv]](https://arxiv.org/abs/2508.08241)
-[[Video]](https://youtu.be/RS_MtKVIAzY)
-
-## Overview
+因为现在采样是从中间采样，所以可能这个sampling的有点问题，因为有些数据从头到尾是没问题的，中间采样可能是一个不好的状态，所以要设计一个hooks,可以被在训练的时候定期调用，进行eval,而eval的时候是把每个数据从头跑到尾，完了查看fail counts/跑的次数,获取一个记录表根据这个记录表重新sampling motion,
 
 BeyondMimic is a versatile humanoid control framework that provides highly dynamic motion tracking with the
 state-of-the-art motion quality on real-world deployment and steerable test-time control with guided diffusion-based

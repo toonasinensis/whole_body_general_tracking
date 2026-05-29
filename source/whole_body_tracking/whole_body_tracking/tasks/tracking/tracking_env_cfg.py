@@ -338,7 +338,7 @@ class RewardsCfg:
     )
     motion_global_anchor_pos_z = RewTerm(
         func=mdp.motion_global_anchor_position_z_error_exp,
-        weight=1.5,
+        weight=1.,
         params={"command_name": "motion", "std": 0.3},
     )
     motion_global_anchor_ori = RewTerm(
@@ -374,7 +374,7 @@ class RewardsCfg:
     )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.5,
+        weight=-0.1,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",

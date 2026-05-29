@@ -35,6 +35,7 @@ from isaaclab.utils.math import (
 )
 
 from .math_utils import quat_to_6d
+from .motion_sampling import sample_rewinded_motion_local_times
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -435,6 +436,39 @@ class MotionCommand(CommandTerm):
         # store local end (exclusive) to drive resampling with local time_steps
         self.frame_end_per_env[env_ids] = end - start
 
+    def _sampled_global_timestamps_to_rewinded_local(self, timestamps: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Map sampled global frames to motion-local starts with a recovery rewind.
+
+        失败 bin 表示失败发生点；helper 内部会在同一个 motion 的 local frame 上回退并 clamp。
+        """
+        if timestamps.dtype != torch.long:
+            timestamps = timestamps.long()
+        timestamps = torch.clamp(timestamps, min=0, max=int(self.motion.time_step_total) - 1)
+
+        motion_ids = self.motion.motion_ids_from_timestamps(timestamps)
+        rewind_frames = int(max(0, self.cfg.adaptive_sample_rewind_bins)) * int(self.adaptive_bin_frame_width)
+        return sample_rewinded_motion_local_times(
+            timestamps=timestamps,
+            time_step_start_idx=self.motion.time_step_start_idx,
+            time_step_end_idx=self.motion.time_step_end_idx,
+            motion_ids=motion_ids,
+            time_step_total=int(self.motion.time_step_total),
+            min_local_frame=int(self.cfg.motion_sampling_start_frame),
+            max_future_step=int(self.cfg.max_future_step),
+            rewind_frames=rewind_frames,
+        )
+
+    def _set_time_from_sampled_global_timestamps(self, env_ids: Sequence[int], timestamps: torch.Tensor) -> None:
+        """Set sampled motion times after applying motion-local rewind/clamp policy."""
+        if len(env_ids) == 0:
+            return
+        motion_ids, local_t = self._sampled_global_timestamps_to_rewinded_local(timestamps)
+        start = self.motion.time_step_start_idx[motion_ids]
+        end = self.motion.time_step_end_idx[motion_ids]
+        self.motion_ids[env_ids] = motion_ids
+        self.local_time_steps[env_ids] = local_t
+        self.frame_end_per_env[env_ids] = end - start
+
     @property
     def anchor_lin_vel_b(self) -> torch.Tensor:
         anchor_lin_vel_b = quat_apply_inverse(self.anchor_quat_w, self.anchor_lin_vel_w)
@@ -489,9 +523,8 @@ class MotionCommand(CommandTerm):
 
     def resample_motion_files(self, env, motion_cfg):
         self.motion.load_from_cfg(motion_cfg)
-        self.bin_count = (
-            int(self.motion.time_step_total // (1 / (env.cfg.decimation * env.cfg.sim.dt))) + 1
-        )  # 1s motion frames for each bin
+        self.adaptive_bin_frame_width = max(1, int(round(1.0 / (env.cfg.decimation * env.cfg.sim.dt))))
+        self.bin_count = int(self.motion.time_step_total // self.adaptive_bin_frame_width) + 1
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         # NOTE self.kernel is not used in this script
@@ -709,10 +742,11 @@ class MotionCommand(CommandTerm):
         ).long()
 
         # Map global timestamp -> (motion_id, local frame index, local end), avoiding mask+argmax.
-        self._set_time_from_global_timestamps(env_ids, global_ts)
+        # Adaptive sampling rewinds only the spawn point; failure statistics remain on the real failed bin above.
+        self._set_time_from_sampled_global_timestamps(env_ids, global_ts)
         if self.cfg.eval_mode:
-            # 评估模式下，动作都从该 motion 的第一个帧进行（local=0）
-            self.local_time_steps[env_ids] = 0
+            # 评估模式下也不能从 local=0 开始，避免开头几帧脏数据影响初始化。
+            self.local_time_steps[env_ids] = int(max(0, self.cfg.motion_sampling_start_frame))
         # Metrics
         H = -(sampling_probabilities * (sampling_probabilities + 1e-12).log()).sum()
         H_norm = H / math.log(self.bin_count)
@@ -1076,6 +1110,8 @@ class MotionCommandCfg(CommandTermCfg):
     motion_ratio = [0.2, 0.6, 0.2]  # 预留参数，暂时不使用 # 越来越难
     adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
+    motion_sampling_start_frame: int = 5
+    adaptive_sample_rewind_bins: int = 2
 
     failure_cap: bool = True
     failure_cap_beta: float = 200.0

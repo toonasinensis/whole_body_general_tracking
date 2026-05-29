@@ -286,62 +286,8 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
         "sim_dt": float(base_env.cfg.sim.dt),
     }
 
-
-def _zero_robot_state_for_debug(base_env) -> None:
-    robot = base_env.scene["robot"]
-    num_envs = base_env.num_envs
-    device = base_env.device
-    root_state = robot.data.default_root_state.clone()
-    if hasattr(base_env.scene, "env_origins"):
-        root_state[:, :3] = base_env.scene.env_origins
-    else:
-        root_state[:, :3] = 0.0
-    root_state[:, 2] += 0.793
-    root_state[:, 3:7] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(num_envs, 1)
-    root_state[:, 7:] = 0.0
-    joint_pos = torch.zeros_like(robot.data.joint_pos)
-    joint_vel = torch.zeros_like(robot.data.joint_vel)
-    robot.write_root_state_to_sim(root_state)
-    robot.write_joint_state_to_sim(joint_pos, joint_vel)
-    robot.set_joint_position_target(joint_pos)
-    robot.set_joint_velocity_target(joint_vel)
-    robot.set_joint_effort_target(torch.zeros_like(joint_pos))
-    robot.write_data_to_sim()
-    base_env.sim.forward()
-
-    if hasattr(base_env, "action_manager"):
-        try:
-            action_term = base_env.action_manager.get_term("joint_pos")
-            for name in ("_raw_actions", "_processed_actions", "_previous_actions"):
-                value = getattr(action_term, name, None)
-                if torch.is_tensor(value):
-                    value.zero_()
-        except Exception as err:
-            print(f"[WARN][debug_zero_obs] Could not zero action term internals: {err}")
-
-
-def _collect_debug_obs(env, base_env):
-    if hasattr(base_env, "observation_manager"):
-        return base_env.observation_manager.compute(update_history=True)
-    return env.get_observations()
-
-
-def _print_debug_obs(obs, path: str, head: int) -> None:
-    out = {}
-    print("[DEBUG_ZERO_OBS] Observation dump")
-    for group_name, value in obs.items():
-        tensor = value.detach().cpu() if torch.is_tensor(value) else torch.as_tensor(value)
-        first = tensor[0].reshape(-1)
-        out[group_name] = tensor
-        print(
-            f"[DEBUG_ZERO_OBS] group={group_name} shape={tuple(tensor.shape)} "
-            f"norm={float(first.norm().item()):.6f} min={float(first.min().item()):.6f} "
-            f"max={float(first.max().item()):.6f}"
-        )
-        print(f"[DEBUG_ZERO_OBS] {group_name}[:{head}] = {first[:head].tolist()}")
-    torch.save(out, path)
-    print(f"[DEBUG_ZERO_OBS] saved: {path}")
-
+ 
+ 
 
 class OnnxPolicyRunner:
     def __init__(self, onnx_path: str, device: str):
@@ -382,9 +328,9 @@ def main(  # noqa: C901
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    # env_cfg.terminations.ee_body_pos = None
-    # env_cfg.terminations.anchor_ori = None
-    # env_cfg.terminations.anchor_pos = None
+    env_cfg.terminations.ee_body_pos = None
+    env_cfg.terminations.anchor_ori = None
+    env_cfg.terminations.anchor_pos = None
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -482,12 +428,7 @@ def main(  # noqa: C901
         if motion_cmd is None:
             print("[WARN] Could not find command term 'motion'; command metrics will not be logged.")
 
-    if args_cli.debug_zero_obs:
-        _zero_robot_state_for_debug(env.unwrapped)
-        # obs = _collect_debug_obs(env, env.unwrapped)
-        # _print_debug_obs(obs, args_cli.debug_obs_path, args_cli.debug_obs_head)
-        # env.close()
-        # return
+     
 
     # export policy to onnx/jit
     export_model_dir = args_cli.onnx_dir or os.path.join(os.path.dirname(resume_path), "exported")
@@ -535,12 +476,7 @@ def main(  # noqa: C901
                 actions = policy(obs)
                 if isinstance(actions, dict) and "actions" in actions:
                     actions = actions["actions"]
-            if args_cli.debug_zero_obs and timestep == 0:
-                _print_debug_obs(obs, args_cli.debug_obs_path, args_cli.debug_obs_head)
-                print(
-                    f"[DEBUG_ZERO_OBS] action[:{args_cli.debug_obs_head}] ="
-                    f" {actions[0, :args_cli.debug_obs_head].detach().cpu().tolist()}"
-                )
+             
             obs, _, _, _ = env.step(actions)
         timestep += 1
         if tb_writer is not None and motion_cmd is not None and timestep % tb_log_interval == 0:

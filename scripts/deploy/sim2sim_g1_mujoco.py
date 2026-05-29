@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset_txt", default=None)
     parser.add_argument("--xml_path", default=str(G1_MJCF))
     parser.add_argument("--steps", type=int, default=20000000)
+    parser.add_argument(
+        "--motion_start_frame",
+        type=int,
+        default=5,
+        help="Reference frame used to initialize each motion rollout. Default skips the first 5 frames.",
+    )
     parser.add_argument("--decimation", type=int, default=None)
     parser.add_argument("--kp", type=float, default=None, help="Override metadata joint stiffness with a scalar value.")
     parser.add_argument("--kd", type=float, default=None, help="Override metadata joint damping with a scalar value.")
@@ -58,7 +64,7 @@ def parse_args() -> argparse.Namespace:
         "--init_from_motion",
         action="store_true",
         default=True,
-        help="Initialize MuJoCo root, joints, and velocities from motion frame 0.",
+        help="Initialize MuJoCo root, joints, and velocities from --motion_start_frame.",
     )
     parser.add_argument("--no_init_from_motion", action="store_false", dest="init_from_motion")
     parser.add_argument(
@@ -119,6 +125,7 @@ def print_motion_alignment_debug(
     motion: MotionData,
     meta: dict,
     init_root_body: str | None,
+    frame: int,
     joint_qpos: np.ndarray,
     joint_qvel: np.ndarray,
     default_joint_pos: np.ndarray,
@@ -127,22 +134,22 @@ def print_motion_alignment_debug(
     target: np.ndarray | None = None,
 ) -> None:
     root_body, root_idx, motion_pos0, motion_quat0, motion_lin_vel0, motion_ang_vel0 = motion_frame_root_state(
-        motion, meta, 0, init_root_body
+        motion, meta, frame, init_root_body
     )
     summary = motion_local_step_summary(motion, meta, init_root_body)
-    joint_pos0 = np.asarray(motion["joint_pos"][0], dtype=np.float64)
+    joint_pos0 = np.asarray(motion["joint_pos"][frame], dtype=np.float64)
     joint_vel0 = (
-        np.asarray(motion["joint_vel"][0], dtype=np.float64) if "joint_vel" in motion else np.zeros_like(joint_pos0)
+        np.asarray(motion["joint_vel"][frame], dtype=np.float64) if "joint_vel" in motion else np.zeros_like(joint_pos0)
     )
     sim_joint_pos = np.asarray(data.qpos[joint_qpos], dtype=np.float64)
     sim_joint_vel = np.asarray(data.qvel[joint_qvel], dtype=np.float64)
 
     print("========== SIM2SIM MOTION ALIGNMENT DEBUG ==========")
     print(f"[SIMDBG] root body: {root_body} index={root_idx}")
-    print(f"[SIMDBG] motion frame0 root pos: {motion_pos0.tolist()}")
-    print(f"[SIMDBG] motion frame0 root quat wxyz: {motion_quat0.tolist()}")
-    print(f"[SIMDBG] motion frame0 root lin_vel: {motion_lin_vel0.tolist()}")
-    print(f"[SIMDBG] motion frame0 root ang_vel: {motion_ang_vel0.tolist()}")
+    print(f"[SIMDBG] motion frame{frame} root pos: {motion_pos0.tolist()}")
+    print(f"[SIMDBG] motion frame{frame} root quat wxyz: {motion_quat0.tolist()}")
+    print(f"[SIMDBG] motion frame{frame} root lin_vel: {motion_lin_vel0.tolist()}")
+    print(f"[SIMDBG] motion frame{frame} root ang_vel: {motion_ang_vel0.tolist()}")
     print(f"[SIMDBG] mujoco qpos root pos: {np.asarray(data.qpos[:3]).tolist()}")
     print(f"[SIMDBG] mujoco qpos root quat wxyz: {np.asarray(data.qpos[3:7]).tolist()}")
     print(f"[SIMDBG] mujoco qvel root lin_vel: {np.asarray(data.qvel[:3]).tolist()}")
@@ -151,9 +158,9 @@ def print_motion_alignment_debug(
     print(f"[SIMDBG] motion local step min xyz: {summary['min'].tolist()}")
     print(f"[SIMDBG] motion local step max xyz: {summary['max'].tolist()}")
     print(f"[SIMDBG] motion world total delta xyz: {summary['total'].tolist()}")
-    print(f"[SIMDBG] motion joint0-default norm: {np.linalg.norm(joint_pos0 - default_joint_pos):.6f}")
-    print(f"[SIMDBG] mujoco joint-motion0 norm: {np.linalg.norm(sim_joint_pos - joint_pos0):.6f}")
-    print(f"[SIMDBG] mujoco joint_vel-motion0 norm: {np.linalg.norm(sim_joint_vel - joint_vel0):.6f}")
+    print(f"[SIMDBG] motion joint{frame}-default norm: {np.linalg.norm(joint_pos0 - default_joint_pos):.6f}")
+    print(f"[SIMDBG] mujoco joint-motion{frame} norm: {np.linalg.norm(sim_joint_pos - joint_pos0):.6f}")
+    print(f"[SIMDBG] mujoco joint_vel-motion{frame} norm: {np.linalg.norm(sim_joint_vel - joint_vel0):.6f}")
     for name, value in obs.items():
         print(
             f"[SIMDBG] obs/{name}: shape={value.shape}, "
@@ -279,6 +286,12 @@ def _new_reference_player(args, model, motion: MotionData, meta: dict, joint_qpo
     )
 
 
+def _motion_start_frame(args: argparse.Namespace, motion: MotionData) -> int:
+    if motion.num_frames <= 0:
+        raise ValueError(f"Motion {motion.path} has no frames.")
+    return int(np.clip(int(args.motion_start_frame), 0, motion.num_frames - 1))
+
+
 def main() -> None:
     args = parse_args()
 
@@ -325,9 +338,12 @@ def main() -> None:
     motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
     _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
     default_joint_pos = as_vector(meta, "default_joint_pos", len(joint_names), 0.0)
+    start_frame = _motion_start_frame(args, motion)
     if args.init_from_motion:
-        init_root_body = initialize_from_motion(data, motion, motion_meta, joint_qpos, joint_qvel, args.init_root_body)
-        print(f"[INFO] Initialized MuJoCo state from motion frame 0 using root body: {init_root_body}")
+        init_root_body = initialize_from_motion(
+            data, motion, motion_meta, joint_qpos, joint_qvel, args.init_root_body, frame=start_frame
+        )
+        print(f"[INFO] Initialized MuJoCo state from motion frame {start_frame} using root body: {init_root_body}")
     else:
         initialize_default_pose(data, meta, joint_names, joint_qpos)
         print("[INFO] Initialized MuJoCo state from default standing pose.")
@@ -351,7 +367,9 @@ def main() -> None:
     if args.dry_run:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
         prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
-        obs = build_obs(data, motion, 0, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history)
+        obs = build_obs(
+            data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
+        )
         validate_inputs(obs, input_names, meta)
         if args.debug_motion_alignment:
             print_motion_alignment_debug(
@@ -359,6 +377,7 @@ def main() -> None:
                 motion,
                 motion_meta,
                 args.init_root_body,
+                start_frame,
                 joint_qpos,
                 joint_qvel,
                 default_joint_pos,
@@ -373,7 +392,7 @@ def main() -> None:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
         debug_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
         debug_obs = build_obs(
-            data, motion, 0, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history
+            data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history
         )
         validate_inputs(debug_obs, input_names, meta)
         debug_action = policy.run(debug_obs)
@@ -383,6 +402,7 @@ def main() -> None:
             motion,
             motion_meta,
             args.init_root_body,
+            start_frame,
             joint_qpos,
             joint_qvel,
             default_joint_pos,
@@ -417,12 +437,13 @@ def main() -> None:
                 motion.print_config()
             motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
             _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
+            start_frame = _motion_start_frame(args, motion)
 
             if args.init_from_motion:
                 init_root_body = initialize_from_motion(
-                    data, motion, motion_meta, joint_qpos, joint_qvel, args.init_root_body
+                    data, motion, motion_meta, joint_qpos, joint_qvel, args.init_root_body, frame=start_frame
                 )
-                print(f"[INFO] Aligned MuJoCo state to motion frame 0 using root body: {init_root_body}")
+                print(f"[INFO] Aligned MuJoCo state to motion frame {start_frame} using root body: {init_root_body}")
             else:
                 initialize_default_pose(data, meta, joint_names, joint_qpos)
                 print("[INFO] Reset MuJoCo state to default standing pose.")
@@ -432,13 +453,13 @@ def main() -> None:
             if reference_player is not None:
                 reference_player.print_config()
             if viewer is not None and reference_player is not None:
-                reference_player.draw(viewer, 0)
+                reference_player.draw(viewer, start_frame)
                 viewer.sync()
 
             last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
             prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
             # start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
-            rollout_steps = min(max(int(args.steps), 0), int(motion.num_frames))
+            rollout_steps = min(max(int(args.steps), 0), int(motion.num_frames) - start_frame)
             accumulator = MotionMetricAccumulator(
                 motion_index=motion_index,
                 motion_file=motion.path,
@@ -446,11 +467,11 @@ def main() -> None:
             )
             print(
                 f"[INFO] Running motion {motion_index + 1}/{len(motion_paths)}: "
-                f"policy_steps={rollout_steps}, frames={motion.num_frames}"
+                f"policy_steps={rollout_steps}, frames={motion.num_frames}, start_frame={start_frame}"
             )
 
             for step in range(rollout_steps):
-                t = step
+                t = start_frame + step
                 metrics = motion_tracking_metrics(model, data, motion, t, motion_meta, joint_qpos, joint_qvel, body_ids)
                 accumulator.update(metrics)
 
@@ -467,8 +488,7 @@ def main() -> None:
                 # input("Press Enter to step the simulation...")  # Step on Enter key press
                 if viewer is not None:
                     import time
-
-                    time.sleep(decimation * model.opt.timestep)
+                    time.sleep(decimation * model.opt.timestep * 0.1)
                     viewer.sync()
 
                 for _ in range(decimation):
