@@ -44,6 +44,7 @@ def name_indexes(source_names: Sequence[str], target_names: Sequence[str], path:
     return [source_to_index[name] for name in target_names]
 
 
+# checked
 def align_joint_tensors(
     tensors: dict[str, torch.Tensor],
     raw: np.lib.npyio.NpzFile,
@@ -75,6 +76,7 @@ def align_joint_tensors(
     return tensors, list(joint_names)
 
 
+# checked
 def align_body_tensors(
     tensors: dict[str, torch.Tensor],
     raw: np.lib.npyio.NpzFile,
@@ -83,6 +85,47 @@ def align_body_tensors(
     all_body_names: Sequence[str] | None,
     body_indexes: Sequence[int] | None,
 ) -> tuple[dict[str, torch.Tensor], list[str] | None]:
+    """
+        tensors: dict[str, torch.Tensor]
+
+            来源：上游从 NPZ 读取后转成 torch 的 4 个 body 张量。
+            必须包含：body_pos_w, body_quat_w, body_lin_vel_w, body_ang_vel_w。
+            关键维度：每个张量 shape 一般是 [T, B, ...]，这里用到的是第 2 维 B（body 维）。
+            作用：这是被重排/切片的主体数据。
+
+        raw: np.lib.npyio.NpzFile
+
+            来源：np.load(...) 的原始 NPZ 对象。
+            作用：尝试读取 body 名称元数据（body_names/motion_body_names/robot_body_names）。
+            为什么需要：有名字时可以按名字精确对齐，而不是靠维度猜。
+        
+        path: str
+
+            来源：当前文件路径。
+            作用：仅用于报错信息，方便定位是哪一个 NPZ 出问题。
+        
+        motion_body_names: Sequence[str] | None
+
+            语义：目标输出的 body 名称顺序（你希望最终 tensors 对齐成的顺序）。
+            作用：若提供，会优先尝试按名字映射到这个顺序。
+            典型值：任务配置里的 tracked body 列表（如 [pelvis, left_hip_roll_link, ...]）。
+        
+        all_body_names: Sequence[str] | None
+
+            语义：机器人/系统侧的全量 body 名称顺序（完整列表）。
+            作用：当 NPZ 内没有 body 名称元数据时，作为“外部先验”来推断映射。
+            典型值：robot.body_names 这种全模型 body 顺序。
+        
+        body_indexes: Sequence[int] | None
+
+            语义：要保留/重排的 body 索引（相对于“当前参考顺序”）。
+            作用：在没有足够名称信息时，作为索引 fallback 进行子集选择。
+            典型值：由 find_bodies(..., preserve_order=True) 得到的索引列表。
+    
+    返回：
+        目标 body 的状态信息
+        以及 目标 body 的名称列表（如果有的话）
+    """
     body_dim = int(tensors["body_pos_w"].shape[1])
     for key in BODY_KEYS:
         if int(tensors[key].shape[1]) != body_dim:

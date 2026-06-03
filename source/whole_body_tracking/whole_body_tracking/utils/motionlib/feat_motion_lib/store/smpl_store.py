@@ -4,9 +4,7 @@ import numpy as np
 import torch
 
 try:
-    from whole_body_tracking.utils.motionlib.smpl_math_utils.smpl_math_utils import (
-        angle_axis_to_rotation_matrix,
-    )
+    from whole_body_tracking.utils.motionlib.smpl_math_utils.smpl_math_utils import angle_axis_to_rotation_matrix
 except ModuleNotFoundError:  # pragma: no cover - test/runtime fallback without importing whole_body_tracking package
     from smpl_math_utils import angle_axis_to_rotation_matrix
 
@@ -44,6 +42,7 @@ class SmplMotionStore:
     def _idx(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
         return flatten_indices(self.index.start_idx, motion_ids, motion_steps)
 
+    # TODO 确认是否需要预先计算这些信息，以减小 RL 训练时的计算负担
     def get_pose(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
         pose = self.poses_flat[self._idx(motion_ids, motion_steps)]
         if self.up_axis == "yup":

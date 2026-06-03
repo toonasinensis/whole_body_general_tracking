@@ -15,6 +15,9 @@ class RobotMotionStore:
 
         self.clips = list(clips)
         self.device = device
+        # TODO(kiki): If motion datasets grow large, switch these whole-tensor `.to(device)`
+        # transfers to a batched CPU->GPU path like the legacy MotionLoader to reduce load-time
+        # peak VRAM usage.
         self.joint_pos = torch.cat([clip.joint_pos for clip in clips], dim=0).to(device)
         self.joint_vel = torch.cat([clip.joint_vel for clip in clips], dim=0).to(device)
         self.body_pos_w = torch.cat([clip.body_pos_w for clip in clips], dim=0).to(device)
@@ -23,6 +26,7 @@ class RobotMotionStore:
         self.body_ang_vel_w = torch.cat([clip.body_ang_vel_w for clip in clips], dim=0).to(device)
         self.file_names = [clip.path.name if clip.path is not None else f"motion_{i}" for i, clip in enumerate(clips)]
         self.fps = float(clips[0].fps)
+        # index 类实例，存储连接的 motion tensor 的基础分段信息，如每段的帧数、起止索引等
         self.index = build_motion_index([clip.num_frames for clip in clips], device=device)
         self.motion_num = int(self.index.frame_counts.numel())
         self.frame_list = self.index.frame_counts
@@ -37,6 +41,8 @@ class RobotMotionStore:
         ]
 
     def build_state(self, base_dir: str) -> UnifiedMotionState:
+        # UnifiedMotionState 是标准的 robot motion 数据结构
+        # 是 RobotMotionData list 的统一化封装
         return UnifiedMotionState(
             joint_pos=self.joint_pos,
             joint_vel=self.joint_vel,
@@ -52,3 +58,5 @@ class RobotMotionStore:
             time_step_start_idx=self.time_step_start_idx,
             time_step_end_idx=self.time_step_end_idx,
         )
+
+# checked by kiki on 2024-06-10

@@ -6,6 +6,9 @@ from pathlib import Path
 import torch
 
 
+# TODO 当前各data class的命名不准确，后续可以考虑重命名以更好地反映它们的用途
+
+
 @dataclass
 class MotionData:
     pose_aa: torch.Tensor

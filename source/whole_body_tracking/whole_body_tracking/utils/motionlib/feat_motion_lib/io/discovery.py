@@ -17,7 +17,11 @@ def find_npz_files(
     total_rank: int,
     sample_counter: int,
 ) -> tuple[list[str], int]:
-    """Return selected npz files plus the next eval sample counter."""
+    """
+        返回指定文件夹中指定的 .npz 文件列表
+        motion_num:     在 eval 时最大采样数量
+        sample_counter: 在 eval 时的采样计数器, 初始为 0, 每次调用后会增加 1
+    """
     if dataset_txt is not None:
         with open(dataset_txt) as f:
             relative_paths = [line.strip() for line in f if line.strip()]
@@ -40,6 +44,7 @@ def find_npz_files(
             raise FileNotFoundError(
                 f"No valid .npz files found from dataset_txt={dataset_txt}. Skipped entries: {skipped}"
             )
+        # TODO random 是否应该放到外面
         random.seed(42)
         random.shuffle(npz_files)
     else:
@@ -47,6 +52,8 @@ def find_npz_files(
         if not npz_files:
             raise FileNotFoundError(f"No .npz files found in {dir_path}")
 
+    # TODO 这里对于分布式训练的数据划分和 eval 模式的采样逻辑混乱
+    # 当前的写法，每个 GPU 采样的文件在 npz_files 很多时，存放的数据是一样的
     next_counter = sample_counter
     if len(npz_files) > motion_num != -1:
         if eval_mode:
@@ -86,6 +93,10 @@ def discover_npz_files(options: DiscoveryOptions) -> tuple[list[str], int]:
 
 
 def discover_pkl_files(input_path: str | Path) -> list[str]:
+    """ 
+        返回指定路径中所有的 .pkl 文件路径列表
+        如果输入是单个 .pkl 文件，则返回包含该文件的列表
+    """
     input_path = Path(input_path)
     if input_path.is_dir():
         files = sorted(str(path) for path in input_path.glob("*.pkl"))

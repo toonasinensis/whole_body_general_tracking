@@ -41,6 +41,8 @@ def parse_robot_npz(
     except KeyError as exc:
         raise MotionValidationError(f"{path}: missing required robot tensor key {exc.args[0]!r}.") from exc
 
+    # 关节和身体数据对齐检测，若 npz 文件中没有包含关节的名称信息，
+    # 则默认关节和身体数据的维度顺序与 joint_names 和 motion_body_names 中的顺序一致
     tensors, loaded_joint_names = align_joint_tensors(tensors, raw, path, joint_names)
     tensors, loaded_body_names = align_body_tensors(
         tensors,
@@ -80,6 +82,9 @@ def load_robot_motion_file(
     all_body_names: Sequence[str] | None = None,
     body_indexes: Sequence[int] | None = None,
 ) -> RobotMotionData:
+    """
+        从指定路径加载机器人运动数据，返回 RobotMotionData 对象
+    """
     raw, source_fps = load_robot_npz_raw(path)
     clip = parse_robot_npz(
         raw,
@@ -90,8 +95,10 @@ def load_robot_motion_file(
         all_body_names=all_body_names,
         body_indexes=body_indexes,
     )
+    
+    # 如果指定了 target_fps 且与 source_fps 不同，则进行重采样
     if target_fps is not None and abs(source_fps - target_fps) > 1e-3:
         from ..transform.resample import resample_robot_motion
-
         return resample_robot_motion(clip, target_fps)
+    
     return clip

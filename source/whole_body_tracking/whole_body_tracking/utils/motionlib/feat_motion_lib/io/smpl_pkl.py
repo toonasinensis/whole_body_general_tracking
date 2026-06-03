@@ -48,11 +48,15 @@ def load_pkl(path: str) -> dict:
 
 
 def load_motion_file(path: str, target_fps: float | None = None) -> MotionData:
+    """
+        从指定路径加载 SMPL PKL 格式的运动数据，返回 MotionData 对象
+    """
     from ..transform.resample import resample_motion
 
     raw = load_pkl(path)
     src_fps = float(raw["fps"])
 
+    # 如果指定了 target_fps 且与 source_fps 不同，则进行重采样
     if target_fps is not None and abs(target_fps - src_fps) > 1e-3:
         return resample_motion(raw, target_fps)
 

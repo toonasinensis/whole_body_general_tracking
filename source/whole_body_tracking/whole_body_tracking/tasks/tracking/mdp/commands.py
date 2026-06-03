@@ -1,18 +1,11 @@
 from __future__ import annotations
 
-import datetime
 import json
 import math
-import numpy as np
-import os
-
-# from whole_body_parkour.data import DATA_ASSET_DIR
-import random
 import torch
 from collections.abc import Sequence
 from dataclasses import MISSING
 from pathlib import Path
-from tqdm import tqdm
 from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
@@ -27,7 +20,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
 from isaaclab.utils.math import (
     quat_apply,
-    quat_rotate_inverse as quat_apply_inverse, # sim5.1 to sim4.5
+    quat_rotate_inverse as quat_apply_inverse,  # sim5.1 to sim4.5
     quat_error_magnitude,
     quat_inv,
     quat_mul,
@@ -35,230 +28,41 @@ from isaaclab.utils.math import (
     yaw_quat,
 )
 
+from whole_body_tracking.utils.motionlib.feat_motion_lib.facade.unified_motion_lib import UnifiedMotionLib
+
 from .math_utils import quat_to_6d
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-class MotionLoader:
+class MotionLoader(UnifiedMotionLib):
     def __init__(
         self,
         cfg: MotionCommandCfg,
-        body_indexes: Sequence[int] = [0],
+        body_indexes: Sequence[int] = (0,),
         motion_anchor_body_index: int = 0,
+        joint_names: Sequence[str] | None = None,
+        motion_body_names: Sequence[str] | None = None,
+        all_body_names: Sequence[str] | None = None,
         device: str = "cpu",
     ):
-        self.device = device
+        super().__init__(
+            body_indexes=body_indexes,
+            motion_anchor_body_index=motion_anchor_body_index,
+            joint_names=joint_names,
+            motion_body_names=motion_body_names,
+            all_body_names=all_body_names,
+            device=device,
+        )
         self.cfg = cfg
-        self.body_indexes = body_indexes
-        self.motion_anchor_body_index = motion_anchor_body_index
-        self.motion_num = None
         self.json_path = None
         self.death_path = None
         self.first_init = False
 
-        self.joint_pos = None
-        self.joint_vel = None
-        self._body_pos_w_sel = None
-        self._body_quat_w_sel = None
-        self._body_lin_vel_w_sel = None
-        self._body_ang_vel_w_sel = None
-
-        self.time_step_total = None  # self.joint_pos.shape[0]
-        self.file_names = None
-        self.time_step_end_idx = None
-        self.frame_list = None  # 确保在同一 device
-        self.time_step_start_idx = None
-        self.motion_num = None
-        if self.cfg.eval_mode:
-            self.sample_counter = 0
-
-    def _find_npz_files(self, dir_path: Path, motion_num: int, dataset_txt=None):
-        """随机选择一个子文件夹（若存在），返回其中所有 .npz 文件路径"""
-        if dataset_txt is not None:
-            with open(dataset_txt) as f:
-                relative_paths = [line.strip() for line in f if line.strip()]
-                # import ipdb;ipdb.set_trace()
-            npz_files = [dir_path + "/" + rel_path for rel_path in relative_paths]
-            random.seed(42)  # 方便对比试验
-            random.shuffle(npz_files)
-        else:
-            dir_path = Path(dir_path)
-            npz_files = list(dir_path.rglob("*.npz"))
-            if not npz_files:
-                raise FileNotFoundError(f"No .npz files found in {dir_path}")
-            """从 npz 文件中均匀随机采样 motion_num 个"""
-            npz_files.sort()
-
-        if len(npz_files) > motion_num and motion_num != -1:  # 动作文件需要采样（内存不够）或者人为指定把所有数据拿出来
-            if self.cfg.eval_mode:
-                start_idx = self.sample_counter * motion_num  # % len(npz_files)
-                start_idx = min(start_idx, len(npz_files) - 1)  # 防止越界
-                end_idx = min(start_idx + motion_num, len(npz_files) - 1)  # 防止越界
-                if start_idx > len(npz_files) or start_idx == len(npz_files) - 1:
-                    raise ValueError("Not enough npz files for eval_mode sampling. all data if eval finished.")
-                sampled_files = npz_files[start_idx:end_idx]
-                print("eval_mode process: ", (float(start_idx) / len(npz_files)))
-                print("当前本地时间:", datetime.datetime.now().strftime("%H%M"))
-                self.sample_counter += 1
-            else:
-                # 采样后保持排序顺序：先按motion号排序，再按z_scale排序
-                sampled_files = sorted(random.sample(npz_files, motion_num))
-        elif self.cfg.distributed:
-            total_motion_num = len(npz_files)
-            subset_motion_num = total_motion_num // self.cfg.total_rank
-            start_idx = subset_motion_num * self.cfg.local_rank
-            end_idx = subset_motion_num * (self.cfg.local_rank + 1)
-            print(f"第{self.cfg.local_rank}个GPU的数据集为数据{start_idx}->{end_idx}, 共{subset_motion_num}个")
-            sampled_files = npz_files[start_idx:end_idx]
-        else:
-            print(f"加载全部共{len(npz_files)}个NPZ动作数据")
-            sampled_files = npz_files
-        return sampled_files
-
-    def load_and_cat_npz_with_filenames(self, dir_path, motion_num=25, device="cpu", dataset_txt=None):
-        """
-        加载 npz 文件，并按 batch 拼接，避免一次性占用 GPU 显存。
-        batch_size: 每次拼接的帧数
-        """
-
-        batch_size = 1024
-        npz_file_paths = self._find_npz_files(dir_path, motion_num, dataset_txt)
-        rel_npz_file_names = [os.path.relpath(f, dir_path) for f in npz_file_paths]
-        tensor_keys = ["joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w"]
-        tensor_lists = {k: [] for k in tensor_keys}
-        fps_list = []
-        frames_per_file = []
-
-        # 先在 CPU 上读取数据，保持 list
-        for f_path in tqdm(npz_file_paths, desc="Processing files"):
-            try:
-                data = np.load(f_path, allow_pickle=True)
-                for k in tensor_keys:
-                    tensor = torch.from_numpy(data[k]).float()  # CPU tensor
-                    tensor_lists[k].append(tensor)
-                fps_list.append(data["fps"])
-                frames_per_file.append(data["joint_pos"].shape[0])
-            except Exception as e:
-                print(f"   路径: {f_path}")
-                print(f"   错误: {e}")
-                # 可选：跳过这个文件继续
-                continue
-
-        fps_values = [float(fps) for fps in fps_list]
-        assert len(set(fps_values)) == 1, "All fps in npz files must be the same."
-        fps = fps_values[0]
-
-        if device != "cpu":
-            print(f"[Before batch cat] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-
-        # 按 batch 拼接，逐步拷贝到 GPU（如果 device != "cpu"）
-
-        data_dict = {k: [] for k in tensor_keys}
-        for k in tensor_keys:
-            batch_tensors = []
-            for tensor in tensor_lists[k]:
-                num_frames = tensor.shape[0]
-                for start in range(0, num_frames, batch_size):
-                    end = min(start + batch_size, num_frames)
-                    batch = tensor[start:end]
-                    if device != "cpu":
-                        batch = batch.to(device)
-                    batch_tensors.append(batch)
-            # 最后将所有 batch 拼成一个 tensor
-            data_dict[k] = torch.cat(batch_tensors, dim=0)
-
-        if device != "cpu":
-            print(f"[After batch cat] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-
-        return data_dict, rel_npz_file_names, fps, frames_per_file
-
     def resample_motionloader(self, device):
-        data_dict, file_names, fps, frame_list = self.load_and_cat_npz_with_filenames(
-            self.cfg.motion_file, self.cfg.max_motion_num, device, self.cfg.dataset_txt
-        )  # frame list是每个motion file长度的list
-        self.fps = fps
-
-        self.joint_pos = data_dict["joint_pos"]
-        self.joint_vel = data_dict["joint_vel"]
-
-        self._body_pos_w_sel = data_dict["body_pos_w"][:, self.body_indexes]
-        self._body_quat_w_sel = data_dict["body_quat_w"][:, self.body_indexes]
-        self._body_lin_vel_w_sel = data_dict["body_lin_vel_w"][:, self.body_indexes]
-        self._body_ang_vel_w_sel = data_dict["body_ang_vel_w"][:, self.body_indexes]
-        # print("Loaded motions with total frames:", sum(frame_list), frame_list)
-        if device != "cpu":
-            print(f"[data_dict] GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**2:.2f} MB")
-        print(" \n \n \n")
-
-        self.time_step_total = sum(frame_list)  # self.joint_pos.shape[0]
-        self.file_names = file_names
-        print("file nums:", "     ", len(self.file_names))
-        print("frame nums:", "     ", (self._body_pos_w_sel.shape[0]))
-
-        self.frame_list = torch.tensor(frame_list, device=device)
-        self.motion_num = len(frame_list)
-
-        self.time_step_end_idx = torch.cumsum(self.frame_list, dim=0)
-        self.time_step_start_idx = torch.cat(
-            [torch.tensor([0], device=self.frame_list.device), self.time_step_end_idx[:-1]]
-        )
-
-    @property
-    def body_pos_w(self) -> torch.Tensor:
-        return self._body_pos_w_sel  # 直接返回缓存，O(1)
-
-    @property
-    def body_quat_w(self) -> torch.Tensor:
-        return self._body_quat_w_sel
-
-    @property
-    def body_lin_vel_w(self) -> torch.Tensor:
-        return self._body_lin_vel_w_sel
-
-    @property
-    def body_ang_vel_w(self) -> torch.Tensor:
-        return self._body_ang_vel_w_sel
-
-    @property
-    def anchor_pos_w(self) -> torch.Tensor:
-        # motion_anchor_body_index 是 int，整数索引返回 view 而非 copy
-        return self._body_pos_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_quat_w(self) -> torch.Tensor:
-        return self._body_quat_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_lin_vel_w(self) -> torch.Tensor:
-        return self._body_lin_vel_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_ang_vel_w(self) -> torch.Tensor:
-        return self._body_ang_vel_w_sel[:, self.motion_anchor_body_index]
-
-    @property
-    def anchor_pos_z(self) -> torch.Tensor:
-        return self.anchor_pos_w[:, 2:3]
-
-    def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
-        """Map global frame timestamps to motion ids.
-        The global timestamps index the concatenated motion tensor. This function returns
-        the corresponding motion id for each timestamp based on ``time_step_end_idx``.
-        Args
-            timestamps: (num_envs, ) global frame timestamps for each environment
-        Returns
-            (num_envs, ) corresponding motion ids for each environment
-        """
-        if self.time_step_end_idx is None:
-            raise RuntimeError("MotionLoader is not initialized. Call resample_motionloader first.")
-        if timestamps.dtype != torch.long:
-            timestamps = timestamps.long()
-        timestamps = torch.clamp(timestamps, min=0, max=int(self.time_step_total) - 1)
-        # General case: end_idx is exclusive; use right=True so boundary timestamps map to the next motion.
-        motion_ids = torch.bucketize(timestamps, self.time_step_end_idx, right=True)
-        return torch.clamp(motion_ids, min=0, max=self.motion_num - 1)
+        self.device = device
+        return self.load_from_cfg(self.cfg)
 
 
 class MotionCommand(CommandTerm):
@@ -280,7 +84,15 @@ class MotionCommand(CommandTerm):
         # Per-env motion id in the current concatenated motion buffer.
         self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
-        self.motion = MotionLoader(self.cfg, self.body_indexes, self.motion_anchor_body_index, device=self.device)
+        self.motion = MotionLoader(
+            self.cfg,
+            body_indexes=self.body_indexes.tolist(),
+            motion_anchor_body_index=self.motion_anchor_body_index,
+            joint_names=list(self.robot.data.joint_names),
+            motion_body_names=list(self.cfg.body_names),
+            all_body_names=list(self.robot.body_names),
+            device=self.device,
+        )
 
         self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
@@ -1099,6 +911,10 @@ class MotionCommandCfg(CommandTermCfg):
     resample_interval: int = 300000000000
     motion_file: str = MISSING
     dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
+    smpl_file_path: str | None = None
+    target_fps: float = 50.0
+    up_axis: str = "yup"
+    max_frame_diff: int = 2
 
     # reference motion obs configs
     anchor_body_name: str = MISSING

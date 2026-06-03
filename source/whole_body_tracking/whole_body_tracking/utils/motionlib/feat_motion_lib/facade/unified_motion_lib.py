@@ -14,6 +14,11 @@ from .smpl_motion_lib import SmplMotionLib
 
 
 class UnifiedMotionLib:
+    """
+        统一的运动数据接口，提供对机器人运动数据和对应 SMPL 数据的访问。
+        设计目标是简化下游任务（如 RL 训练）对运动数据的使用，隐藏数据加载、预处理和索引管理的复杂性。    
+    """
+
     def __init__(
         self,
         body_indexes: Sequence[int],
@@ -159,6 +164,9 @@ class UnifiedMotionLib:
             raise MotionNotLoadedError("SMPL data not loaded.")
         return self._smpl_lib
 
+    # 索引指定帧的 smpl 数据 
+    # motion_ids: motion id
+    # motion_steps: motion step id (frame id within the motion)
     def get_smpl_joints(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
         return self._require_smpl().get_smpl_joints(motion_ids, motion_steps)
 
