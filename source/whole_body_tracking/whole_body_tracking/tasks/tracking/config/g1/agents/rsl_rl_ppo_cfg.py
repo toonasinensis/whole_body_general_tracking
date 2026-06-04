@@ -8,6 +8,28 @@ from whole_body_tracking.tasks.tracking.config.g1.flat_env_cfg import G1_AMP_ANC
 G1_AMP_MOTION_DIR = os.path.normpath(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../../../data/g1_amp/Recovery"))
 )
+G1_RLBC_TEACHER_CHECKPOINT_PATH = os.path.normpath(
+    os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "../../../../../../../../logs/rsl_rl/g1_amp/2026-05-30_16-31-18/model_100500.pt",
+        )
+    )
+)
+G1_RLBC_TEACHER_ACTOR_CFG = {
+    "class_name": "ActorModel",
+    "distribution_cfg": {
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar",
+    },
+    "backbone": {
+        "class_name": "MyMLPModel",
+        "hidden_dims": [1024, 512, 256],
+        "activation": "swish",
+        "obs_normalization": True,
+    },
+}
 
 
 @configclass
@@ -204,8 +226,8 @@ class xwlCriticCfg:
 class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
     experiment_name = "g1_amp"
 
-    actor = xwlActorShellCfg()
-    critic = xwlCriticCfg()
+    actor = ActorShellCfg()
+    critic = CriticCfg()
     algorithm = MyPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
@@ -225,11 +247,55 @@ class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
                 "amp_reward_coef": 0.1,
                 "amp_motion_files": G1_AMP_MOTION_DIR,
                 "amp_task_reward_lerp": 0.75,
-                "amp_discr_hidden_dims": [1024, 512, 256],
+                "amp_discr_hidden_dims": [1024, 1024, 512, 256],
                 "amp_replay_buffer_size": 200000,
                 "amp_body_names": G1_AMP_BODY_NAMES,
                 "amp_anchor_name": G1_AMP_ANCHOR_BODY_NAME,
                 "min_normalized_std": [0.05] * 29,
             }
+        ],
+    )
+
+
+@configclass
+class G1FlatRLBCDRunnerCfg(G1FlatAMPRunnerCfg):
+    experiment_name = "g1_rlbc"
+
+    algorithm = MyPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.005,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=1.0e-3,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+        plugins=[
+            # {
+            #     "class_name": "AMPPlugin",
+            #     "amp_reward_coef": 0.1,
+            #     "amp_motion_files": G1_AMP_MOTION_DIR,
+            #     "amp_task_reward_lerp": 0.75,
+            #     "amp_discr_hidden_dims": [1024, 1024, 512, 256],
+            #     "amp_replay_buffer_size": 200000,
+            #     "amp_body_names": G1_AMP_BODY_NAMES,
+            #     "amp_anchor_name": G1_AMP_ANCHOR_BODY_NAME,
+            #     "min_normalized_std": [0.05] * 29,
+            # },
+            {
+                "class_name": "TeacherKLPlugin",
+                "teacher_checkpoint_path": G1_RLBC_TEACHER_CHECKPOINT_PATH,
+                "teacher_actor": G1_RLBC_TEACHER_ACTOR_CFG,
+                "teacher_obs_groups": {"actor": ["prop", "rbt_cmd_mf", "smpl_cmd_mf"]},
+                "teacher_obs_aliases": {"rbt_cmd_mf": "zrbt_cmd_mf"},
+                "start_loss_coef": 0.5,
+                "end_loss_coef": 0.0,
+                "end_step": 2000,
+                "kl_direction": "student_teacher",
+            },
         ],
     )

@@ -13,7 +13,7 @@ SMPL_FILE_PATH="${SMPL_FILE_PATH:-}"
 ENCODER_MODE="${ENCODER_MODE:-robot}"
 ONNX_DIR="${ONNX_DIR:-$(dirname "${RESUME_PATH}")/exported}"
 ONNX_FILENAME="${ONNX_FILENAME:-policy.onnx}"
-ONNX_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/exported/policy.onnx"
+ONNX_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_rlbc/2026-06-04_12-09-05/exported/policy.onnx"
 EXPORT_ONNX="${EXPORT_ONNX:-0}"
 RENDER="${RENDER:-1}"
 SHOW_REFERENCE="${SHOW_REFERENCE:-1}"
@@ -100,7 +100,6 @@ ${SIM2SIM_PYTHON} whole_body_tracking/scripts/deploy/sim2sim_g1_mujoco.py \
   "${DATASET_ARGS[@]}" \
   "${MOTION_SELECT_ARGS[@]}" \
   "${RENDER_ARGS[@]}" \
-  "${IMU_DEBUG_ARGS[@]}" \
   "${REFERENCE_ARGS[@]}" \
   "${METRICS_ARGS[@]}" \
   "$@"

@@ -116,7 +116,7 @@ class CommandsCfg:
             "pitch": (-1.0, 1.0),
             "yaw": (-0.0, 0.0),
         },
-        pose_range_env_ratio=1.0,
+        pose_range_env_ratio=0.3,
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
@@ -186,6 +186,25 @@ class ObservationsCfg:
 
     @configclass
     class RbtCmdMfCfg(ObsGroup):
+        motion_joint_pos_multi_future = ObsTerm(
+            func=mdp.motion_joint_pos_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        motion_joint_vel_multi_future = ObsTerm(
+            func=mdp.motion_joint_vel_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.5, n_max=0.5)
+        )
+        motion_anchor_ori_b_multi_future = ObsTerm(
+            func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        # motion_anchor_z_multi_future = ObsTerm(
+        #     func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        # )
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class ZRbtCmdMfCfg(ObsGroup):
         motion_joint_pos_multi_future = ObsTerm(
             func=mdp.motion_joint_pos_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
@@ -277,6 +296,7 @@ class ObservationsCfg:
     # policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
     rbt_cmd_mf: RbtCmdMfCfg = RbtCmdMfCfg()
+    zrbt_cmd_mf: ZRbtCmdMfCfg = ZRbtCmdMfCfg()
     smpl_cmd_mf: SmplCmdMfCfg = SmplCmdMfCfg()
     prop: PropCfg = PropCfg()
     amp: AmpCfg | None = None

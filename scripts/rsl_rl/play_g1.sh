@@ -5,10 +5,10 @@ set -e
 ARGS=(
   --task=FM-G1
   --num_envs=40
-  --resume_path=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt
+  --resume_path=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_rlbc/2026-06-04_12-09-05/model_86000.pt
   --motion_file=/home/thl/Documents/g1-mimic-npz
-  --dataset_txt=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/fall.txt
-  --headless
+  --dataset_txt=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/lafan.txt
+#   --headless
   # Export/load ONNX.
   --export_onnx
   --use_onnx_policy
