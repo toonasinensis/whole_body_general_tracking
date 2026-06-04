@@ -123,9 +123,6 @@ class MyPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     plugins: list = []
 
 
-
-
-
 @configclass
 class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
@@ -193,6 +190,7 @@ class xwlActorShellCfg:
         "obs_normalization": True,
     }
 
+
 @configclass
 class xwlCriticCfg:
     class_name: str = "MLPModel"
@@ -200,6 +198,7 @@ class xwlCriticCfg:
     activation: str = "swish"
     obs_normalization: bool = True
     distribution_cfg: dict = None
+
 
 @configclass
 class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):

@@ -338,7 +338,7 @@ class RewardsCfg:
     )
     motion_global_anchor_pos_z = RewTerm(
         func=mdp.motion_global_anchor_position_z_error_exp,
-        weight=1.,
+        weight=1.0,
         params={"command_name": "motion", "std": 0.3},
     )
     motion_global_anchor_ori = RewTerm(

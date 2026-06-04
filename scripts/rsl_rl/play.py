@@ -300,8 +300,6 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
         "sim_dt": float(base_env.cfg.sim.dt),
     }
 
- 
- 
 
 class OnnxPolicyRunner:
     def __init__(self, onnx_path: str, device: str):
@@ -442,8 +440,6 @@ def main(  # noqa: C901
         if motion_cmd is None:
             print("[WARN] Could not find command term 'motion'; command metrics will not be logged.")
 
-     
-
     # export policy to onnx/jit
     export_model_dir = args_cli.onnx_dir or os.path.join(os.path.dirname(resume_path), "exported")
     onnx_policy_path = args_cli.onnx_path or os.path.join(export_model_dir, args_cli.onnx_filename)
@@ -493,7 +489,7 @@ def main(  # noqa: C901
                 actions = policy(obs)
                 if isinstance(actions, dict) and "actions" in actions:
                     actions = actions["actions"]
-             
+
             obs, _, dones, _ = env.step(actions)
             episode_length_steps += 1
             done_env_ids = torch.where(dones.to(device=episode_length_steps.device, dtype=torch.bool))[0]

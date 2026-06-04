@@ -306,9 +306,7 @@ def build_rbt_cmd_mf(
     builders = {
         "motion_joint_pos_multi_future": lambda: motion["joint_pos"][future].reshape(1, -1),
         "motion_joint_vel_multi_future": lambda: motion["joint_vel"][future].reshape(1, -1),
-        "motion_anchor_ori_b_multi_future": lambda: motion_anchor_ori_b_mf(
-            motion, future, meta, robot_anchor_quat_w
-        ),
+        "motion_anchor_ori_b_multi_future": lambda: motion_anchor_ori_b_mf(motion, future, meta, robot_anchor_quat_w),
         "motion_anchor_z_multi_future": lambda: motion_anchor_z_mf(motion, future, meta),
     }
     terms = meta.get("observation_terms", {}).get("rbt_cmd_mf", {}).get("terms", [])

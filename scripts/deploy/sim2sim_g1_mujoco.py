@@ -238,7 +238,9 @@ def _select_motion_paths(args: argparse.Namespace, paths: list[str]) -> list[tup
         matches = [
             item
             for item in indexed_paths
-            if str(Path(item[1]).expanduser()) == query or Path(item[1]).name == query_name or item[1] == args.motion_path
+            if str(Path(item[1]).expanduser()) == query
+            or Path(item[1]).name == query_name
+            or item[1] == args.motion_path
         ]
         if not matches:
             raise ValueError(f"--motion_path {args.motion_path!r} did not match any selected motion.")
@@ -364,10 +366,7 @@ def main() -> None:
     first_selected_index, first_motion_path = motion_entries[0]
     first_motion = MotionData(first_motion_path)
     motion = first_motion
-    print(
-        f"[INFO] Motion 1/{len(motion_paths)} "
-        f"(original_index={first_selected_index}): {motion.path}"
-    )
+    print(f"[INFO] Motion 1/{len(motion_paths)} (original_index={first_selected_index}): {motion.path}")
     motion.print_config()
 
     model = mujoco.MjModel.from_xml_path(args.xml_path)
@@ -543,6 +542,7 @@ def main() -> None:
                 # input("Press Enter to step the simulation...")  # Step on Enter key press
                 if viewer is not None:
                     import time
+
                     time.sleep(decimation * model.opt.timestep)
                     viewer.sync()
 

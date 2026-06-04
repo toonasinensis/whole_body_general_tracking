@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import torch
 import types
 from pathlib import Path
-
-import torch
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MDP_PATH = ROOT / "source" / "whole_body_tracking" / "whole_body_tracking" / "tasks" / "tracking" / "mdp"

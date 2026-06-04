@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import numpy as np
 import sys
+import torch
 from pathlib import Path
 
-import numpy as np
 import onnx
-import torch
 from onnx import TensorProto, helper
 from sim2sim_g1.mujoco_robot import action_to_target
 from sim2sim_g1.observations import ImuReader, TermMajorHistory, prop_terms_from_metadata

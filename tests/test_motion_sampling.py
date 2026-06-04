@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import torch
 from pathlib import Path
 
 import pytest
-import torch
-
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]

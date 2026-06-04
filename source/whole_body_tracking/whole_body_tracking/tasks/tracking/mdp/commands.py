@@ -441,7 +441,9 @@ class MotionCommand(CommandTerm):
         # store local end (exclusive) to drive resampling with local time_steps
         self.frame_end_per_env[env_ids] = end - start
 
-    def _sampled_global_timestamps_to_rewinded_local(self, timestamps: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _sampled_global_timestamps_to_rewinded_local(
+        self, timestamps: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Map sampled global frames to motion-local starts with a recovery rewind.
 
         Legacy global-timestamp path. Runtime adaptive sampling uses motion-local spawn bins
@@ -611,10 +613,11 @@ class MotionCommand(CommandTerm):
             probabilities_most_hard = uniform
 
         sampling_probabilities = self.cfg.motion_ratio[0] * uniform + (
-            self.cfg.motion_ratio[1] * probabilities_middle_hard
-            + self.cfg.motion_ratio[2] * probabilities_most_hard
+            self.cfg.motion_ratio[1] * probabilities_middle_hard + self.cfg.motion_ratio[2] * probabilities_most_hard
         )
-        sampling_probabilities = torch.where(valid_flat, sampling_probabilities, torch.zeros_like(sampling_probabilities))
+        sampling_probabilities = torch.where(
+            valid_flat, sampling_probabilities, torch.zeros_like(sampling_probabilities)
+        )
         sampling_probabilities = sampling_probabilities / (sampling_probabilities.sum() + 1e-12)
         return sampling_probabilities, valid_flat
 
