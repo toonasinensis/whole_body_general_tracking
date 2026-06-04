@@ -123,6 +123,9 @@ class MyPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     plugins: list = []
 
 
+
+
+
 @configclass
 class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
@@ -176,8 +179,34 @@ class G1FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 
 @configclass
+class xwlActorShellCfg:
+    class_name: str = "ActorModel"
+    distribution_cfg: dict = {
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar",
+    }
+    backbone: dict = {
+        "class_name": "MyMLPModel",
+        "hidden_dims": [1024, 512, 256],
+        "activation": "swish",
+        "obs_normalization": True,
+    }
+
+@configclass
+class xwlCriticCfg:
+    class_name: str = "MLPModel"
+    hidden_dims: list = [1024, 512, 256]
+    activation: str = "swish"
+    obs_normalization: bool = True
+    distribution_cfg: dict = None
+
+@configclass
 class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
     experiment_name = "g1_amp"
+
+    actor = xwlActorShellCfg()
+    critic = xwlCriticCfg()
     algorithm = MyPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,

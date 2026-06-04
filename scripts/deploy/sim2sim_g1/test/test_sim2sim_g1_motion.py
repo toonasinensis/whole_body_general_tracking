@@ -104,6 +104,52 @@ def test_motion_groups_shape_and_robot_relative_orientation() -> None:
     assert smpl_cmd_mf.shape == (1, 0)
 
 
+def test_motion_groups_includes_anchor_z_multi_future_when_export_metadata_has_term() -> None:
+    class Motion:
+        files = ["joint_pos", "joint_vel", "body_pos_w", "body_quat_w"]
+        num_frames = 4
+
+        def __init__(self):
+            self.values = {
+                "joint_pos": np.ones((4, 2), dtype=np.float32),
+                "joint_vel": np.zeros((4, 2), dtype=np.float32),
+                "body_pos_w": np.asarray(
+                    [[[0.0, 0.0, 0.5]], [[0.0, 0.0, 0.6]], [[0.0, 0.0, 0.7]], [[0.0, 0.0, 0.8]]],
+                    dtype=np.float32,
+                ),
+                "body_quat_w": np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (4, 1, 1)),
+            }
+
+        def __getitem__(self, key):
+            return self.values[key]
+
+        def __contains__(self, key):
+            return key in self.values
+
+    meta = {
+        "future_step_num": [0, 1],
+        "motion_body_names": ["pelvis"],
+        "anchor_body_name": "pelvis",
+        "observation_shapes": {"rbt_cmd_mf": [22], "smpl_cmd_mf": [0]},
+        "observation_terms": {
+            "rbt_cmd_mf": {
+                "terms": [
+                    {"name": "motion_joint_pos_multi_future"},
+                    {"name": "motion_joint_vel_multi_future"},
+                    {"name": "motion_anchor_ori_b_multi_future"},
+                    {"name": "motion_anchor_z_multi_future"},
+                ]
+            }
+        },
+    }
+
+    rbt_cmd_mf, smpl_cmd_mf = motion_groups(Motion(), 0, meta, np.array([[1.0, 0.0, 0.0, 0.0]]))
+
+    assert rbt_cmd_mf.shape == (1, 22)
+    assert np.array_equal(rbt_cmd_mf[0, -2:], np.asarray([0.5, 0.6], dtype=np.float32))
+    assert smpl_cmd_mf.shape == (1, 0)
+
+
 def test_motion_data_aligned_to_uses_npz_names(tmp_path) -> None:
     path = tmp_path / "named_motion.npz"
     np.savez(

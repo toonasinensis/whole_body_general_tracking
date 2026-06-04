@@ -50,6 +50,9 @@ def export_grouped_motion_policy_as_onnx(
             "input_names": policy_exporter.input_names,
             "input_groups": policy_exporter.input_names,
             "input_shapes": {name: list(shape) for name, shape in policy_exporter.input_shapes.items()},
+            "observation_terms": collect_observation_terms_metadata(
+                getattr(env, "unwrapped", env), policy_exporter.input_names
+            ),
         }
         export_metadata.update(metadata)
         append_onnx_metadata(onnx_path, export_metadata)
@@ -225,6 +228,50 @@ def _metadata_to_jsonable(value):
     return value
 
 
+def collect_observation_terms_metadata(base_env, observation_groups: list[str]) -> dict:
+    """Return explicit per-group observation term metadata for ONNX consumers."""
+    obs_manager = getattr(base_env, "observation_manager", None)
+    if obs_manager is None:
+        return {}
+
+    active_terms = getattr(obs_manager, "active_terms", {})
+    term_dims = getattr(obs_manager, "group_obs_term_dim", {})
+    concatenate = getattr(obs_manager, "group_obs_concatenate", {})
+    term_cfgs = getattr(obs_manager, "_group_obs_term_cfgs", {})
+
+    out = {}
+    for group_name in observation_groups:
+        names = list(active_terms.get(group_name, []))
+        dims = list(term_dims.get(group_name, []))
+        cfgs = list(term_cfgs.get(group_name, []))
+        terms = []
+        for idx, name in enumerate(names):
+            shape = list(dims[idx]) if idx < len(dims) else []
+            cfg = cfgs[idx] if idx < len(cfgs) else None
+            history_length = int(getattr(cfg, "history_length", 0)) if cfg is not None else 0
+            flatten_history_dim = bool(getattr(cfg, "flatten_history_dim", True)) if cfg is not None else True
+            base_shape = list(shape)
+            if history_length > 0:
+                if flatten_history_dim and len(shape) == 1 and shape[0] % history_length == 0:
+                    base_shape = [shape[0] // history_length]
+                elif not flatten_history_dim and len(shape) >= 1 and shape[0] == history_length:
+                    base_shape = shape[1:]
+            terms.append(
+                {
+                    "name": name,
+                    "shape": shape,
+                    "base_shape": base_shape,
+                    "history_length": history_length,
+                    "flatten_history_dim": flatten_history_dim,
+                }
+            )
+        out[group_name] = {
+            "concatenate_terms": bool(concatenate.get(group_name, True)),
+            "terms": terms,
+        }
+    return out
+
+
 def append_onnx_metadata(onnx_path: str, metadata: dict) -> None:
     """Append JSON-friendly metadata to an ONNX file."""
     model = onnx.load(onnx_path)
@@ -261,6 +308,8 @@ def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filen
     else:
         action_scale_value = float(action_scale)
 
+    obs = env.get_observations()
+    observation_shapes = {"policy": list(obs["policy"].shape[1:])} if isinstance(obs, dict) and "policy" in obs else {}
     metadata = {
         "run_path": run_path,
         "joint_names": env.scene["robot"].data.joint_names,
@@ -269,6 +318,8 @@ def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filen
         "default_joint_pos": env.scene["robot"].data.default_joint_pos_nominal.cpu().tolist(),
         "command_names": env.command_manager.active_terms,
         "observation_names": env.observation_manager.active_terms["policy"],
+        "observation_shapes": observation_shapes,
+        "observation_terms": collect_observation_terms_metadata(env, ["policy"]),
         "action_scale": action_scale_value,
     }
 

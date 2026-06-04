@@ -27,7 +27,9 @@ class DelayedTerminationManager(TerminationManager):
     ) -> None:
         self.__dict__.update(base.__dict__)
         self._delay_env_mask = delay_env_mask
+        self.delayed_termination_env_mask = delay_env_mask
         self._delay_counters = torch.zeros_like(delay_env_mask, dtype=torch.long)
+        self.delayed_termination_active_mask = torch.zeros_like(delay_env_mask, dtype=torch.bool)
         self._max_delay_steps = int(max_delay_steps)
 
     def reset(self, env_ids=None) -> dict[str, torch.Tensor]:
@@ -35,10 +37,12 @@ class DelayedTerminationManager(TerminationManager):
         if env_ids is None:
             env_ids = slice(None)
         self._delay_counters[env_ids] = 0
+        self.delayed_termination_active_mask[env_ids] = False
         return extras
 
     def compute(self) -> torch.Tensor:
         dones = super().compute()
+        self.delayed_termination_active_mask[:] = False
         if self._max_delay_steps <= 0:
             return dones
 
@@ -47,6 +51,9 @@ class DelayedTerminationManager(TerminationManager):
         self._delay_counters[delay_and_terminated] += 1
 
         not_ready = delay_and_terminated & (self._delay_counters < self._max_delay_steps)
+        # Expose only the currently suppressed termination window. Rewards use this
+        # to switch from full tracking to recovery tracking on the same step.
+        self.delayed_termination_active_mask[not_ready] = True
         self._terminated_buf[not_ready] = False
 
         ready = delay_and_terminated & (self._delay_counters >= self._max_delay_steps)
@@ -114,6 +121,18 @@ def bad_anchor_pos(env: ManagerBasedRLEnv, command_name: str, threshold: float) 
     return torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1) > threshold
 
 
+def _disable_termination_on_delayed_envs(
+    env: ManagerBasedRLEnv, terminated: torch.Tensor, disable_on_delayed_termination_envs: bool
+) -> torch.Tensor:
+    if not disable_on_delayed_termination_envs:
+        return terminated
+
+    mask = getattr(env.termination_manager, "delayed_termination_env_mask", None)
+    if mask is None:
+        return terminated
+    return terminated & ~mask.to(device=terminated.device, dtype=torch.bool)
+
+
 def bad_anchor_pos_z_only(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     return torch.abs(command.anchor_pos_w[:, -1] - command.robot_anchor_pos_w[:, -1]) > threshold
@@ -133,20 +152,30 @@ def bad_anchor_ori(
 
 
 def bad_motion_body_pos(
-    env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    body_names: list[str] | None = None,
+    disable_on_delayed_termination_envs: bool = False,
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
 
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.norm(command.body_pos_relative_w[:, body_indexes] - command.robot_body_pos_w[:, body_indexes], dim=-1)
-    return torch.any(error > threshold, dim=-1)
+    terminated = torch.any(error > threshold, dim=-1)
+    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
 
 
 def bad_motion_body_pos_z_only(
-    env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    body_names: list[str] | None = None,
+    disable_on_delayed_termination_envs: bool = False,
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
 
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.abs(command.body_pos_relative_w[:, body_indexes, -1] - command.robot_body_pos_w[:, body_indexes, -1])
-    return torch.any(error > threshold, dim=-1)
+    terminated = torch.any(error > threshold, dim=-1)
+    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)

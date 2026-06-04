@@ -56,6 +56,15 @@ parser.add_argument(
     default=1,
     help="Log command metrics to TensorBoard every N env steps when --logger=tensorboard.",
 )
+parser.add_argument(
+    "--tb_log_episode_length_per_env",
+    action="store_true",
+    default=False,
+    help=(
+        "When TensorBoard logging is enabled, also write one scalar per env for average episode length. "
+        "This can create many tags for large num_envs."
+    ),
+)
 parser.add_argument("--export_onnx", action="store_true", default=False, help="Export the loaded policy to ONNX.")
 parser.add_argument(
     "--onnx_dir",
@@ -142,6 +151,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
 from whole_body_tracking.utils.exporter import (  # noqa: F401
+    collect_observation_terms_metadata,
     export_grouped_motion_policy_as_onnx,
     resolve_policy_observation_groups,
 )
@@ -212,44 +222,48 @@ def _maybe_first_env_list(value, env_id: int = 0):
     return value
 
 
-def _collect_observation_terms_metadata(base_env, observation_groups: list[str]) -> dict:
-    obs_manager = base_env.observation_manager
-    active_terms = obs_manager.active_terms
-    term_dims = obs_manager.group_obs_term_dim
-    concatenate = obs_manager.group_obs_concatenate
-    term_cfgs = getattr(obs_manager, "_group_obs_term_cfgs", {})
+def _log_completed_episode_lengths(tb_writer, lengths: torch.Tensor, env_ids: torch.Tensor, timestep: int) -> None:
+    if lengths.numel() == 0:
+        return
+    values = lengths.detach().float().cpu()
+    tb_writer.add_scalar("episode_length/completed_mean", float(values.mean().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/completed_min", float(values.min().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/completed_max", float(values.max().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/completed_std", float(values.std(unbiased=False).item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/completed_count", int(values.numel()), global_step=timestep)
+    tb_writer.add_histogram("episode_length/completed_hist", values, global_step=timestep)
 
-    out = {}
-    for group_name in observation_groups:
-        names = list(active_terms.get(group_name, []))
-        dims = list(term_dims.get(group_name, []))
-        cfgs = list(term_cfgs.get(group_name, []))
-        terms = []
-        for idx, name in enumerate(names):
-            shape = list(dims[idx]) if idx < len(dims) else []
-            cfg = cfgs[idx] if idx < len(cfgs) else None
-            history_length = int(getattr(cfg, "history_length", 0)) if cfg is not None else 0
-            flatten_history_dim = bool(getattr(cfg, "flatten_history_dim", True)) if cfg is not None else True
-            base_shape = list(shape)
-            if history_length > 0:
-                if flatten_history_dim and len(shape) == 1 and shape[0] % history_length == 0:
-                    base_shape = [shape[0] // history_length]
-                elif not flatten_history_dim and len(shape) >= 1 and shape[0] == history_length:
-                    base_shape = shape[1:]
-            terms.append(
-                {
-                    "name": name,
-                    "shape": shape,
-                    "base_shape": base_shape,
-                    "history_length": history_length,
-                    "flatten_history_dim": flatten_history_dim,
-                }
-            )
-        out[group_name] = {
-            "concatenate_terms": bool(concatenate.get(group_name, True)),
-            "terms": terms,
-        }
-    return out
+
+def _log_current_episode_lengths(tb_writer, lengths: torch.Tensor, timestep: int) -> None:
+    values = lengths.detach().float().cpu()
+    tb_writer.add_scalar("episode_length/current_mean", float(values.mean().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/current_min", float(values.min().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/current_max", float(values.max().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/current_std", float(values.std(unbiased=False).item()), global_step=timestep)
+    tb_writer.add_histogram("episode_length/current_hist", values, global_step=timestep)
+
+
+def _log_env_average_episode_lengths(
+    tb_writer, sums: torch.Tensor, counts: torch.Tensor, timestep: int, log_per_env: bool
+) -> None:
+    valid = counts > 0
+    if not torch.any(valid):
+        return
+    averages = (sums[valid].float() / counts[valid].float()).detach().cpu()
+    tb_writer.add_scalar("episode_length/env_average_mean", float(averages.mean().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/env_average_min", float(averages.min().item()), global_step=timestep)
+    tb_writer.add_scalar("episode_length/env_average_max", float(averages.max().item()), global_step=timestep)
+    tb_writer.add_scalar(
+        "episode_length/env_average_std", float(averages.std(unbiased=False).item()), global_step=timestep
+    )
+    tb_writer.add_scalar("episode_length/env_average_env_count", int(valid.sum().item()), global_step=timestep)
+    tb_writer.add_histogram("episode_length/env_average_hist", averages, global_step=timestep)
+    if not log_per_env:
+        return
+    valid_env_ids = torch.where(valid)[0].detach().cpu().tolist()
+    valid_averages = (sums[valid].float() / counts[valid].float()).detach().cpu().tolist()
+    for env_id, value in zip(valid_env_ids, valid_averages):
+        tb_writer.add_scalar(f"episode_length_average/env_{env_id:06d}", float(value), global_step=timestep)
 
 
 def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sample_mode: str) -> dict:
@@ -270,7 +284,7 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
         "input_groups": observation_groups,
         "observation_groups": observation_groups,
         "observation_shapes": {name: list(obs[name].shape[1:]) for name in observation_groups},
-        "observation_terms": _collect_observation_terms_metadata(base_env, observation_groups),
+        "observation_terms": collect_observation_terms_metadata(base_env, observation_groups),
         "action_joint_names": list(getattr(action_term, "_joint_names", robot.data.joint_names)),
         "robot_joint_names": list(robot.data.joint_names),
         "default_joint_pos": _to_serializable(default_joint_pos),
@@ -328,9 +342,9 @@ def main(  # noqa: C901
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    env_cfg.terminations.ee_body_pos = None
-    env_cfg.terminations.anchor_ori = None
-    env_cfg.terminations.anchor_pos = None
+    # env_cfg.terminations.ee_body_pos = None
+    # env_cfg.terminations.anchor_ori = None
+    # env_cfg.terminations.anchor_pos = None
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -453,6 +467,9 @@ def main(  # noqa: C901
 
     obs = env.get_observations()
     timestep = 0
+    episode_length_steps = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
+    episode_length_sums = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
+    episode_length_counts = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
     # simulate environment
     while simulation_app.is_running():
         # run everything in inference mode
@@ -477,15 +494,33 @@ def main(  # noqa: C901
                 if isinstance(actions, dict) and "actions" in actions:
                     actions = actions["actions"]
              
-            obs, _, _, _ = env.step(actions)
+            obs, _, dones, _ = env.step(actions)
+            episode_length_steps += 1
+            done_env_ids = torch.where(dones.to(device=episode_length_steps.device, dtype=torch.bool))[0]
+            completed_episode_lengths = episode_length_steps[done_env_ids].clone()
+            if done_env_ids.numel() > 0:
+                episode_length_sums[done_env_ids] += completed_episode_lengths
+                episode_length_counts[done_env_ids] += 1
+            episode_length_steps[done_env_ids] = 0
         timestep += 1
-        if tb_writer is not None and motion_cmd is not None and timestep % tb_log_interval == 0:
-            for key, value in motion_cmd.metrics.items():
-                if torch.is_tensor(value):
-                    scalar = float(value.mean().item())
-                else:
-                    scalar = float(value)
-                tb_writer.add_scalar(f"command/{key}", scalar, global_step=timestep)
+        if tb_writer is not None:
+            if completed_episode_lengths.numel() > 0:
+                _log_completed_episode_lengths(tb_writer, completed_episode_lengths, done_env_ids, timestep)
+            if motion_cmd is not None and timestep % tb_log_interval == 0:
+                _log_current_episode_lengths(tb_writer, episode_length_steps, timestep)
+                _log_env_average_episode_lengths(
+                    tb_writer,
+                    episode_length_sums,
+                    episode_length_counts,
+                    timestep,
+                    args_cli.tb_log_episode_length_per_env,
+                )
+                for key, value in motion_cmd.metrics.items():
+                    if torch.is_tensor(value):
+                        scalar = float(value.mean().item())
+                    else:
+                        scalar = float(value)
+                    tb_writer.add_scalar(f"command/{key}", scalar, global_step=timestep)
 
         if args_cli.video:
             # Exit the play loop after recording one video

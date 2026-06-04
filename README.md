@@ -1,150 +1,350 @@
-因为现在采样是从中间采样，所以可能这个sampling的有点问题，因为有些数据从头到尾是没问题的，中间采样可能是一个不好的状态，所以要设计一个hooks,可以被在训练的时候定期调用，进行eval,而eval的时候是把每个数据从头跑到尾，完了查看fail counts/跑的次数,获取一个记录表根据这个记录表重新sampling motion,
+# Whole Body Tracking
 
-BeyondMimic is a versatile humanoid control framework that provides highly dynamic motion tracking with the
-state-of-the-art motion quality on real-world deployment and steerable test-time control with guided diffusion-based
-controllers.
+This repository is the local G1 whole-body tracking workspace for Isaac Lab / RSL-RL training, AMP training, motion
+NPZ preprocessing, ONNX export, and MuJoCo sim2sim evaluation.
 
-This repo covers the motion tracking training in BeyondMimic. **You should be able to
-train any sim-to-real-ready motion in the LAFAN1 dataset, without tuning any parameters**.
+The current code path is built around:
 
-For sim-to-sim and sim-to-real deployment, please refer to
-the [motion_tracking_controller](https://github.com/HybridRobotics/motion_tracking_controller).
+- Isaac Lab manager-based environments registered as `TR-G1`, `FM-G1`, `AMP-G1`, and `Distill-Flat-G1-v0`.
+- G1 motion NPZ files under a motion directory, optionally filtered by a `dataset_txt`.
+- Name-aware motion loading through optional `joint_names` and `body_names` arrays stored inside each NPZ.
+- Adaptive motion sampling that records the real terminate bin, then respawns from an earlier bin in the same motion.
+- Sim2sim rollout with per-motion mean metrics and visualization/comparison scripts.
 
-### Alternative Implementations
+## Environment
 
-- There is an alternative reproduction of BeyondMimic in [mjlab](https://github.com/mujocolab/mjlab), a new Isaac Lab-style manager API powered by MuJoCo-Warp for RL and robotics research. See the implementation [here](https://github.com/mujocolab/mjlab/blob/main/src/mjlab/tasks/tracking/tracking_env_cfg.py).
-
-## Installation
-
-- Install Isaac Lab v2.1.0 by following
-  the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). We recommend
-  using the conda installation as it simplifies calling Python scripts from the terminal.
-
-- Clone this repository separately from the Isaac Lab installation (i.e., outside the `IsaacLab` directory):
+Typical local setup:
 
 ```bash
-# Option 1: SSH
-git clone git@github.com:HybridRobotics/whole_body_tracking.git
-
-# Option 2: HTTPS
-git clone https://github.com/HybridRobotics/whole_body_tracking.git
-```
-
-- Pull the robot description files from GCS
-
-```bash
-# Enter the repository
-cd whole_body_tracking
-# Rename all occurrences of whole_body_tracking (in files/directories) to your_fancy_extension_name
-curl -L -o unitree_description.tar.gz https://storage.googleapis.com/qiayuanl_robot_descriptions/unitree_description.tar.gz && \
-tar -xzf unitree_description.tar.gz -C source/whole_body_tracking/whole_body_tracking/assets/ && \
-rm unitree_description.tar.gz
-```
-
-- Using a Python interpreter that has Isaac Lab installed, install the library
-
-```bash
+cd /home/thl/wt_wbc/wbc_parkour/whole_body_tracking
+source /home/thl/miniconda3/etc/profile.d/conda.sh
+conda activate my_env
+source /home/thl/isaacsim5.1/setup_conda.sh
 python -m pip install -e source/whole_body_tracking
 ```
 
-## Motion Tracking
+For non-Isaac utilities such as sim2sim plots, `my_env` is usually enough. For scripts that launch Isaac Lab, source the
+Isaac Sim setup first.
 
-### Motion Preprocessing & Registry Setup
+## Data Layout
 
-In order to manage the large set of motions we used in this work, we leverage the WandB registry to store and load
-reference motions automatically.
-Note: The reference motion should be retargeted and use generalized coordinates only.
+Common local inputs:
 
-- Gather the reference motion datasets (please follow the original licenses), we use the same convention as .csv of
-  Unitree's dataset
-
-    - Unitree-retargeted LAFAN1 Dataset is available
-      on [HuggingFace](https://huggingface.co/datasets/lvhaidong/LAFAN1_Retargeting_Dataset)
-    - Sidekicks are from [KungfuBot](https://kungfu-bot.github.io/)
-    - Christiano Ronaldo celebration is from [ASAP](https://github.com/LeCAR-Lab/ASAP).
-    - Balance motions are from [HuB](https://hub-robot.github.io/)
-
-
-- Log in to your WandB account; access Registry under Core on the left. Create a new registry collection with the name "
-  Motions" and artifact type "All Types".
-
-
-- Convert retargeted motions to include the maximum coordinates information (body pose, body velocity, and body
-  acceleration) via forward kinematics,
-
-```bash
-python scripts/csv_to_npz.py --input_file {motion_name}.csv --input_fps 30 --output_name {motion_name} --headless
-```
-python scripts/csv_to_npz.py --input_file {motion_name}.csv --input_fps 30 --output_name {motion_name} --headless
-
-This will automatically upload the processed motion file to the WandB registry with output name {motion_name}.
-
-- Test if the WandB registry works properly by replaying the motion in Isaac Sim:
-
-```bash
-python scripts/replay_npz.py --registry_name={your-organization}-org/wandb-registry-motions/{motion_name}
+```text
+data/lafan/                 named LAFAN NPZ files
+data/up/                    get-up NPZ files
+dataset_txt/*.txt           file lists used to filter a motion directory
+/home/thl/Documents/g1-mimic-npz
 ```
 
-- Debugging
-    - Make sure to export WANDB_ENTITY to your organization name, not your personal username.
-    - If /tmp folder is not accessible, modify csv_to_npz.py L319 & L326 to a temporary folder of your choice.
+A dataset txt contains one motion path per line. Paths can be absolute, or relative to the motion root used by the
+loader/script.
 
-### Policy Training
+## Motion NPZ Metadata
 
-- Train policy by the following command:
+New NPZ files should contain:
 
-```bash
-python scripts/rsl_rl/train.py --task=Tracking-Flat-G1-v0 \
---registry_name {your-organization}-org/wandb-registry-motions/{motion_name} \
---headless --logger wandb --log_project_name {project_name} --run_name {run_name}
-```
+- `joint_names`: order of `joint_pos` / `joint_vel`.
+- `body_names`: order of `body_pos_w` / `body_quat_w` / body velocity arrays.
 
-### Policy Evaluation
-
-- Play the trained policy by the following command:
+The loaders are backward-compatible with older files when the dimensions match known G1 layouts, but named NPZ files
+are safer. To attach metadata without overwriting the original:
 
 ```bash
-python scripts/rsl_rl/play.py --task=Tracking-Flat-G1-v0 --num_envs=2 --wandb_path={wandb-run-path}
+python scripts/attach_npz_names.py data/lafan --force
 ```
 
-The WandB run path can be located in the run overview. It follows the format {your_organization}/{project_name}/ along
-with a unique 8-character identifier. Note that run_name is different from run_path.
+This writes sidecars like `walk2_subject1.named.npz`. For a dataset txt:
 
-## Code Structure
+```bash
+python scripts/attach_npz_names.py dataset_txt/lafan.txt \
+  --motion_root /home/thl/Documents/g1-mimic-npz \
+  --force
+```
 
-Below is an overview of the code structure for this repository:
+Useful options:
 
-- **`source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp`**
-  This directory contains the atomic functions to define the MDP for BeyondMimic. Below is a breakdown of the functions:
+```bash
+--body_order auto            # g1_motion or g1_full_isaac selected from body dim
+--body_order g1_full_mjcf    # for MuJoCo-order full-body files
+--joint_names_file names.txt
+--body_names_file names.txt
+--in_place                   # overwrite input NPZ, only when you really mean it
+```
 
-    - **`commands.py`**
-      Command library to compute relevant variables from the reference motion, current robot state, and error
-      computations. This includes pose and velocity error calculation, initial state randomization, and adaptive
-      sampling.
+`scripts/json_to_npz.py` should write `joint_names` and `body_names` for newly generated data.
 
-    - **`rewards.py`**
-      Implements the DeepMimic reward functions and smoothing terms.
+## Training
 
-    - **`events.py`**
-      Implements domain randomization terms.
+Main entry:
 
-    - **`observations.py`**
-      Implements observation terms for motion tracking and data collection.
+```bash
+python scripts/rsl_rl/train.py \
+  --task=FM-G1 \
+  --registry_name=test1 \
+  --headless \
+  --num_envs=4096 \
+  --motion_file=/home/thl/Documents/g1-mimic-npz \
+  --dataset_txt=dataset_txt/lafan.txt
+```
 
-    - **`terminations.py`**
-      Implements early terminations and timeouts.
+Distributed launch example:
 
-- **`source/whole_body_tracking/whole_body_tracking/tasks/tracking/tracking_env_cfg.py`**
-  Contains the environment (MDP) hyperparameters configuration for the tracking task.
+```bash
+python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 \
+  scripts/rsl_rl/train.py \
+  --task=AMP-G1 \
+  --registry_name=test1 \
+  --headless \
+  --distributed \
+  --num_envs=8000 \
+  --motion_file=/home/thl/Documents/g1-mimic-npz \
+  --dataset_txt=dataset_txt/walk2_subject1.txt
+```
 
-- **`source/whole_body_tracking/whole_body_tracking/tasks/tracking/config/g1/agents/rsl_rl_ppo_cfg.py`**
-  Contains the PPO hyperparameters for the tracking task.
+There is also a local convenience script:
 
-- **`source/whole_body_tracking/whole_body_tracking/robots`**
-  Contains robot-specific settings, including armature parameters, joint stiffness/damping calculation, and action scale
-  calculation.
+```bash
+./scripts/rsl_rl/train_g1.sh
+```
 
-- **`scripts`**
-  Includes utility scripts for preprocessing motion data, training policies, and evaluating trained policies.
+Check and edit the hard-coded paths in that script before using it for a new run.
 
-This structure is designed to ensure modularity and ease of navigation for developers expanding the project.
+## Play And ONNX Export
+
+Play a checkpoint:
+
+```bash
+python scripts/rsl_rl/play.py \
+  --task=FM-G1 \
+  --num_envs=50 \
+  --resume_path=logs/rsl_rl/g1_flat/model_60000.pt \
+  --motion_file=/home/thl/Documents/g1-mimic-npz \
+  --dataset_txt=dataset_txt/lafan.txt
+```
+
+Export ONNX only:
+
+```bash
+python scripts/rsl_rl/play.py \
+  --task=FM-G1 \
+  --num_envs=1 \
+  --resume_path=logs/rsl_rl/g1_flat/model_60000.pt \
+  --motion_file=/home/thl/Documents/g1-mimic-npz \
+  --dataset_txt=dataset_txt/lafan.txt \
+  --export_onnx \
+  --export_only
+```
+
+Convenience script:
+
+```bash
+./scripts/rsl_rl/play_g1.sh
+```
+
+## Adaptive Motion Sampling
+
+The command term uses adaptive sampling to focus on hard parts of motions. The important config fields are in
+`MotionCommandCfg`:
+
+```python
+motion_sampling_start_frame = 5
+adaptive_sample_rewind_min_bins = 1
+adaptive_sample_rewind_bins = 2
+```
+
+The terminate bin is `m`.
+
+- `motion_sampling_start_frame` prevents sampling from bad first frames.
+- `adaptive_sample_rewind_bins` is the maximum rewind distance.
+- `adaptive_sample_rewind_min_bins` is the minimum distance away from the terminate bin.
+
+So the respawn window is:
+
+```text
+[m - adaptive_sample_rewind_bins, m - adaptive_sample_rewind_min_bins]
+```
+
+Examples:
+
+```text
+min=1, max=2 -> sample m-1..m-2
+min=2, max=5 -> sample m-2..m-5
+```
+
+Failure counts are still recorded at the true terminate global bin for debugging/export. Runtime respawn sampling uses a
+motion-local spawn-bin table, so a failure in one motion cannot rewind into another motion. Smoothing is also applied
+inside each motion only.
+
+Adaptive bin exports are written under:
+
+```text
+<log_save_path>/<log_run_name>/adaptive_bins_rank_XX_step_XXXXXXXXX.json
+```
+
+## Recovery Curriculum
+
+G1 flat/terrain configs currently set:
+
+```python
+pose_range_env_ratio = 0.30
+pose_range_init_mode = "lying"
+pose_range_lying_height_range = (0.25, 0.45)
+```
+
+The pose-range env subset is also used by delayed termination:
+
+```python
+install_delayed_termination(..., delay_reset_env_ratio=..., max_delay_steps=250)
+```
+
+This means the same env subset can spawn lying down and get a recovery window before early termination resets it.
+
+The optional upward assist event is configured in the G1 env config. Set `debug_steps=0` to silence its debug prints.
+
+## AMP Motion Loader Debug
+
+AMP uses name-aware body mapping. The anchor must be included in `G1_AMP_BODY_NAMES`.
+
+Visualize AMPLoader output:
+
+```bash
+python ../rsl_rl/rsl_rl/algorithms/plugins/amp/visualize_motion_loader.py \
+  data/lafan/walk2_subject1.named.npz \
+  --port 8088
+```
+
+Open:
+
+```text
+http://127.0.0.1:8088
+```
+
+Use this when AMP training looks wrong; it shows the exact body order after the AMP loader, not just the raw NPZ.
+
+## Sim2sim
+
+Run MuJoCo sim2sim with an existing ONNX:
+
+```bash
+EXPORT_ONNX=0 \
+ONNX_PATH=logs/rsl_rl/g1_flat/exported/policy.onnx \
+MOTION_FILE=/home/thl/Documents/g1-mimic-npz \
+DATASET_TXT=dataset_txt/lafan.txt \
+METRICS_TAG=my_policy \
+./scripts/deploy/sim2sim_g1_mujoco.sh
+```
+
+If `DATASET_TXT` is empty, the sim2sim script uses every `.npz` under `MOTION_FILE`:
+
+```bash
+DATASET_TXT= MOTION_FILE=data/up ./scripts/deploy/sim2sim_g1_mujoco.sh
+```
+
+Metrics CSV naming:
+
+```text
+<dataset_txt>.sim2sim_metrics[_tag]_<timestamp>.csv
+<motion_file>.sim2sim_metrics[_tag]_<timestamp>.csv   # when DATASET_TXT is empty
+```
+
+Set `METRICS_CSV=/path/out.csv` to force a path, or `--metrics_csv ""` to disable metrics.
+
+The metrics are per-motion means:
+
+```text
+error_anchor_pos
+error_anchor_rot
+error_anchor_lin_vel
+error_anchor_ang_vel
+error_body_pos
+error_body_rot
+error_body_lin_vel
+error_body_ang_vel
+error_joint_pos
+error_joint_vel
+```
+
+## Sim2sim Plots
+
+Visualize one CSV:
+
+```bash
+python scripts/deploy/visualize_sim2sim_metrics.py \
+  --csv dataset_txt/lafan.txt.sim2sim_metrics_my_policy_20260529_120000.csv
+```
+
+Compare multiple policies:
+
+```bash
+python scripts/deploy/compare_sim2sim_metrics.py \
+  policy_a.csv policy_b.csv \
+  --labels policy_a,policy_b
+```
+
+Or compare the latest files in a directory:
+
+```bash
+python scripts/deploy/compare_sim2sim_metrics.py \
+  --metrics_dir dataset_txt \
+  --latest 5
+```
+
+Both scripts write PNGs, CSV summaries, and an `index.html` report.
+
+## Useful Debug Commands
+
+Validate motion loader / sampling helper:
+
+```bash
+pytest -q tests/test_motion_sampling.py
+```
+
+Compile changed tracking files:
+
+```bash
+python -m py_compile \
+  source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/commands.py \
+  source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/motion_sampling.py
+```
+
+Run sim2sim dry-run validation:
+
+```bash
+python scripts/deploy/sim2sim_g1_mujoco.py \
+  --onnx_path logs/rsl_rl/g1_flat/exported/policy.onnx \
+  --motion_file /home/thl/Documents/g1-mimic-npz \
+  --dataset_txt dataset_txt/mini_test.txt \
+  --dry_run
+```
+
+## Code Map
+
+```text
+source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/commands.py
+  Motion command, adaptive sampling, reset initialization, tracking metrics.
+
+source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/motion_sampling.py
+  Small tested helpers for motion-local sampling windows.
+
+source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/rewards.py
+  Tracking and auxiliary rewards.
+
+source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/terminations.py
+  Early termination and delayed termination wrapper.
+
+source/whole_body_tracking/whole_body_tracking/tasks/tracking/config/g1/
+  G1 task registration and env config.
+
+scripts/attach_npz_names.py
+  Add `joint_names` / `body_names` metadata to old NPZ files.
+
+scripts/rsl_rl/
+  Isaac Lab train/play/export entry points.
+
+scripts/deploy/
+  ONNX, MuJoCo sim2sim, metrics visualization, policy comparison.
+
+../rsl_rl/rsl_rl/algorithms/plugins/amp/
+  AMP plugin, name-aware AMPLoader, AMPLoader visualizer.
+```

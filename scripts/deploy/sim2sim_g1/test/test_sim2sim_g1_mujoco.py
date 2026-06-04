@@ -1,22 +1,29 @@
 from __future__ import annotations
 
-import numpy as np
+import importlib.util
 import sys
-import torch
 from pathlib import Path
 
+import numpy as np
 import onnx
+import torch
 from onnx import TensorProto, helper
 from sim2sim_g1.mujoco_robot import action_to_target
 from sim2sim_g1.observations import ImuReader, TermMajorHistory, prop_terms_from_metadata
 from sim2sim_g1.onnx_policy import onnx_input_names, validate_grouped_onnx_contract
 from sim2sim_g1.viewer import ReferenceMotionPlayer
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SOURCE_DIR = REPO_ROOT / "source" / "whole_body_tracking"
-if str(SOURCE_DIR) not in sys.path:
-    sys.path.insert(0, str(SOURCE_DIR))
-from whole_body_tracking.utils.exporter import append_onnx_metadata  # noqa: E402
+REPO_ROOT = Path(__file__).resolve().parents[4]
+RSL_RL_DIR = REPO_ROOT.parent / "rsl_rl"
+if str(RSL_RL_DIR) not in sys.path:
+    sys.path.insert(0, str(RSL_RL_DIR))
+EXPORTER_PATH = REPO_ROOT / "source" / "whole_body_tracking" / "whole_body_tracking" / "utils" / "exporter.py"
+SPEC = importlib.util.spec_from_file_location("wbt_exporter", EXPORTER_PATH)
+exporter = importlib.util.module_from_spec(SPEC)
+assert SPEC is not None and SPEC.loader is not None
+SPEC.loader.exec_module(exporter)
+append_onnx_metadata = exporter.append_onnx_metadata
+collect_observation_terms_metadata = exporter.collect_observation_terms_metadata
 
 
 def test_legacy_import_surface_smoke() -> None:
@@ -103,3 +110,46 @@ def test_legacy_append_onnx_metadata_serializes_numpy_and_torch_values(tmp_path)
     assert meta["torch_tensor"] == "[1, 2]"
     assert meta["torch_size"] == "[4, 5]"
     assert meta["nested"] == '{"shape": [6, 7]}'
+
+
+def test_collect_observation_terms_metadata_records_term_order_and_shapes() -> None:
+    class TermCfg:
+        def __init__(self, history_length=0, flatten_history_dim=True):
+            self.history_length = history_length
+            self.flatten_history_dim = flatten_history_dim
+
+    class ObsManager:
+        active_terms = {
+            "rbt_cmd_mf": [
+                "motion_joint_pos_multi_future",
+                "motion_joint_vel_multi_future",
+                "motion_anchor_ori_b_multi_future",
+                "motion_anchor_z_multi_future",
+            ],
+            "prop": ["joint_pos"],
+        }
+        group_obs_term_dim = {
+            "rbt_cmd_mf": [(319,), (319,), (66,), (11,)],
+            "prop": [(290,)],
+        }
+        group_obs_concatenate = {"rbt_cmd_mf": True, "prop": True}
+        _group_obs_term_cfgs = {
+            "rbt_cmd_mf": [TermCfg(), TermCfg(), TermCfg(), TermCfg()],
+            "prop": [TermCfg(history_length=10, flatten_history_dim=True)],
+        }
+
+    class Env:
+        observation_manager = ObsManager()
+
+    meta = collect_observation_terms_metadata(Env(), ["rbt_cmd_mf", "prop"])
+
+    assert [term["name"] for term in meta["rbt_cmd_mf"]["terms"]] == [
+        "motion_joint_pos_multi_future",
+        "motion_joint_vel_multi_future",
+        "motion_anchor_ori_b_multi_future",
+        "motion_anchor_z_multi_future",
+    ]
+    assert meta["rbt_cmd_mf"]["terms"][-1]["shape"] == [11]
+    assert meta["prop"]["terms"][0]["shape"] == [290]
+    assert meta["prop"]["terms"][0]["base_shape"] == [29]
+    assert meta["prop"]["terms"][0]["history_length"] == 10

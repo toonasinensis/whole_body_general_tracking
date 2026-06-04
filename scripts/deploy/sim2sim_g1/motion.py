@@ -276,20 +276,17 @@ def motion_groups(
 ) -> tuple[np.ndarray, np.ndarray]:
     offsets = meta["future_step_num"]
     future = future_indices(t, offsets, motion["joint_pos"].shape[0])
-    target_quat = motion_anchor_ori_mf(motion, future, meta).reshape(1, len(offsets), 4)
-    robot_anchor = np.repeat(robot_anchor_quat_w[:, None, :], len(offsets), axis=1)
-    rel_quat = quat_mul(quat_inv(robot_anchor), target_quat)
-    rel_6d = matrix_from_quat(rel_quat)[..., :2].reshape(1, -1).astype(np.float32)
-    rbt_cmd_mf = np.concatenate(
-        [
-            motion["joint_pos"][future].reshape(1, -1),
-            motion["joint_vel"][future].reshape(1, -1),
-            rel_6d,
-        ],
-        axis=-1,
-    ).astype(np.float32)
-    rbt_dim = int(np.prod(meta["observation_shapes"].get("rbt_cmd_mf", rbt_cmd_mf.shape[1:])))
+    rbt_dim = int(np.prod(meta.get("observation_shapes", {}).get("rbt_cmd_mf", [0])))
+    rbt_cmd_mf = build_rbt_cmd_mf(motion, future, meta, robot_anchor_quat_w, rbt_dim)
+    if rbt_dim <= 0:
+        rbt_dim = rbt_cmd_mf.shape[1]
     if rbt_cmd_mf.shape[1] != rbt_dim:
+        if "rbt_cmd_mf" not in meta.get("observation_terms", {}):
+            raise ValueError(
+                f"Built rbt_cmd_mf with dim {rbt_cmd_mf.shape[1]}, but ONNX metadata expects {rbt_dim}. "
+                "ONNX metadata has no observation_terms for rbt_cmd_mf, so sim2sim cannot know the exported term "
+                "layout. Re-export the policy with the updated exporter to save explicit observation_terms."
+            )
         raise ValueError(
             f"Built rbt_cmd_mf with dim {rbt_cmd_mf.shape[1]}, but ONNX metadata expects {rbt_dim}. "
             "Check motion joint order/future_step_num and the exported task config."
@@ -299,9 +296,62 @@ def motion_groups(
     return rbt_cmd_mf, smpl_cmd_mf
 
 
+def build_rbt_cmd_mf(
+    motion: MotionData,
+    future: np.ndarray,
+    meta: dict,
+    robot_anchor_quat_w: np.ndarray,
+    rbt_dim: int,
+) -> np.ndarray:
+    builders = {
+        "motion_joint_pos_multi_future": lambda: motion["joint_pos"][future].reshape(1, -1),
+        "motion_joint_vel_multi_future": lambda: motion["joint_vel"][future].reshape(1, -1),
+        "motion_anchor_ori_b_multi_future": lambda: motion_anchor_ori_b_mf(
+            motion, future, meta, robot_anchor_quat_w
+        ),
+        "motion_anchor_z_multi_future": lambda: motion_anchor_z_mf(motion, future, meta),
+    }
+    terms = meta.get("observation_terms", {}).get("rbt_cmd_mf", {}).get("terms", [])
+    pieces = []
+    for term in terms:
+        name = term.get("name")
+        if name not in builders:
+            raise KeyError(f"Unsupported rbt_cmd_mf observation term in ONNX metadata: {name!r}")
+        pieces.append(builders[name]())
+
+    if not pieces:
+        pieces = [
+            builders["motion_joint_pos_multi_future"](),
+            builders["motion_joint_vel_multi_future"](),
+            builders["motion_anchor_ori_b_multi_future"](),
+        ]
+        built_dim = sum(piece.shape[1] for piece in pieces)
+        if rbt_dim == built_dim + len(future):
+            pieces.append(builders["motion_anchor_z_multi_future"]())
+
+    return np.concatenate(pieces, axis=-1).astype(np.float32)
+
+
 def motion_anchor_ori_mf(motion: MotionData, future: np.ndarray, meta: dict) -> np.ndarray:
     _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
     return motion["body_quat_w"][future, anchor_idx, :]
+
+
+def motion_anchor_ori_b_mf(
+    motion: MotionData,
+    future: np.ndarray,
+    meta: dict,
+    robot_anchor_quat_w: np.ndarray,
+) -> np.ndarray:
+    target_quat = motion_anchor_ori_mf(motion, future, meta).reshape(1, len(future), 4)
+    robot_anchor = np.repeat(robot_anchor_quat_w[:, None, :], len(future), axis=1)
+    rel_quat = quat_mul(quat_inv(robot_anchor), target_quat)
+    return matrix_from_quat(rel_quat)[..., :2].reshape(1, -1).astype(np.float32)
+
+
+def motion_anchor_z_mf(motion: MotionData, future: np.ndarray, meta: dict) -> np.ndarray:
+    _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
+    return np.asarray(motion["body_pos_w"][future, anchor_idx, 2], dtype=np.float32).reshape(1, -1)
 
 
 def build_smpl_cmd_mf(

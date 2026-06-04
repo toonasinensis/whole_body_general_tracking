@@ -32,13 +32,14 @@ class G1FlatEnvCfg(TrackingEnvCfg):
             "right_wrist_yaw_link",
         ]
         self.commands.motion.motion_sampling_start_frame = 5
+        self.commands.motion.adaptive_sample_rewind_min_bins = 1
         self.commands.motion.adaptive_sample_rewind_bins = 2
         self.commands.motion.pose_range_init_mode = "lying"
         self.commands.motion.pose_range_lying_height_range = (0.25, 0.45)
         self.events.delayed_termination = EventTerm(
             func=mdp.install_delayed_termination,
             mode="startup",
-            params={"delay_reset_env_ratio": 0.4, "max_delay_steps": 250},
+            params={"delay_reset_env_ratio": 1.0, "max_delay_steps": 250},
         )
         # Assist the pose-range recovery curriculum early on, then fade with the global assisted timeout rate.
         self.events.fallen_upward_assist = EventTerm(

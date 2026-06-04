@@ -116,7 +116,7 @@ class CommandsCfg:
             "pitch": (-1.0, 1.0),
             "yaw": (-0.0, 0.0),
         },
-        pose_range_env_ratio=0.00,
+        pose_range_env_ratio=1.0,
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
@@ -195,9 +195,9 @@ class ObservationsCfg:
         motion_anchor_ori_b_multi_future = ObsTerm(
             func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
-        # motion_anchor_z_multi_future = ObsTerm(
-        #     func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        # )
+        motion_anchor_z_multi_future = ObsTerm(
+            func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -334,7 +334,7 @@ class RewardsCfg:
     motion_global_anchor_pos = RewTerm(
         func=mdp.motion_global_anchor_position_error_exp,
         weight=0.5,
-        params={"command_name": "motion", "std": 0.3},
+        params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
     )
     motion_global_anchor_pos_z = RewTerm(
         func=mdp.motion_global_anchor_position_z_error_exp,
@@ -349,22 +349,22 @@ class RewardsCfg:
     motion_body_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 0.3},
+        params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
     )
     motion_body_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 0.4},
+        params={"command_name": "motion", "std": 0.4, "disable_on_delayed_termination": True},
     )
     motion_body_lin_vel = RewTerm(
         func=mdp.motion_global_body_linear_velocity_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 1.0},
+        params={"command_name": "motion", "std": 1.0, "disable_on_delayed_termination": True},
     )
     motion_body_ang_vel = RewTerm(
         func=mdp.motion_global_body_angular_velocity_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 3.14},
+        params={"command_name": "motion", "std": 3.14, "disable_on_delayed_termination": True},
     )
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-1)
     joint_limit = RewTerm(
@@ -374,7 +374,7 @@ class RewardsCfg:
     )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.1,
+        weight=-0.01,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
@@ -411,6 +411,7 @@ class TerminationsCfg:
                 "left_wrist_yaw_link",
                 "right_wrist_yaw_link",
             ],
+            "disable_on_delayed_termination_envs": True,
         },
     )
 

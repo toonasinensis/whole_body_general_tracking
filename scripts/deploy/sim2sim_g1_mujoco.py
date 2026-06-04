@@ -39,6 +39,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--onnx_path", required=True)
     parser.add_argument("--motion_file", required=True)
     parser.add_argument("--dataset_txt", default=None)
+    parser.add_argument(
+        "--motion_index",
+        type=int,
+        default=None,
+        help="Run only one motion by index after applying --dataset_txt filtering.",
+    )
+    parser.add_argument(
+        "--motion_path",
+        default=None,
+        help="Run only the motion whose path or basename matches this value after applying --dataset_txt filtering.",
+    )
     parser.add_argument("--xml_path", default=str(G1_MJCF))
     parser.add_argument("--steps", type=int, default=20000000)
     parser.add_argument(
@@ -214,6 +225,30 @@ def _write_metrics_csv(path: Path, rows: list[dict[str, float | int | str]]) -> 
         writer.writerows(rows)
 
 
+def _select_motion_paths(args: argparse.Namespace, paths: list[str]) -> list[tuple[int, str]]:
+    indexed_paths = list(enumerate(paths))
+    if args.motion_index is not None:
+        index = int(args.motion_index)
+        if index < 0 or index >= len(indexed_paths):
+            raise IndexError(f"--motion_index {index} is out of range for {len(indexed_paths)} motions.")
+        indexed_paths = [indexed_paths[index]]
+    if args.motion_path:
+        query = str(Path(args.motion_path).expanduser())
+        query_name = Path(query).name
+        matches = [
+            item
+            for item in indexed_paths
+            if str(Path(item[1]).expanduser()) == query or Path(item[1]).name == query_name or item[1] == args.motion_path
+        ]
+        if not matches:
+            raise ValueError(f"--motion_path {args.motion_path!r} did not match any selected motion.")
+        if len(matches) > 1:
+            names = [path for _, path in matches[:10]]
+            raise ValueError(f"--motion_path {args.motion_path!r} matched multiple motions: {names}")
+        indexed_paths = matches
+    return indexed_paths
+
+
 def _motion_meta_for_rollout(motion: MotionData, meta: dict) -> dict:
     body_names = list(meta["motion_body_names"])
     motion_meta = dict(meta)
@@ -289,7 +324,14 @@ def _new_reference_player(args, model, motion: MotionData, meta: dict, joint_qpo
 def _motion_start_frame(args: argparse.Namespace, motion: MotionData) -> int:
     if motion.num_frames <= 0:
         raise ValueError(f"Motion {motion.path} has no frames.")
-    return int(np.clip(int(args.motion_start_frame), 0, motion.num_frames - 1))
+    requested = int(args.motion_start_frame)
+    start_frame = int(np.clip(requested, 0, motion.num_frames - 1))
+    if start_frame != requested:
+        print(
+            f"[WARN] Requested motion_start_frame={requested} is outside motion frame range "
+            f"[0, {motion.num_frames - 1}], clamped to {start_frame}."
+        )
+    return start_frame
 
 
 def main() -> None:
@@ -306,17 +348,26 @@ def main() -> None:
             "This script currently feeds zero SMPL observations."
         )
 
-    motion_paths = motion_files(args.motion_file, args.dataset_txt)
+    all_motion_paths = motion_files(args.motion_file, args.dataset_txt)
+    motion_entries = _select_motion_paths(args, all_motion_paths)
+    motion_paths = [path for _, path in motion_entries]
     if not motion_paths:
         raise ValueError("No motion files to run.")
     metrics_csv_path = _metrics_csv_path(args)
-    print(f"[INFO] Motion count: {len(motion_paths)}")
+    print(f"[INFO] Motion count: {len(motion_paths)} selected from {len(all_motion_paths)}")
+    if args.motion_index is not None or args.motion_path:
+        for original_index, path in motion_entries:
+            print(f"[INFO] Selected motion original_index={original_index}: {path}")
     if metrics_csv_path is not None:
         print(f"[INFO] Metrics CSV: {metrics_csv_path}")
 
-    first_motion = MotionData(motion_paths[0])
+    first_selected_index, first_motion_path = motion_entries[0]
+    first_motion = MotionData(first_motion_path)
     motion = first_motion
-    print(f"[INFO] Motion 1/{len(motion_paths)}: {motion.path}")
+    print(
+        f"[INFO] Motion 1/{len(motion_paths)} "
+        f"(original_index={first_selected_index}): {motion.path}"
+    )
     motion.print_config()
 
     model = mujoco.MjModel.from_xml_path(args.xml_path)
@@ -428,12 +479,15 @@ def main() -> None:
     metric_rows: list[dict[str, float | int | str]] = []
 
     try:
-        for motion_index, motion_path in enumerate(motion_paths):
-            if motion_index == 0:
+        for selected_index, (motion_index, motion_path) in enumerate(motion_entries):
+            if selected_index == 0:
                 motion = first_motion
             else:
                 motion = MotionData(motion_path)
-                print(f"[INFO] Motion {motion_index + 1}/{len(motion_paths)}: {motion.path}")
+                print(
+                    f"[INFO] Motion {selected_index + 1}/{len(motion_entries)} "
+                    f"(original_index={motion_index}): {motion.path}"
+                )
                 motion.print_config()
             motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
             _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
@@ -466,7 +520,8 @@ def main() -> None:
                 num_frames=motion.num_frames,
             )
             print(
-                f"[INFO] Running motion {motion_index + 1}/{len(motion_paths)}: "
+                f"[INFO] Running motion {selected_index + 1}/{len(motion_entries)} "
+                f"(original_index={motion_index}): "
                 f"policy_steps={rollout_steps}, frames={motion.num_frames}, start_frame={start_frame}"
             )
 
@@ -488,7 +543,7 @@ def main() -> None:
                 # input("Press Enter to step the simulation...")  # Step on Enter key press
                 if viewer is not None:
                     import time
-                    time.sleep(decimation * model.opt.timestep * 0.1)
+                    time.sleep(decimation * model.opt.timestep)
                     viewer.sync()
 
                 for _ in range(decimation):
@@ -503,13 +558,19 @@ def main() -> None:
                         torque_limits,
                     )
                     mujoco.mj_step(model, data)
+                if args.log_interval > 0 and (step % args.log_interval == 0 or step == rollout_steps - 1):
+                    print(
+                        f"[INFO] motion {selected_index + 1}/{len(motion_entries)} "
+                        f"original_index={motion_index} frame={t}/{motion.num_frames - 1} "
+                        f"step={step + 1}/{rollout_steps}"
+                    )
 
             row = accumulator.row()
             metric_rows.append(row)
             if metrics_csv_path is not None:
                 _write_metrics_csv(metrics_csv_path, metric_rows)
                 print(
-                    f"[INFO] Updated metrics CSV: {metrics_csv_path} ({len(metric_rows)}/{len(motion_paths)} motions)"
+                    f"[INFO] Updated metrics CSV: {metrics_csv_path} ({len(metric_rows)}/{len(motion_entries)} motions)"
                 )
             print(
                 "[INFO] Motion metrics mean: "
@@ -520,7 +581,7 @@ def main() -> None:
             )
 
         print(
-            f"[INFO] sim2sim completed: motions={len(motion_paths)}, "
+            f"[INFO] sim2sim completed: motions={len(motion_entries)}, "
             f"policy_steps={sum(int(row['samples']) for row in metric_rows)}, "
             f"sim_time={sum(int(row['samples']) for row in metric_rows) * decimation * model.opt.timestep:.3f}s"
         )
