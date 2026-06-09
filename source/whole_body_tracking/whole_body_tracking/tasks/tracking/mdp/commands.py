@@ -26,13 +26,19 @@ from isaaclab.utils.math import euler_xyz_from_quat  # noqa: F401
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
 from isaaclab.utils.math import (
     quat_apply,
-    quat_apply_inverse,
     quat_error_magnitude,
     quat_inv,
     quat_mul,
     sample_uniform,
     yaw_quat,
 )
+
+try:
+    # Newer IsaacLab
+    from isaaclab.utils.math import quat_apply_inverse
+except ImportError:
+    # IsaacLab 2.1.0 compatibility
+    from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
 
 from .math_utils import quat_to_6d
 from .motion_sampling import (

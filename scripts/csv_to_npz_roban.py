@@ -11,6 +11,7 @@
 
 import argparse
 import numpy as np
+import os
 
 from isaaclab.app import AppLauncher
 
@@ -30,6 +31,10 @@ parser.add_argument(
 )
 parser.add_argument("--output_name", type=str, required=True, help="The name of the motion npz file.")
 parser.add_argument("--output_fps", type=int, default=50, help="The fps of the output motion.")
+# New: allow disabling wandb upload and choose save path
+parser.add_argument("--no_wandb", action="store_true", help="Disable WandB logging and registry upload.")
+parser.add_argument("--save_to", type=str, default="/tmp/motion.npz", help="Path to save the generated npz.")
+parser.add_argument("--robot", type=str, help="robot name")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -45,19 +50,17 @@ simulation_app = app_launcher.app
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul, quat_slerp
-from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
+
 ##
 # Pre-defined configs
 ##
-from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
-
-
+from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
 @configclass
 class ReplayMotionsSceneCfg(InteractiveSceneCfg):
     """Configuration for a replay motions scene."""
@@ -74,7 +77,6 @@ class ReplayMotionsSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # articulation
     robot: ArticulationCfg = RobanS22_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
 
@@ -215,6 +217,40 @@ class MotionLoader:
         return state, reset_flag
 
 
+def reorder_joint_data(joint_data: torch.Tensor, robot: Articulation, target_joint_order: list[str]) -> torch.Tensor:
+    """
+    重新排列关节数据，从IsaacLab的默认顺序转换为目标顺序
+    
+    Args:
+        joint_data: 原始关节数据 (num_envs, num_joints) 或 (num_joints,)
+        robot: IsaacLab机器人实例
+        target_joint_order: 目标关节顺序列表
+    
+    Returns:
+        重排序后的关节数据
+    """
+    # 获取IsaacLab中的关节名称和索引
+    isaac_joint_names = robot.joint_names
+    
+    # 创建从IsaacLab顺序到目标顺序的映射
+    reorder_indices = []
+    
+    for target_joint in target_joint_order:
+        if target_joint in isaac_joint_names:
+            isaac_index = isaac_joint_names.index(target_joint)
+            reorder_indices.append(isaac_index)
+        else:
+            raise ValueError(f"关节 '{target_joint}' 在机器人中未找到")
+    
+    # 应用重排序
+    if joint_data.dim() == 1:
+        # 一维数据: (num_joints,)
+        return joint_data[reorder_indices]
+    else:
+        # 二维数据: (num_envs, num_joints)
+        return joint_data[:, reorder_indices]
+
+
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joint_names: list[str]):
     """Runs the simulation loop."""
     # Load motion
@@ -279,8 +315,13 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
         sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
 
         if not file_saved:
-            log["joint_pos"].append(robot.data.joint_pos[0, :].cpu().numpy().copy())
-            log["joint_vel"].append(robot.data.joint_vel[0, :].cpu().numpy().copy())
+            # 重排序关节数据为目标顺序
+            # log["joint_pos"].append(robot.data.joint_pos[0, :].cpu().numpy().copy())
+            # log["joint_vel"].append(robot.data.joint_vel[0, :].cpu().numpy().copy())
+            reordered_joint_pos = reorder_joint_data(robot.data.joint_pos[0, :], robot, joint_names)
+            reordered_joint_vel = reorder_joint_data(robot.data.joint_vel[0, :], robot, joint_names)            
+            log["joint_pos"].append(reordered_joint_pos.cpu().numpy().copy())
+            log["joint_vel"].append(reordered_joint_vel.cpu().numpy().copy())
             log["body_pos_w"].append(robot.data.body_pos_w[0, :].cpu().numpy().copy())
             log["body_quat_w"].append(robot.data.body_quat_w[0, :].cpu().numpy().copy())
             log["body_lin_vel_w"].append(robot.data.body_lin_vel_w[0, :].cpu().numpy().copy())
@@ -298,17 +339,25 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
             ):
                 log[k] = np.stack(log[k], axis=0)
 
-            np.savez("/tmp/motion.npz", **log)
+            # Always save locally
+            np.savez(args_cli.save_to, **log)
+            print(f"[INFO]: Motion saved to: {args_cli.save_to}")
 
-            import wandb
+            # Optionally upload to WandB registry (unless disabled)
+            use_wandb = (not args_cli.no_wandb) and (os.environ.get("WANDB_DISABLED", "").lower() not in ["1", "true", "yes"])
+            if use_wandb:
+                import wandb
 
-            COLLECTION = args_cli.output_name
-            run = wandb.init(project="csv_to_npz", name=COLLECTION)
-            print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
-            REGISTRY = "motions"
-            logged_artifact = run.log_artifact(artifact_or_path="/tmp/motion.npz", name=COLLECTION, type=REGISTRY)
-            run.link_artifact(artifact=logged_artifact, target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}")
-            print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
+                COLLECTION = args_cli.output_name
+                run = wandb.init(project="csv_to_npz", name=COLLECTION)
+                print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
+                REGISTRY = "motions"
+                logged_artifact = run.log_artifact(artifact_or_path=args_cli.save_to, name=COLLECTION, type=REGISTRY)
+                try:
+                    run.link_artifact(artifact=logged_artifact, target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}")
+                    print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
+                except Exception as e:
+                    print(f"[WARN]: Skipping registry link: {e}")
 
 
 def main():
@@ -329,35 +378,57 @@ def main():
         sim,
         scene,
         joint_names=[
-            "left_hip_pitch_joint",
-            "left_hip_roll_joint",
-            "left_hip_yaw_joint",
-            "left_knee_joint",
-            "left_ankle_pitch_joint",
-            "left_ankle_roll_joint",
-            "right_hip_pitch_joint",
-            "right_hip_roll_joint",
-            "right_hip_yaw_joint",
-            "right_knee_joint",
-            "right_ankle_pitch_joint",
-            "right_ankle_roll_joint",
-            "waist_yaw_joint",
-            "waist_roll_joint",
-            "waist_pitch_joint",
-            "left_shoulder_pitch_joint",
-            "left_shoulder_roll_joint",
-            "left_shoulder_yaw_joint",
-            "left_elbow_joint",
-            "left_wrist_roll_joint",
-            "left_wrist_pitch_joint",
-            "left_wrist_yaw_joint",
-            "right_shoulder_pitch_joint",
-            "right_shoulder_roll_joint",
-            "right_shoulder_yaw_joint",
-            "right_elbow_joint",
-            "right_wrist_roll_joint",
-            "right_wrist_pitch_joint",
-            "right_wrist_yaw_joint",
+                # "left_hip_pitch_joint",
+                # "left_hip_roll_joint",
+                # "left_hip_yaw_joint",
+                # "left_knee_joint",
+                # "left_ankle_pitch_joint",
+                # "left_ankle_roll_joint",
+                # "right_hip_pitch_joint",
+                # "right_hip_roll_joint",
+                # "right_hip_yaw_joint",
+                # "right_knee_joint",
+                # "right_ankle_pitch_joint",
+                # "right_ankle_roll_joint",
+                # "waist_yaw_joint",
+                # "waist_roll_joint",
+                # "waist_pitch_joint",
+                # "left_shoulder_pitch_joint",
+                # "left_shoulder_roll_joint",
+                # "left_shoulder_yaw_joint",
+                # "left_elbow_joint",
+                # "left_wrist_roll_joint",
+                # "left_wrist_pitch_joint",
+                # "left_wrist_yaw_joint",
+                # "right_shoulder_pitch_joint",
+                # "right_shoulder_roll_joint",
+                # "right_shoulder_yaw_joint",
+                # "right_elbow_joint",
+                # "right_wrist_roll_joint",
+                # "right_wrist_pitch_joint",
+                # "right_wrist_yaw_joint",
+                
+                "waist_yaw_joint",
+                "leg_l1_joint",
+                "leg_l2_joint",
+                "leg_l3_joint",
+                "leg_l4_joint",
+                "leg_l5_joint",
+                "leg_l6_joint",
+                "leg_r1_joint",
+                "leg_r2_joint",
+                "leg_r3_joint",
+                "leg_r4_joint",
+                "leg_r5_joint",
+                "leg_r6_joint",
+                "zarm_l1_joint",
+                "zarm_l2_joint",
+                "zarm_l3_joint",
+                "zarm_l4_joint",
+                "zarm_r1_joint",
+                "zarm_r2_joint",
+                "zarm_r3_joint",
+                "zarm_r4_joint",
         ],
     )
 

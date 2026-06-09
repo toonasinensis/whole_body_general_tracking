@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
-NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 NUM_ENVS="${NUM_ENVS:-4096}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29500}"

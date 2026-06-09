@@ -6,7 +6,7 @@ from isaaclab.utils import configclass
 
 import whole_body_tracking.tasks.tracking.mdp as mdp
 from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
-from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
+from whole_body_tracking.tasks.tracking.tracking_env_cfg import ObservationsCfg, TrackingEnvCfg
 
 ROBAN_S22_MOTION_ANCHOR_BODY_NAME = "waist_yaw_link"
 ROBAN_S22_MOTION_BODY_NAMES = [
@@ -158,43 +158,45 @@ class RewardsCfg:
 
     motion_global_anchor_pos = RewTerm(
         func=mdp.motion_global_anchor_position_error_exp,
-        weight=0.3,
+        weight=0.5,
+        params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
+    )
+    motion_global_anchor_pos_z = RewTerm(
+        func=mdp.motion_global_anchor_position_z_error_exp,
+        weight=1.0,
         params={"command_name": "motion", "std": 0.3},
     )
-
     motion_global_anchor_ori = RewTerm(
         func=mdp.motion_global_anchor_orientation_error_exp,
-        weight=0.3,
+        weight=0.5,
         params={"command_name": "motion", "std": 0.4},
     )
 
     motion_body_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 0.3},
+        params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
     )
 
     motion_body_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 0.4},
+        params={"command_name": "motion", "std": 0.4, "disable_on_delayed_termination": True},
     )
 
     motion_body_lin_vel = RewTerm(
         func=mdp.motion_global_body_linear_velocity_error_exp,
-        weight=1.5,
-        params={"command_name": "motion", "std": 1.0},
+        weight=1.0,
+        params={"command_name": "motion", "std": 1.0, "disable_on_delayed_termination": True},
     )
 
     motion_body_ang_vel = RewTerm(
         func=mdp.motion_global_body_angular_velocity_error_exp,
-        weight=1.5,
-        params={"command_name": "motion", "std": 3.14},
+        weight=1.0,
+        params={"command_name": "motion", "std": 3.14, "disable_on_delayed_termination": True},
     )
 
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-1)
-    # joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-5e-3)
-
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
@@ -203,7 +205,7 @@ class RewardsCfg:
 
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.010,
+        weight=-0.01,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
@@ -239,8 +241,12 @@ class TerminationsCfg:
                 "zarm_l5_link",
                 "zarm_r5_link",
             ],
+            "disable_on_delayed_termination_envs": True,
         },
     )
+
+
+
 
 
 @configclass
@@ -258,3 +264,30 @@ class RobanS22FlatEnvCfg(TrackingEnvCfg):
         # Use waist_yaw_link as the motion anchor to preserve previous "torso anchor" semantics.
         self.commands.motion.anchor_body_name = ROBAN_S22_MOTION_ANCHOR_BODY_NAME
         self.commands.motion.body_names = list(ROBAN_S22_MOTION_BODY_NAMES)
+        self.commands.motion.motion_sampling_start_frame = 5
+        self.commands.motion.adaptive_sample_rewind_min_bins = 0
+        self.commands.motion.adaptive_sample_rewind_bins = 0
+        self.commands.motion.pose_range_init_mode = "lying"
+        self.commands.motion.pose_range_lying_height_range = (0.25, 0.45)
+        self.events.delayed_termination = EventTerm(
+            func=mdp.install_delayed_termination,
+            mode="startup",
+            params={"delay_reset_env_ratio": 1.0, "max_delay_steps": 250},
+        )
+
+
+
+@configclass
+class RobanS22FlatAMPEnvCfg(RobanS22FlatEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.amp = ObservationsCfg.AmpCfg()
+        for term in (
+            self.observations.amp.body_pos_b,
+            self.observations.amp.body_ori_b,
+            self.observations.amp.body_lin_vel_b,
+            self.observations.amp.body_ang_vel_b,
+        ):
+            term.params["asset_name"] = "robot"
+            term.params["anchor_body_name"] = ROBAN_S22_MOTION_ANCHOR_BODY_NAME
+            term.params["body_names"] = tuple(ROBAN_S22_MOTION_BODY_NAMES)
