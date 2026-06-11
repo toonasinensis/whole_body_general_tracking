@@ -29,6 +29,18 @@ def _zero_delayed_termination_rewards(
     return torch.where(mask.to(device=reward.device, dtype=torch.bool), torch.zeros_like(reward), reward)
 
 
+def _zero_non_delayed_termination_rewards(
+    env: ManagerBasedRLEnv, reward: torch.Tensor, enable_on_delayed_termination: bool
+) -> torch.Tensor:
+    if not enable_on_delayed_termination:
+        return reward
+
+    mask = getattr(env.termination_manager, "delayed_termination_active_mask", None)
+    if mask is None:
+        return torch.zeros_like(reward)
+    return torch.where(mask.to(device=reward.device, dtype=torch.bool), reward, torch.zeros_like(reward))
+
+
 def motion_global_anchor_position_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float, disable_on_delayed_termination: bool = False
 ) -> torch.Tensor:
@@ -40,8 +52,29 @@ def motion_global_anchor_position_error_exp(
 
 def motion_global_anchor_position_z_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
-    error = torch.square(command.anchor_pos_w[:, 2] - command.robot_anchor_pos_w[:, 2])
+    error = torch.square(command.anchor_pos_w[:, 2]  - command.robot_anchor_pos_w[:, 2])
     return torch.exp(-error / std**2)
+
+def motion_global_torso_position_z_error_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    enable_on_delayed_termination: bool = False,
+) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    left_arm_index = command.cfg.body_names.index("zarm_l2_link")
+    right_arm_index = command.cfg.body_names.index("zarm_r2_link")
+    robot_arm_height = 0.5 * (
+        command.robot_body_pos_w[:, left_arm_index, 2] + command.robot_body_pos_w[:, right_arm_index, 2]
+    )
+    motion_arm_height = 0.5 * (
+        command.body_pos_w[:, left_arm_index, 2] + command.body_pos_w[:, right_arm_index, 2]
+    )
+    motion_center_height = 0.5 * (command.anchor_pos_w[:, 2] + motion_arm_height)
+    robot_center_height = 0.5 * (command.robot_anchor_pos_w[:, 2] + robot_arm_height)
+    error = torch.square(motion_center_height - robot_center_height)
+    reward = torch.exp(-error / std**2)
+    return _zero_non_delayed_termination_rewards(env, reward, enable_on_delayed_termination)
 
 
 def motion_global_anchor_orientation_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:

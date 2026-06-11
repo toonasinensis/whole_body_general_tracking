@@ -161,6 +161,13 @@ class RewardsCfg:
         weight=0.5,
         params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
     )
+
+    motion_global_torso_pos_z = RewTerm(
+        func=mdp.motion_global_torso_position_z_error_exp,
+        weight=1.0,
+        params={"command_name": "motion", "std": 0.3, "enable_on_delayed_termination": True},
+    )
+    
     motion_global_anchor_pos_z = RewTerm(
         func=mdp.motion_global_anchor_position_z_error_exp,
         weight=1.0,

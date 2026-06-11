@@ -21,6 +21,10 @@ source /home/thl/miniconda3/etc/profile.d/conda.sh
 conda activate my_env
 source /home/thl/isaacsim5.1/setup_conda.sh
 python -m pip install -e source/whole_body_tracking
+cd rsl_rl
+pip install -e .
+python -m pip install -U vector-quantize-pytorch
+export PYTHONPATH=$PWD/rsl_rl:$PWD/source:$PYTHONPATH
 ```
 
 For non-Isaac utilities such as sim2sim plots, `my_env` is usually enough. For scripts that launch Isaac Lab, source the
