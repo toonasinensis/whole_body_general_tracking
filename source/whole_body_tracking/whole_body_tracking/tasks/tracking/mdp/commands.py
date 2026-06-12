@@ -22,7 +22,6 @@ from isaaclab.markers.config import (  # RED_ARROW_X_MARKER_CFG,
     GREEN_ARROW_X_MARKER_CFG,
 )
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
 from isaaclab.utils.math import (
     quat_rotate_inverse as quat_apply_inverse, # sim5.1 to sim4.5
     quat_error_magnitude,
@@ -124,7 +123,7 @@ class MotionLoader:
 
         batch_size = 1024
         npz_file_paths = self._find_npz_files(dir_path, motion_num, dataset_txt)
-        rel_npz_file_names = [os.path.relpath(f, dir_path) for f in npz_file_paths]
+        rel_npz_file_names = []
         tensor_keys = ["joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w"]
         tensor_lists = {k: [] for k in tensor_keys}
         fps_list = []
@@ -139,11 +138,15 @@ class MotionLoader:
                     tensor_lists[k].append(tensor)
                 fps_list.append(data["fps"])
                 frames_per_file.append(data["joint_pos"].shape[0])
+                rel_npz_file_names.append(os.path.relpath(f_path, dir_path))
             except Exception as e:
                 print(f"   路径: {f_path}")
                 print(f"   错误: {e}")
                 # 可选：跳过这个文件继续
                 continue
+
+        if not frames_per_file:
+            raise RuntimeError(f"No valid .npz motion files loaded from {dir_path}")
 
         fps_values = [float(fps) for fps in fps_list]
         assert len(set(fps_values)) == 1, "All fps in npz files must be the same."
@@ -260,6 +263,7 @@ class MotionLoader:
         return torch.clamp(motion_ids, min=0, max=self.motion_num - 1)
 
 
+# TODO renaming the variables for clearity
 class MotionCommand(CommandTerm):
     cfg: MotionCommandCfg
 
@@ -267,6 +271,7 @@ class MotionCommand(CommandTerm):
         self.debug_visualizer: MotionCommandDebugVisualizer | None = None
         super().__init__(cfg, env)
 
+        #region robot body indexing
         self.robot: Articulation = env.scene[cfg.asset_name]
         self.env = env
         self.robot_anchor_body_index = self.robot.body_names.index(self.cfg.anchor_body_name)
@@ -274,50 +279,56 @@ class MotionCommand(CommandTerm):
         self.body_indexes = torch.tensor(
             self.robot.find_bodies(self.cfg.body_names, preserve_order=True)[0], dtype=torch.long, device=self.device
         )
+        #endregion robot body indexing
 
-        # Future-frame indexing helpers.
+        #region Future-frame indexing helpers.
         future_step_num = getattr(self.cfg, "future_step_num", [0])
         if future_step_num is None or len(future_step_num) == 0:
             future_step_num = [0]
         self._future_step_offsets = torch.tensor(future_step_num, device=self.device, dtype=torch.long)
+        #endregion Future-frame indexing helpers.
 
+        #region functional modules from motion_command_runtime
         self.motion = MotionLoader(self.cfg, self.body_indexes, self.motion_anchor_body_index, device=self.device)
         self.timeline = MotionCommandTimeline(self.num_envs, self._future_step_offsets, self.device)
-        # Keep the legacy attribute names as tensor aliases for compatibility.
-        self.local_time_steps = self.timeline.local_time_steps
-        self.motion_ids = self.timeline.motion_ids
-        self.frame_end_per_env = self.timeline.frame_end_per_env
-        self.eval_cycle_count = self.timeline.eval_cycle_count
-
         self.reference_cache = MotionReferenceCache(self.num_envs, len(cfg.body_names), self.device)
-        self.body_pos_relative_w = self.reference_cache.body_pos_relative_w
-        self.body_quat_relative_w = self.reference_cache.body_quat_relative_w
         self.resetter = MotionCommandResetter(self.cfg, self.robot, self.device)
         self.debug_visualizer = MotionCommandDebugVisualizer(self.cfg, self, self.device)
+
+        self.motion_ids = self.timeline.motion_ids
+        self.local_time_steps = self.timeline.local_time_steps
+        self.eval_cycle_count = self.timeline.eval_cycle_count
+        self.frame_end_per_env = self.timeline.frame_end_per_env
+        self.body_pos_relative_w = self.reference_cache.body_pos_relative_w
+        self.body_quat_relative_w = self.reference_cache.body_quat_relative_w
+
         self.selection_policy = create_motion_selection_policy(self.cfg, num_envs=self.num_envs, device=self.device)
         self.adaptive_sampler = getattr(self.selection_policy, "sampler", None)
+        #endregion functional modules from motion_command_runtime
+        
+        #region for motion bins analyzing
         self.bin_count = 0
-        self.bin_failed_count = torch.zeros(0, dtype=torch.float, device=self.device)
-        self._current_bin_failed = torch.zeros(0, dtype=torch.float, device=self.device)
         self.kernel = torch.zeros(0, dtype=torch.float, device=self.device)
         self.success_motion = torch.zeros(0, dtype=torch.float32, device=self.device)
-
+        self.bin_failed_count = torch.zeros(0, dtype=torch.float, device=self.device)
+        self._current_bin_failed = torch.zeros(0, dtype=torch.float, device=self.device)
         self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-
-        self.resample_motion_files(self.env)
-        # self.motion.update_last_motion_data()  # when init , init last motion data
-
-        # Evaluation-only: fixed mapping env_id -> motion_id (deterministic). Mirrors selection policy state.
         self.fixed_eval_motion_ids: torch.Tensor | None = None
         self.history_success_rate_dict = {}
-        self.command_step_count = 0
+        #endregion for motion bins analyzing
 
+        # Load motions from dataset and prepare functional components
+        self.resample_motion_files(self.env)
+
+        #region metrics
         self.metrics["error_anchor_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_rot"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_lin_vel"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_ang_vel"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_body_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_body_rot"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_body_lin_vel"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_body_ang_vel"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_joint_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_joint_vel"] = torch.zeros(self.num_envs, device=self.device)
         if self.cfg.adaptive_sample:
@@ -328,22 +339,23 @@ class MotionCommand(CommandTerm):
             self.metrics["sampling_top1_prob_min"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["prob_max_over_uniform"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["prob_uniform"] = torch.zeros(self.num_envs, device=self.device)
-
             self.metrics["failures_min"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["failures_mean"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["failures_max"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["failures_max_over_uniform"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["num_concentrate_bins"] = torch.zeros(self.num_envs, device=self.device)
+        #endregion metrics
 
+        self.command_step_count = 0
         self.fixed_eval_motion_ids = getattr(self.selection_policy, "fixed_eval_motion_ids", None)
-        if self.cfg.debug_vis:
-            # CommandTerm toggles debug-vis during `super().__init__()` before the
-            # dedicated visualizer exists, so re-apply the requested state here.
-            self.debug_visualizer.set_enabled(True)
-        self._refresh_reference_cache()
+        if self.cfg.debug_vis: self.debug_visualizer.set_enabled(True)
+        
+        self._refresh_reference_cache() #align reference motion to current robots' xy_yaw coordination
 
+    #region normal property
     @property
-    def command(self) -> torch.Tensor:  # TODO Consider again if this is the best observation
+    def command(self) -> torch.Tensor:  
+        # TODO Consider again if this is the best observation
         # TODO(refactor): Move observation-facing feature composition into a dedicated
         # ReferenceFeatureView/MotionCommandFeatures facade so MotionCommand only
         # owns IsaacLab lifecycle orchestration.
@@ -361,7 +373,6 @@ class MotionCommand(CommandTerm):
             dim=1,
         )
 
-    # region normal property
     # TODO(refactor): The reference-motion queries below still mix "raw reference
     # frame lookup" and "consumer-facing feature access" inside MotionCommand.
     # Split them into:
@@ -415,10 +426,6 @@ class MotionCommand(CommandTerm):
         )
         return result
 
-    def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
-        """Get motion ids for each timestamp in the current concatenated motion buffer."""
-        return self.motion.motion_ids_from_timestamps(timestamps)
-
     @property
     def anchor_quat_w(self) -> torch.Tensor:
         return self.motion.anchor_quat_w[self.global_time_steps]
@@ -435,8 +442,7 @@ class MotionCommand(CommandTerm):
     def global_time_steps(self) -> torch.Tensor:
         """Global timestamps for indexing the concatenated motion buffers."""
         # TODO(refactor): Move timeline-driven reference indexing helpers such as
-        # global_time_steps/motion_num_steps/future_time_steps into
-        # ReferenceMotionAccessor.
+        # global_time_steps/motion_num_steps/future_time_steps into ReferenceMotionAccessor.
         return self.timeline.global_time_steps(self.motion)
 
     @property
@@ -470,7 +476,7 @@ class MotionCommand(CommandTerm):
         Clamps to the last valid frame of each motion to avoid out-of-bounds access.
 
         Returns:
-            Flattened tensor of shape ``(num_envs * num_future_frames,)``.
+            Tensor of shape ``(num_envs, num_future_frames,)``.
         """
         return self.timeline.future_time_steps(self.motion)
 
@@ -554,15 +560,10 @@ class MotionCommand(CommandTerm):
         return self.robot.data.body_ang_vel_w[:, self.robot_anchor_body_index]
     # endregion normal property
 
-    def _refresh_reference_cache(self) -> None:
-        self.reference_cache.refresh(
-            anchor_pos_w=self.anchor_pos_w,
-            anchor_quat_w=self.anchor_quat_w,
-            body_pos_w=self.body_pos_w,
-            body_quat_w=self.body_quat_w,
-            robot_anchor_pos_w=self.robot_anchor_pos_w,
-            robot_anchor_quat_w=self.robot_anchor_quat_w,
-        )
+    #region to be deprecated
+    def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
+        """Get motion ids for each timestamp in the current concatenated motion buffer."""
+        return self.motion.motion_ids_from_timestamps(timestamps)
 
     def _set_time_from_global_timestamps(self, env_ids: Sequence[int], timestamps: torch.Tensor) -> None:
         """Set (motion_ids, local time_steps, local end) from global timestamps."""
@@ -580,6 +581,18 @@ class MotionCommand(CommandTerm):
             sim_dt=self.env.cfg.sim.dt,
         )
         self.fixed_eval_motion_ids = getattr(self.selection_policy, "fixed_eval_motion_ids", None)
+    #endregion to be deprecated
+
+    #region core functions
+    def _refresh_reference_cache(self) -> None:
+        self.reference_cache.refresh(
+            anchor_pos_w=self.anchor_pos_w,
+            anchor_quat_w=self.anchor_quat_w,
+            body_pos_w=self.body_pos_w,
+            body_quat_w=self.body_quat_w,
+            robot_anchor_pos_w=self.robot_anchor_pos_w,
+            robot_anchor_quat_w=self.robot_anchor_quat_w,
+        )
 
     def resample_motion_files(self, env):
         self.motion.resample_motionloader(device=self.device)
@@ -600,26 +613,6 @@ class MotionCommand(CommandTerm):
             self._current_bin_failed = self.adaptive_sampler._current_bin_failed
             self.kernel = self.adaptive_sampler.kernel
             self.success_motion = self.adaptive_sampler.success_motion
-
-    def _update_metrics(self):
-        self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
-        self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
-        self.metrics["error_anchor_lin_vel"] = torch.norm(self.anchor_lin_vel_w - self.robot_anchor_lin_vel_w, dim=-1)
-        self.metrics["error_anchor_ang_vel"] = torch.norm(self.anchor_ang_vel_w - self.robot_anchor_ang_vel_w, dim=-1)
-        self.metrics["error_body_pos"] = torch.norm(self.body_pos_relative_w - self.robot_body_pos_w, dim=-1).mean(
-            dim=-1
-        )
-        self.metrics["error_body_rot"] = quat_error_magnitude(self.body_quat_relative_w, self.robot_body_quat_w).mean(
-            dim=-1
-        )
-        self.metrics["error_body_lin_vel"] = torch.norm(self.body_lin_vel_w - self.robot_body_lin_vel_w, dim=-1).mean(
-            dim=-1
-        )
-        self.metrics["error_body_ang_vel"] = torch.norm(self.body_ang_vel_w - self.robot_body_ang_vel_w, dim=-1).mean(
-            dim=-1
-        )
-        self.metrics["error_joint_pos"] = torch.mean(torch.abs(self.joint_pos - self.robot_joint_pos), dim=-1)
-        self.metrics["error_joint_vel"] = torch.mean(torch.abs(self.joint_vel - self.robot_joint_vel), dim=-1)
 
     def _resample_command(self, env_ids: Sequence[int], *, allow_failure_accounting: bool = True):
         """_resample_command will be called multiple times in each step
@@ -686,6 +679,20 @@ class MotionCommand(CommandTerm):
             motion_source=self.motion,
             command_step_count=self.command_step_count,
         )
+    #endregion core functions
+
+    #region debug
+    def _update_metrics(self):
+        self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
+        self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
+        self.metrics["error_anchor_lin_vel"] = torch.norm(self.anchor_lin_vel_w - self.robot_anchor_lin_vel_w, dim=-1)
+        self.metrics["error_anchor_ang_vel"] = torch.norm(self.anchor_ang_vel_w - self.robot_anchor_ang_vel_w, dim=-1)
+        self.metrics["error_body_pos"] = torch.norm(self.body_pos_relative_w - self.robot_body_pos_w, dim=-1).mean(dim=-1)
+        self.metrics["error_body_rot"] = quat_error_magnitude(self.body_quat_relative_w, self.robot_body_quat_w).mean(dim=-1)
+        self.metrics["error_body_lin_vel"] = torch.norm(self.body_lin_vel_w - self.robot_body_lin_vel_w, dim=-1).mean(dim=-1)
+        self.metrics["error_body_ang_vel"] = torch.norm(self.body_ang_vel_w - self.robot_body_ang_vel_w, dim=-1).mean(dim=-1)
+        self.metrics["error_joint_pos"] = torch.mean(torch.abs(self.joint_pos - self.robot_joint_pos), dim=-1)
+        self.metrics["error_joint_vel"] = torch.mean(torch.abs(self.joint_vel - self.robot_joint_vel), dim=-1)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if self.debug_visualizer is None:
@@ -696,6 +703,7 @@ class MotionCommand(CommandTerm):
         if self.debug_visualizer is None:
             return
         self.debug_visualizer.render()
+    #endregion debug
 
 
 @configclass
@@ -712,7 +720,7 @@ class MotionCommandCfg(CommandTermCfg):
     max_motion_num: int = 999999
     resample_interval: int = 300000000000
     motion_file: str = MISSING
-    dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
+    dataset_txt: str = None  # "~/dataset/g1-mimic-npz/dataset.txt"
 
     # reference motion obs configs
     anchor_body_name: str = MISSING

@@ -11,10 +11,13 @@ import torch
 
 from isaaclab.assets import Articulation
 from isaaclab.markers import VisualizationMarkers
-from isaaclab.utils.math import quat_apply, quat_inv, quat_mul, sample_uniform, yaw_quat
+from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_inv, quat_mul, sample_uniform, yaw_quat
 
 
-class MotionDataSource(Protocol):
+#定义 MotionData 的基本属性
+class MotionDataSource(Protocol):   #checked
+    """ Motion ranges for motion indexing"""
+
     time_step_total: int
     time_step_start_idx: torch.Tensor
     time_step_end_idx: torch.Tensor
@@ -23,23 +26,29 @@ class MotionDataSource(Protocol):
         """Map global timestamps to motion ids."""
 
 
+#定义选择动作的基本数据结构
 @dataclass
-class MotionSelection:
+class MotionSelection:  #checked
+    """ Used to fetch motion frame for each env """
+
     motion_ids: torch.Tensor
     local_time_steps: torch.Tensor
     frame_end: torch.Tensor
 
 
-class MotionCommandTimeline:
+#负责仿真步数和动作缓存之间的转换
+# TODO the funtion names shall be algined
+class MotionCommandTimeline:  # checked
     """Track per-environment motion ids and local frame cursors."""
 
     def __init__(self, num_envs: int, future_step_offsets: torch.Tensor, device: str):
         self.device = device
-        self.local_time_steps = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.motion_ids = torch.zeros(num_envs, dtype=torch.long, device=device)
+        self.local_time_steps  = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.frame_end_per_env = torch.zeros(num_envs, dtype=torch.long, device=device)
-        self.eval_cycle_count = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.future_step_offsets = future_step_offsets
+        # used in evaluation
+        self.eval_cycle_count  = torch.zeros(num_envs, dtype=torch.long, device=device)
 
     @property
     def num_future_frames(self) -> int:
@@ -52,20 +61,23 @@ class MotionCommandTimeline:
         return motion_source.time_step_start_idx[self.motion_ids]
 
     def motion_num_steps(self, motion_source: MotionDataSource) -> torch.Tensor:
+        """frame lengths of motions"""
         start = motion_source.time_step_start_idx[self.motion_ids]
         end = motion_source.time_step_end_idx[self.motion_ids]
         return end - start
 
     def future_motion_ids(self) -> torch.Tensor:
+        """(envs_num, ) -> (envs_num, num_future_frames)"""
         return self.motion_ids[:, None].expand(-1, self.num_future_frames).reshape(-1)
 
     def future_time_steps(self, motion_source: MotionDataSource) -> torch.Tensor:
+        """ -> (envs_num, num_future_frames)"""
         start = self.motion_start_time_steps(motion_source)
         local_max = (self.motion_num_steps(motion_source) - 1).clamp(min=0)
         future_local = torch.clip(
             self.local_time_steps[:, None] + self.future_step_offsets[None, :],
             max=local_max[:, None],
-        )
+        ) #(motion_num, num_future_frames)
         return (start[:, None] + future_local).long()
 
     def selection_from_global_timestamps(
@@ -73,6 +85,7 @@ class MotionCommandTimeline:
         motion_source: MotionDataSource,
         timestamps: torch.Tensor,
     ) -> MotionSelection:
+        """global_timestamps -> motion_ids, local_time_step, motion_length"""
         if timestamps.dtype != torch.long:
             timestamps = timestamps.long()
         timestamps = torch.clamp(timestamps, min=0, max=int(motion_source.time_step_total) - 1)
@@ -92,6 +105,7 @@ class MotionCommandTimeline:
         *,
         local_time_steps: torch.Tensor | None = None,
     ) -> MotionSelection:
+        """motion_ids -> motion_ids, local_time_steps, motion_length"""
         motion_ids = motion_ids.long()
         start = motion_source.time_step_start_idx[motion_ids]
         end = motion_source.time_step_end_idx[motion_ids]
@@ -104,6 +118,7 @@ class MotionCommandTimeline:
         )
 
     def apply_selection(self, env_ids: Sequence[int], selection: MotionSelection) -> None:
+        """refresh MotionCommandTimeline using MotionSelection"""
         if len(env_ids) == 0:
             return
         self.motion_ids[env_ids] = selection.motion_ids
@@ -127,14 +142,16 @@ class MotionCommandTimeline:
         self.local_time_steps += 1
 
     def expired_env_ids(self, max_future_step: int) -> torch.Tensor:
+        """(num_envs, )"""
         return torch.where(self.local_time_steps >= self.frame_end_per_env - max_future_step)[0]
 
 
-class MotionReferenceCache:
+#负责将参考数据或者额外的数据和当前机器人状态对齐
+class MotionReferenceCache:  #checked
     """Cache reference poses aligned into the robot's anchor XY-yaw frame."""
 
-    def __init__(self, num_envs: int, body_count: int, device: str):
-        self.body_pos_relative_w = torch.zeros(num_envs, body_count, 3, device=device)
+    def __init__(self, num_envs: int, body_count: int, device: str): #wxyz
+        self.body_pos_relative_w  = torch.zeros(num_envs, body_count, 3, device=device)
         self.body_quat_relative_w = torch.zeros(num_envs, body_count, 4, device=device)
         self.body_quat_relative_w[:, :, 0] = 1.0
 
@@ -148,8 +165,13 @@ class MotionReferenceCache:
         robot_anchor_pos_w: torch.Tensor,
         robot_anchor_quat_w: torch.Tensor,
     ) -> None:
+        """
+            align reference motion to the robot's current XY position and yaw, 
+            but keep the reference motion's absolute height profile.
+            used for computing rewards.
+        """
         body_count = body_pos_w.shape[1]
-        anchor_pos_w_repeat = anchor_pos_w[:, None, :].repeat(1, body_count, 1)
+        anchor_pos_w_repeat  = anchor_pos_w[:, None, :].repeat(1, body_count, 1)  #envs_num, body_num, dim
         anchor_quat_w_repeat = anchor_quat_w[:, None, :].repeat(1, body_count, 1)
         robot_anchor_pos_w_repeat = robot_anchor_pos_w[:, None, :].repeat(1, body_count, 1)
         robot_anchor_quat_w_repeat = robot_anchor_quat_w[:, None, :].repeat(1, body_count, 1)
@@ -159,10 +181,13 @@ class MotionReferenceCache:
         delta_ori_w = yaw_quat(quat_mul(robot_anchor_quat_w_repeat, quat_inv(anchor_quat_w_repeat)))
 
         self.body_quat_relative_w[:] = quat_mul(delta_ori_w, body_quat_w)
-        self.body_pos_relative_w[:] = delta_pos_w + quat_apply(delta_ori_w, body_pos_w - anchor_pos_w_repeat)
+        self.body_pos_relative_w[:]  = delta_pos_w + quat_apply(delta_ori_w, body_pos_w - anchor_pos_w_repeat)
+
+    """负责环境重置逻辑"""
 
 
-class MotionCommandResetter:
+#负责环境重置
+class MotionCommandResetter:  #checked
     """Apply sampled reference motion states back to the simulator on reset/resample."""
 
     def __init__(self, cfg, robot: Articulation, device: str):
@@ -183,18 +208,24 @@ class MotionCommandResetter:
     ) -> None:
         if len(env_ids) == 0:
             return
-
+        # NOTE body_names[0] MUST be robot's anchor 
+        # TODO use assigned anchor id to index anchor states
         root_pos = body_pos_w[:, 0].clone()
         root_ori = body_quat_w[:, 0].clone()
         root_lin_vel = body_lin_vel_w[:, 0].clone()
         root_ang_vel = body_ang_vel_w[:, 0].clone()
 
+        # add noise
         pose_ranges = torch.tensor(
             [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]],
             device=self.device,
         )
         pose_noise = sample_uniform(pose_ranges[:, 0], pose_ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_pos[env_ids] += pose_noise[:, 0:3]
+        root_pos[env_ids] += pose_noise[:, :3]
+        root_ori[env_ids] = quat_mul(
+            quat_from_euler_xyz(pose_noise[:, 3], pose_noise[:, 4], pose_noise[:, 5]),
+            root_ori[env_ids],
+        )
 
         velocity_ranges = torch.tensor(
             [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]],
@@ -212,16 +243,15 @@ class MotionCommandResetter:
 
         soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
         joint_vel_limits = self.robot.data.joint_vel_limits[env_ids]
+        #TODO add this to config
         max_ang_vel_root = 20.0
 
-        joint_pos[env_ids] = torch.clip(
-            joint_pos[env_ids],
-            soft_joint_pos_limits[:, :, 0],
-            soft_joint_pos_limits[:, :, 1],
-        )
+        #clip to limits
+        joint_pos[env_ids] = torch.clip(joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1])
         joint_vel[env_ids] = torch.clip(joint_vel[env_ids], -joint_vel_limits[:, :], joint_vel_limits[:, :])
         root_ang_vel[env_ids] = torch.clip(root_ang_vel[env_ids], -max_ang_vel_root, max_ang_vel_root)
 
+        #write to sim
         self.robot.write_joint_state_to_sim(joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids)
         self.robot.write_root_state_to_sim(
             torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
@@ -229,6 +259,7 @@ class MotionCommandResetter:
         )
 
 
+#负责可视化，未人工复核
 class MotionCommandDebugVisualizer:
     """Own all debug-visualization markers and rendering details for MotionCommand."""
 
@@ -395,20 +426,22 @@ class MotionCommandDebugVisualizer:
         return arrow_scale, arrow_quat_w
 
 
+#负责计算动作的选择方法（包含 adaptive sampling）
 class AdaptiveMotionSampler:
     """Maintain adaptive-sampling state and produce motion selections."""
 
     def __init__(self, cfg, device: str):
         self.cfg = cfg
         self.device = device
-        self.bin_count = 0
+        self.bin_count = 0  # num of 1s motion bins
         self.bin_failed_count = torch.zeros(0, dtype=torch.float, device=device)
         self._current_bin_failed = torch.zeros(0, dtype=torch.float, device=device)
         self.kernel = torch.zeros(0, dtype=torch.float, device=device)
-        self.success_motion = torch.zeros(0, dtype=torch.float32, device=device)
+        self.success_motion = torch.zeros(0, dtype=torch.float32, device=device)  # used for evaluation
         self._last_export_step = -1
 
     def reset_for_motion_source(self, motion_source: MotionDataSource, *, decimation: int, sim_dt: float) -> None:
+        """called when load new motion """
         self.bin_count = int(motion_source.time_step_total // (1 / (decimation * sim_dt))) + 1
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
@@ -417,6 +450,7 @@ class AdaptiveMotionSampler:
             device=self.device,
         )
         self.kernel = self.kernel / self.kernel.sum()
+        # used for evaluation
         motion_num = int(getattr(motion_source, "motion_num", 0) or 0)
         self.success_motion = torch.zeros(motion_num, dtype=torch.float32, device=self.device)
         self._last_export_step = -1
@@ -431,9 +465,11 @@ class AdaptiveMotionSampler:
         metrics: dict[str, torch.Tensor],
         allow_failure_accounting: bool = True,
     ) -> MotionSelection:
+        """sample new motions according to failure metrics, and produce a MotionSelection for the given env_ids."""
         if len(env_ids) == 0:
             raise ValueError("env_ids must not be empty for adaptive sampling")
 
+        # Update failed motion bins to _current_bin_failed
         episode_failed = terminated[env_ids]
         if allow_failure_accounting and torch.any(episode_failed):
             global_ts = torch.clamp(timeline.global_time_steps(motion_source) - 1, min=0, max=int(motion_source.time_step_total) - 1)
@@ -443,8 +479,6 @@ class AdaptiveMotionSampler:
                 self.bin_count - 1,
             )
             fail_bins = current_bin_index[env_ids][episode_failed]
-            # IsaacLab may invoke `_resample_command()` multiple times within one control step,
-            # so we accumulate failures until `step_post_update()` applies the EMA update.
             self._current_bin_failed += torch.bincount(fail_bins, minlength=self.bin_count)
 
         sampling_probabilities = self._compute_sampling_probabilities(metrics)
@@ -456,6 +490,7 @@ class AdaptiveMotionSampler:
         ).long()
 
         selection = timeline.selection_from_global_timestamps(motion_source, global_ts)
+        #TODO think whether there is more clear logic for different sampling modes
         if self.cfg.eval_mode:
             selection.local_time_steps.zero_()
         self._update_sampling_metrics(metrics, sampling_probabilities)
@@ -467,6 +502,11 @@ class AdaptiveMotionSampler:
         motion_source: MotionDataSource,
         command_step_count: int,
     ) -> None:
+        """
+            Called after command.step(). 
+            Update current failed bins to bin_failed count.
+            Export adaptive bins for analysis.  
+        """
         if self.bin_failed_count.numel() == 0:
             return
 
@@ -484,6 +524,7 @@ class AdaptiveMotionSampler:
             self._export_adaptive_bins(motion_source=motion_source, command_step_count=command_step_count)
 
     def _compute_sampling_probabilities(self, metrics: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Hierarchical adaptive sampling"""
         metrics["failures_max"][:] = self.bin_failed_count.max()
         metrics["failures_mean"][:] = self.bin_failed_count.mean()
         metrics["failures_min"][:] = self.bin_failed_count.min()
@@ -547,6 +588,8 @@ class AdaptiveMotionSampler:
             sampling_probabilities > self.cfg.failure_most_hard_cap_beta * 0.5 * sampling_probabilities.mean()
         ).sum()
 
+    #region export high prob bins for analysis 
+    # TODO 这一部分过于冗长，后期需要改掉
     def _get_bin_global_frame_range(self, motion_source: MotionDataSource, bin_index: int) -> tuple[int, int]:
         total_frames = max(int(motion_source.time_step_total), 1)
         if total_frames == 1:
@@ -688,7 +731,10 @@ class AdaptiveMotionSampler:
             + self.cfg.motion_ratio[1] * sampling_probabilities_middle_hard
             + self.cfg.motion_ratio[2] * sampling_probabilities_most_hard
         )
+    #endregion export high prob bins for analysis 
 
+
+#region motion sampling policy interface
 class MotionSelectionPolicy(Protocol):
     fixed_eval_motion_ids: torch.Tensor | None
 
@@ -886,3 +932,4 @@ def create_motion_selection_policy(cfg, *, num_envs: int, device: str) -> Motion
     if bool(getattr(cfg, "adaptive_sample", False)):
         return AdaptiveMotionSelectionPolicy(AdaptiveMotionSampler(cfg, device))
     return UnsupportedMotionSelectionPolicy()
+#endregion motion sampling policy interface
