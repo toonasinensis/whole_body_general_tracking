@@ -620,6 +620,27 @@ class MotionCommand(CommandTerm):
         2. Called directly in the IsaacLab simulator
         2.1. after check_termination()
         2.2. after reset_all() maybe?
+        
+        step(action)
+        │
+        ├─ [1] process_action
+        ├─ [2] physics × decimation
+        ├─ [3] termination_manager.compute()
+        ├─ [4] reward_manager.compute()          ← 用的是上一步 command
+        │
+        ├─ [5] 若有 env 终止:
+        │       command_manager.reset(env_ids)
+        │         └─ _resample()  ★ 路径 1（仅终止 env）
+        │
+        ├─ [6] command_manager.compute(dt)
+        │       ├─ time_left -= dt    # 判断 command 何时 resample
+        │       ├─ if time_left <= 0:
+        │       │     _resample()  ★ 路径 2（到期 env）
+        │       └─ _update_command()
+        │             └─ (OrientationCommand) _resample()  ★ 路径 3
+        │
+        ├─ [7] interval events
+        └─ [8] observation_manager.compute()     ← 用的是本步最终 command
         """
         if len(env_ids) == 0:
             return
@@ -646,7 +667,23 @@ class MotionCommand(CommandTerm):
 
     def _update_command(self):
         """
-        Called every control step, update commands for envs that are out of time
+            Called every control step, update commands for envs that are out of time
+            在 reset() 之后先处理终止超时的 env
+
+            1. process_action(action)
+            2. physics 循环 (decimation 次 sim.step)
+            3. termination 计算
+            4. reward 计算          ← 用的是上一步的 command
+            5. 终止 env 的 reset    ← 可能触发 command_manager.reset → _resample
+            6. command_manager.compute  ← _update_command() 在这里
+            7. interval events
+            8. observation 计算     ← 用的是本步 _update_command 后的 command
+            9. return
+
+            env.step(action)
+            └─ command_manager.compute(dt=step_dt)      # 仅 RL env 的 step 中有
+                └─ term.compute(dt)
+                        └─ _update_command()            ← 唯一标准入口
         """
         self.command_step_count += 1
         self.timeline.step()
