@@ -827,10 +827,10 @@
       <mass value="0.001"/>
       <inertia
         ixx="0.00001"
-        ixy="0.00001"
-        ixz="0.00001"
+        ixy="0.0"
+        ixz="0.0"
         iyy="0.00001"
-        iyz="0.00001"
+        iyz="0.0"
         izz="0.00001"/>
     </inertial>
     <visual>
@@ -1029,10 +1029,10 @@
       <mass value="0.01"/>
       <inertia
         ixx="0.00001"
-        ixy="0.00001"
-        ixz="0.00001"
+        ixy="0.0"
+        ixz="0.0"
         iyy="0.00001"
-        iyz="0.00001"
+        iyz="0.0"
         izz="0.00001"/>
     </inertial>
     <visual>
@@ -1062,10 +1062,10 @@
       <mass value="0.01"/>
       <inertia
         ixx="0.00001"
-        ixy="0.00001"
-        ixz="0.00001"
+        ixy="0.0"
+        ixz="0.0"
         iyy="0.00001"
-        iyz="0.00001"
+        iyz="0.0"
         izz="0.00001"/>
     </inertial>
     <visual>
@@ -1219,10 +1219,10 @@
       <mass value="0.001"/>
       <inertia
         ixx="0.00001"
-        ixy="0.00001"
-        ixz="0.00001"
+        ixy="0.0"
+        ixz="0.0"
         iyy="0.00001"
-        iyz="0.00001"
+        iyz="0.0"
         izz="0.00001"/>
     </inertial>
     <visual>
@@ -1421,10 +1421,10 @@
       <mass value="0.01"/>
       <inertia
         ixx="0.00001"
-        ixy="0.00001"
-        ixz="0.00001"
+        ixy="0.0"
+        ixz="0.0"
         iyy="0.00001"
-        iyz="0.00001"
+        iyz="0.0"
         izz="0.00001"/>
     </inertial>
     <visual>
@@ -1454,10 +1454,10 @@
       <mass value="0.01"/>
       <inertia
         ixx="0.00001"
-        ixy="0.00001"
-        ixz="0.00001"
+        ixy="0.0"
+        ixz="0.0"
         iyy="0.00001"
-        iyz="0.00001"
+        iyz="0.0"
         izz="0.00001"/>
     </inertial>
     <visual>

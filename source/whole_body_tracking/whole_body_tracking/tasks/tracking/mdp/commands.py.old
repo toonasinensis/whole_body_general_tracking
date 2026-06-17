@@ -28,11 +28,13 @@ from isaaclab.utils.math import (
 )
 
 from .math_utils import quat_to_6d
-from .sub_modules.motion_cache import MotionReferenceCache
-from .sub_modules.motion_reset import MotionCommandResetter
-from .sub_modules.motion_selection import create_motion_selection_policy
-from .sub_modules.motion_timeline import MotionCommandTimeline
-from .sub_modules.motion_viser import MotionCommandDebugVisualizer
+from .motion_command_runtime import (
+    MotionCommandResetter,
+    MotionCommandDebugVisualizer,
+    MotionCommandTimeline,
+    MotionReferenceCache,
+    create_motion_selection_policy,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -286,7 +288,7 @@ class MotionCommand(CommandTerm):
         self._future_step_offsets = torch.tensor(future_step_num, device=self.device, dtype=torch.long)
         #endregion Future-frame indexing helpers.
 
-        #region functional modules from sub_modules
+        #region functional modules from motion_command_runtime
         self.motion = MotionLoader(self.cfg, self.body_indexes, self.motion_anchor_body_index, device=self.device)
         self.timeline = MotionCommandTimeline(self.num_envs, self._future_step_offsets, self.device)
         self.reference_cache = MotionReferenceCache(self.num_envs, len(cfg.body_names), self.device)
@@ -302,7 +304,7 @@ class MotionCommand(CommandTerm):
 
         self.selection_policy = create_motion_selection_policy(self.cfg, num_envs=self.num_envs, device=self.device)
         self.adaptive_sampler = getattr(self.selection_policy, "sampler", None)
-        #endregion functional modules from sub_modules
+        #endregion functional modules from motion_command_runtime
         
         #region for motion bins analyzing
         self.bin_count = 0
