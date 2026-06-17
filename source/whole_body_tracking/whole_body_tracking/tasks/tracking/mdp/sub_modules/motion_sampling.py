@@ -69,7 +69,7 @@ class AdaptiveMotionSampler:
                 self.bin_count - 1,
             )
             fail_bins = current_bin_index[env_ids][episode_failed]
-            self._current_bin_failed += torch.bincount(fail_bins, minlength=self.bin_count)
+            self._current_bin_failed = torch.bincount(fail_bins, minlength=self.bin_count)
 
         sampling_probabilities = self._compute_sampling_probabilities(metrics)
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)

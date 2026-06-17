@@ -697,6 +697,7 @@ class MotionCommand(CommandTerm):
             if self.resample_time >= self.cfg.resample_interval:
                 self.resample_motion_files(self.env)
                 env_ids = torch.arange(self.num_envs, device=self.device)
+                # motion source 已重载，不能把旧 episode failure 计入新 motion bins。
                 self._resample_command(env_ids, allow_failure_accounting=False)
                 # Keep aligned reference caches in sync for both stepped and reset envs.
                 self._refresh_reference_cache()
