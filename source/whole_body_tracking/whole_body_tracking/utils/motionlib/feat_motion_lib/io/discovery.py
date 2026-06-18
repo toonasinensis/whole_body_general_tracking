@@ -58,8 +58,8 @@ def find_npz_files(
     if len(npz_files) > motion_num != -1:
         if eval_mode:
             start = min(sample_counter * motion_num, len(npz_files) - 1)
-            end = min(start + motion_num, len(npz_files) - 1)
-            if start >= len(npz_files) - 1:
+            end = min(start + motion_num, len(npz_files))
+            if start >= len(npz_files):
                 raise ValueError("eval_mode sampling exhausted all data.")
             sampled = npz_files[start:end]
             print("eval_mode process: ", float(start) / len(npz_files))

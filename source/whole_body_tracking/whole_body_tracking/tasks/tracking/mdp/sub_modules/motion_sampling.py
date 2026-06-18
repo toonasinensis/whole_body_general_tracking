@@ -59,6 +59,14 @@ class AdaptiveMotionSampler:
         if len(env_ids) == 0:
             raise ValueError("env_ids must not be empty for adaptive sampling")
 
+        # -- debug
+        # if allow_failure_accounting:
+        #     print("sample_selection with failure accounting called")
+
+        # else:
+        #     print("sample_selection WITHOUT failure accounting called")
+        # -- debug
+
         # Update failed motion bins to _current_bin_failed
         episode_failed = terminated[env_ids]
         if allow_failure_accounting and torch.any(episode_failed):
@@ -69,7 +77,7 @@ class AdaptiveMotionSampler:
                 self.bin_count - 1,
             )
             fail_bins = current_bin_index[env_ids][episode_failed]
-            self._current_bin_failed = torch.bincount(fail_bins, minlength=self.bin_count)
+            self._current_bin_failed += torch.bincount(fail_bins, minlength=self.bin_count)
 
         sampling_probabilities = self._compute_sampling_probabilities(metrics)
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)

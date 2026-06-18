@@ -82,14 +82,20 @@ class MotionCommand(CommandTerm):
         self.env = env
         self.robot_anchor_body_index = self.robot.body_names.index(self.cfg.anchor_body_name)
         self.motion_anchor_body_index = self.cfg.body_names.index(self.cfg.anchor_body_name)
+        # TODO use more robust anchor index assigning logic
+        assert self.robot_anchor_body_index == 0
+        assert self.motion_anchor_body_index == 0
         self.body_indexes = torch.tensor(
             self.robot.find_bodies(self.cfg.body_names, preserve_order=True)[0], dtype=torch.long, device=self.device
         )
+        #endregion robot body indexing
 
-        # Per-env local frame index within the currently selected motion.
-        self.local_time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        # Per-env motion id in the current concatenated motion buffer.
-        self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        #region Future-frame indexing helpers.
+        future_step_num = getattr(self.cfg, "future_step_num", [0])
+        if future_step_num is None or len(future_step_num) == 0:
+            future_step_num = [0]
+        self._future_step_offsets = torch.tensor(future_step_num, device=self.device, dtype=torch.long)
+        #endregion Future-frame indexing helpers.
 
         self.motion = MotionLoader(
             self.cfg,
@@ -101,15 +107,30 @@ class MotionCommand(CommandTerm):
             device=self.device,
         )
 
+        #region functional modules from sub_modules
+        self.timeline = MotionCommandTimeline(self.num_envs, self._future_step_offsets, self.device)
+        self.reference_cache = MotionReferenceCache(self.num_envs, len(cfg.body_names), self.device)
+        self.resetter = MotionCommandResetter(self.cfg, self.robot, self.device)
+        self.debug_visualizer = MotionCommandDebugVisualizer(self.cfg, self, self.device)
+
+        self.motion_ids = self.timeline.motion_ids
+        self.local_time_steps = self.timeline.local_time_steps
+        self.eval_cycle_count = self.timeline.eval_cycle_count
+        self.frame_end_per_env = self.timeline.frame_end_per_env
+        self.body_pos_relative_w = self.reference_cache.body_pos_relative_w
+        self.body_quat_relative_w = self.reference_cache.body_quat_relative_w
+
+        self.selection_policy = create_motion_selection_policy(self.cfg, num_envs=self.num_envs, device=self.device)
+        self.adaptive_sampler = getattr(self.selection_policy, "sampler", None)
+        #endregion functional modules from sub_modules
+        
+        #region for motion bins analyzing
+        self.bin_count = 0
+        self.kernel = torch.zeros(0, dtype=torch.float, device=self.device)
+        self.success_motion = torch.zeros(0, dtype=torch.float32, device=self.device)
+        self.bin_failed_count = torch.zeros(0, dtype=torch.float, device=self.device)
+        self._current_bin_failed = torch.zeros(0, dtype=torch.float, device=self.device)
         self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-
-        self.resample_motion_files(self.env)
-        # self.motion.update_last_motion_data()  # when init , init last motion data
-
-        self.frame_end_per_env = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        # Evaluation-only: number of completed motion cycles per env.
-        self.eval_cycle_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        # Evaluation-only: fixed mapping env_id -> motion_id (deterministic). Set in _setup_fixed_eval_motion_assignment().
         self.fixed_eval_motion_ids: torch.Tensor | None = None
         self.history_success_rate_dict = {}
         #endregion for motion bins analyzing
@@ -413,10 +434,6 @@ class MotionCommand(CommandTerm):
 
     def _resample_command(self, env_ids: Sequence[int], *, allow_failure_accounting: bool = True):
         """_resample_command will be called multiple times in each step
-        1. Called from _update_command
-        2. Called directly in the IsaacLab simulator
-        2.1. after check_termination()
-        2.2. after reset_all() maybe?
         
         step(action)
         │
@@ -427,7 +444,7 @@ class MotionCommand(CommandTerm):
         │
         ├─ [5] 若有 env 终止:
         │       command_manager.reset(env_ids)
-        │         └─ _resample()  ★ 路径 1（仅终止 env）
+        │         └─ _resample()   ★ 路径 1（仅终止 env）
         │
         ├─ [6] command_manager.compute(dt)
         │       ├─ time_left -= dt    # 判断 command 何时 resample
@@ -441,6 +458,7 @@ class MotionCommand(CommandTerm):
         """
         if len(env_ids) == 0:
             return
+        
         selection = self.selection_policy.select(
             env_ids,
             motion_source=self.motion,
@@ -491,9 +509,15 @@ class MotionCommand(CommandTerm):
         if self.selection_policy.counts_eval_cycles:
             if len(env_ids) > 0:
                 self.eval_cycle_count[env_ids] += 1
+        
+        # 重新生成指令，在本项目中resample_interval 设置的很大，故这段代码可以认为未执行过
+        # TODO 重新写这段逻辑以获得更好的可读性
         if self.cfg.resample_interval != -1:  # change the reference motion every resample_interval control steps
             self.resample_time += 1
             if self.resample_time >= self.cfg.resample_interval:
+                # --debug
+                print("resample command called for resample_interval")
+                # --debug
                 self.resample_motion_files(self.env)
                 env_ids = torch.arange(self.num_envs, device=self.device)
                 # motion source 已重载，不能把旧 episode failure 计入新 motion bins。
@@ -505,7 +529,14 @@ class MotionCommand(CommandTerm):
                     command_step_count=self.command_step_count,
                 )
                 return
-        self._resample_command(env_ids)
+        
+        # 这里只更新 future commands 溢出的 env_ids
+        # -- debug
+        # print("_update_command() called")
+        # print("env_ids in _update_command(): ", env_ids)
+        # print(self._env.termination_manager.terminated[env_ids])
+        # -- debug
+        self._resample_command(env_ids, allow_failure_accounting=False)
 
         # Keep aligned reference caches in sync for both stepped and reset envs.
         self._refresh_reference_cache()

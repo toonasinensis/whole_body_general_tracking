@@ -138,6 +138,7 @@ class AdaptiveMotionSelectionPolicy(MotionSelectionPolicy):
         metrics: dict[str, torch.Tensor],
         allow_failure_accounting: bool = True,
     ) -> MotionSelection:
+        """ 统计 env_ids 中 terminated 的 motion_ids """
         return self.sampler.sample_selection(
             env_ids,
             motion_source=motion_source,
