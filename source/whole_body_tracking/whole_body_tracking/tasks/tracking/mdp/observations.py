@@ -74,92 +74,6 @@ def robot_body_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     return mat[..., :2].reshape(mat.shape[0], -1)
 
 
-
-def amp_robot_body_pos_b(
-    env: ManagerBasedEnv,
-    asset_name: str = "robot",
-    anchor_body_name: str = "",
-    body_names: tuple[str, ...] = (),
-) -> torch.Tensor:
-    asset = env.scene[asset_name]
-    anchor_id = _resolve_amp_body_ids(asset, anchor_body_name)[0]
-    body_ids = _resolve_amp_body_ids(asset, body_names)
-    anchor_pos_w = asset.data.body_pos_w[:, anchor_id]
-    anchor_quat_w = asset.data.body_quat_w[:, anchor_id]
-    body_pos_w = asset.data.body_pos_w[:, body_ids]
-    body_quat_w = asset.data.body_quat_w[:, body_ids]
-    num_bodies = len(body_ids)
-    pos_b, _ = subtract_frame_transforms(
-        anchor_pos_w[:, None, :].expand(-1, num_bodies, -1),
-        anchor_quat_w[:, None, :].expand(-1, num_bodies, -1),
-        body_pos_w,
-        body_quat_w,
-    )
-    return pos_b.reshape(env.num_envs, -1)
-
-
-def amp_robot_body_ori_b(
-    env: ManagerBasedEnv,
-    asset_name: str = "robot",
-    anchor_body_name: str = "",
-    body_names: tuple[str, ...] = (),
-) -> torch.Tensor:
-    asset = env.scene[asset_name]
-    anchor_id = _resolve_amp_body_ids(asset, anchor_body_name)[0]
-    body_ids = _resolve_amp_body_ids(asset, body_names)
-    anchor_pos_w = asset.data.body_pos_w[:, anchor_id]
-    anchor_quat_w = asset.data.body_quat_w[:, anchor_id]
-    body_pos_w = asset.data.body_pos_w[:, body_ids]
-    body_quat_w = asset.data.body_quat_w[:, body_ids]
-    num_bodies = len(body_ids)
-    _, ori_b = subtract_frame_transforms(
-        anchor_pos_w[:, None, :].expand(-1, num_bodies, -1),
-        anchor_quat_w[:, None, :].expand(-1, num_bodies, -1),
-        body_pos_w,
-        body_quat_w,
-    )
-    mat = matrix_from_quat(ori_b)
-    return mat[..., :2].reshape(env.num_envs, -1)
-
-
-def amp_robot_body_lin_vel_b(
-    env: ManagerBasedEnv,
-    asset_name: str = "robot",
-    anchor_body_name: str = "",
-    body_names: tuple[str, ...] = (),
-) -> torch.Tensor:
-    del anchor_body_name
-    asset = env.scene[asset_name]
-    body_ids = _resolve_amp_body_ids(asset, body_names)
-    body_lin_vel_w = asset.data.body_lin_vel_w[:, body_ids]
-    body_quat_w = asset.data.body_quat_w[:, body_ids]
-    num_bodies = len(body_ids)
-    body_lin_vel_b = quat_apply_inverse(
-        body_quat_w.reshape(-1, 4),
-        body_lin_vel_w.reshape(-1, 3),
-    ).reshape(env.num_envs, num_bodies, 3)
-    return body_lin_vel_b.reshape(env.num_envs, -1)
-
-
-def amp_robot_body_ang_vel_b(
-    env: ManagerBasedEnv,
-    asset_name: str = "robot",
-    anchor_body_name: str = "",
-    body_names: tuple[str, ...] = (),
-) -> torch.Tensor:
-    del anchor_body_name
-    asset = env.scene[asset_name]
-    body_ids = _resolve_amp_body_ids(asset, body_names)
-    body_ang_vel_w = asset.data.body_ang_vel_w[:, body_ids]
-    body_quat_w = asset.data.body_quat_w[:, body_ids]
-    num_bodies = len(body_ids)
-    body_ang_vel_b = quat_apply_inverse(
-        body_quat_w.reshape(-1, 4),
-        body_ang_vel_w.reshape(-1, 3),
-    ).reshape(env.num_envs, num_bodies, 3)
-    return body_ang_vel_b.reshape(env.num_envs, -1)
-
-
 def motion_anchor_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
 
@@ -273,3 +187,88 @@ def smpl_root_quat_w_dif_l_multi_future(env: ManagerBasedEnv, command_name: str)
         return torch.zeros(env.num_envs, command.num_future_frames * 6, device=command.device)
     future_local = command.smpl_root_quat_w_dif_l_multi_future.view(env.num_envs, -1)
     return future_local
+
+
+def amp_robot_body_pos_b(
+    env: ManagerBasedEnv,
+    asset_name: str = "robot",
+    anchor_body_name: str = "",
+    body_names: tuple[str, ...] = (),
+) -> torch.Tensor:
+    asset = env.scene[asset_name]
+    anchor_id = _resolve_amp_body_ids(asset, anchor_body_name)[0]
+    body_ids = _resolve_amp_body_ids(asset, body_names)
+    anchor_pos_w = asset.data.body_pos_w[:, anchor_id]
+    anchor_quat_w = asset.data.body_quat_w[:, anchor_id]
+    body_pos_w = asset.data.body_pos_w[:, body_ids]
+    body_quat_w = asset.data.body_quat_w[:, body_ids]
+    num_bodies = len(body_ids)
+    pos_b, _ = subtract_frame_transforms(
+        anchor_pos_w[:, None, :].expand(-1, num_bodies, -1),
+        anchor_quat_w[:, None, :].expand(-1, num_bodies, -1),
+        body_pos_w,
+        body_quat_w,
+    )
+    return pos_b.reshape(env.num_envs, -1)
+
+
+def amp_robot_body_ori_b(
+    env: ManagerBasedEnv,
+    asset_name: str = "robot",
+    anchor_body_name: str = "",
+    body_names: tuple[str, ...] = (),
+) -> torch.Tensor:
+    asset = env.scene[asset_name]
+    anchor_id = _resolve_amp_body_ids(asset, anchor_body_name)[0]
+    body_ids = _resolve_amp_body_ids(asset, body_names)
+    anchor_pos_w = asset.data.body_pos_w[:, anchor_id]
+    anchor_quat_w = asset.data.body_quat_w[:, anchor_id]
+    body_pos_w = asset.data.body_pos_w[:, body_ids]
+    body_quat_w = asset.data.body_quat_w[:, body_ids]
+    num_bodies = len(body_ids)
+    _, ori_b = subtract_frame_transforms(
+        anchor_pos_w[:, None, :].expand(-1, num_bodies, -1),
+        anchor_quat_w[:, None, :].expand(-1, num_bodies, -1),
+        body_pos_w,
+        body_quat_w,
+    )
+    mat = matrix_from_quat(ori_b)
+    return mat[..., :2].reshape(env.num_envs, -1)
+
+
+def amp_robot_body_lin_vel_b(
+    env: ManagerBasedEnv,
+    asset_name: str = "robot",
+    anchor_body_name: str = "",
+    body_names: tuple[str, ...] = (),
+) -> torch.Tensor:
+    del anchor_body_name
+    asset = env.scene[asset_name]
+    body_ids = _resolve_amp_body_ids(asset, body_names)
+    body_lin_vel_w = asset.data.body_lin_vel_w[:, body_ids]
+    body_quat_w = asset.data.body_quat_w[:, body_ids]
+    num_bodies = len(body_ids)
+    body_lin_vel_b = quat_apply_inverse(
+        body_quat_w.reshape(-1, 4),
+        body_lin_vel_w.reshape(-1, 3),
+    ).reshape(env.num_envs, num_bodies, 3)
+    return body_lin_vel_b.reshape(env.num_envs, -1)
+
+
+def amp_robot_body_ang_vel_b(
+    env: ManagerBasedEnv,
+    asset_name: str = "robot",
+    anchor_body_name: str = "",
+    body_names: tuple[str, ...] = (),
+) -> torch.Tensor:
+    del anchor_body_name
+    asset = env.scene[asset_name]
+    body_ids = _resolve_amp_body_ids(asset, body_names)
+    body_ang_vel_w = asset.data.body_ang_vel_w[:, body_ids]
+    body_quat_w = asset.data.body_quat_w[:, body_ids]
+    num_bodies = len(body_ids)
+    body_ang_vel_b = quat_apply_inverse(
+        body_quat_w.reshape(-1, 4),
+        body_ang_vel_w.reshape(-1, 3),
+    ).reshape(env.num_envs, num_bodies, 3)
+    return body_ang_vel_b.reshape(env.num_envs, -1)

@@ -67,6 +67,55 @@ class MotionCommandTimeline:  # checked
             frame_end=end - start,
         )
 
+    def global_timestamps_from_sampled_bins(
+        self,
+        motion_source: MotionDataSource,
+        sampled_bins: torch.Tensor,
+        *,
+        bin_count: int,
+        rewind_min_bins: int = 0,
+        rewind_max_bins: int = 0,
+    ) -> torch.Tensor:
+        """Convert sampled failure bins into spawn timestamps.
+
+        The adaptive sampler still samples bins according to failure statistics.
+        Optional rewind moves the actual spawn bin before the sampled failure bin,
+        so reset starts from a recovery window instead of the failure instant.
+        """
+        bin_count = int(max(1, bin_count))
+        sampled_bins = sampled_bins.to(device=self.device, dtype=torch.long)
+
+        rewind_max_bins = int(max(0, rewind_max_bins))
+        rewind_min_bins = int(max(0, rewind_min_bins))
+        total_frames = max(int(motion_source.time_step_total), 1)
+        if total_frames == 1:
+            return torch.zeros_like(sampled_bins)
+
+        sampled_bins = torch.clamp(sampled_bins, min=0, max=bin_count - 1)
+        bin_fraction = sampled_bins.float() + torch.rand(sampled_bins.shape, device=self.device)
+        sampled_timestamps = (bin_fraction / float(bin_count) * float(total_frames - 1)).long()
+
+        # TODO 尝试使用更为计算高效、准确的实现，当前仅仅实现功能
+        if rewind_max_bins > 0:
+            if rewind_min_bins > rewind_max_bins:
+                raise ValueError(
+                    "adaptive_sample_rewind_min_bins must be <= adaptive_sample_rewind_bins. "
+                    f"Got min={rewind_min_bins}, max={rewind_max_bins}."
+                )
+            offsets = torch.randint(
+                rewind_min_bins,
+                rewind_max_bins + 1,
+                sampled_bins.shape,
+                device=self.device,
+            )
+            sampled_motion_ids = motion_source.motion_ids_from_timestamps(sampled_timestamps)
+            motion_start = motion_source.time_step_start_idx[sampled_motion_ids]
+            bin_width = float(total_frames - 1) / float(bin_count)
+            rewind_frames = (offsets.float() * bin_width).long()
+            return torch.maximum(sampled_timestamps - rewind_frames, motion_start)
+        else:
+            return sampled_timestamps
+
     def selection_from_motion_ids(
         self,
         motion_source: MotionDataSource,

@@ -32,7 +32,12 @@ class MotionSelectionPolicy(Protocol):
         metrics: dict[str, torch.Tensor],
         allow_failure_accounting: bool = True,
     ): #-> MotionSelection:
-        """Produce a selection for the requested environments."""
+        """Produce a selection for the requested environments.
+
+        Adaptive policies may sample according to failed bins, then rewind the
+        actual spawn timestamp while keeping failure accounting on the original
+        failed bin.
+        """
 
     def step_post_update(
         self,
@@ -138,7 +143,7 @@ class AdaptiveMotionSelectionPolicy(MotionSelectionPolicy):
         metrics: dict[str, torch.Tensor],
         allow_failure_accounting: bool = True,
     ) -> MotionSelection:
-        """ 统计 env_ids 中 terminated 的 motion_ids """
+        """Sample from failed-bin probabilities, with optional spawn rewind."""
         return self.sampler.sample_selection(
             env_ids,
             motion_source=motion_source,

@@ -578,6 +578,9 @@ class MotionCommandCfg(CommandTermCfg):
 
     class_type: type = MotionCommand
 
+    # 新增参数
+
+
     # basic configs
     eval_mode: bool = False
     fixed_eval_motion_ids: bool = False
@@ -609,6 +612,8 @@ class MotionCommandCfg(CommandTermCfg):
     motion_ratio = [0.2, 0.79, 0.01]  # 预留参数，暂时不使用 # 越来越难
     adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
+    adaptive_sample_rewind_min_bins: int = 1
+    adaptive_sample_rewind_bins: int = 4
 
     failure_cap: bool = True
     failure_cap_beta: float = 200.0

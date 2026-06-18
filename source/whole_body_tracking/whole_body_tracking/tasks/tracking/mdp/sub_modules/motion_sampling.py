@@ -10,7 +10,7 @@ from typing import Sequence
 from .interface import MotionDataSource, MotionSelection
 from .motion_timeline import MotionCommandTimeline
 
-from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_inv, quat_mul, sample_uniform, yaw_quat
+from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_inv, quat_mul, yaw_quat
 
 
 #负责计算动作的选择方法（包含 adaptive sampling）
@@ -81,11 +81,13 @@ class AdaptiveMotionSampler:
 
         sampling_probabilities = self._compute_sampling_probabilities(metrics)
         sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
-        global_ts = (
-            (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device))
-            / self.bin_count
-            * (motion_source.time_step_total - 1)
-        ).long()
+        global_ts = timeline.global_timestamps_from_sampled_bins(
+            motion_source,
+            sampled_bins,
+            bin_count=self.bin_count,
+            rewind_min_bins=getattr(self.cfg, "adaptive_sample_rewind_min_bins", 0),
+            rewind_max_bins=getattr(self.cfg, "adaptive_sample_rewind_bins", 0),
+        )
 
         selection = timeline.selection_from_global_timestamps(motion_source, global_ts)
         #TODO think whether there is more clear logic for different sampling modes
@@ -332,6 +334,8 @@ class AdaptiveMotionSampler:
     #endregion export high prob bins for analysis 
 
 
+#region sampling functions to be merged
+#TODO merge the functions into motion sampling methods
 def validate_motion_local_frame_bounds(
     time_step_start_idx: torch.Tensor,
     time_step_end_idx: torch.Tensor,
@@ -512,4 +516,4 @@ def sample_rewinded_motion_local_times(
     local_t = torch.clamp(local_t, min=min_local)
     local_t = torch.minimum(local_t, max_local)
     return motion_ids, local_t
-
+#endregion sampling functions to be merged
