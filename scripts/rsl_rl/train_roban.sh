@@ -6,13 +6,15 @@ set -euo pipefail
 #   source /home/xiechunyang/miniforge3/etc/profile.d/conda.sh
 #   conda activate wt_env
 # fi
-
+#/home/thl/Documents/g1-mimic-npz
+#/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz
 # Isaac-based training commonly runs one simulation process per GPU.
-# Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
-NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
+# Override when needed, e.g. NPROC_PER_NODE=4 ./scripts/rsl_rl/train.sh
+#/home/xiechunyang/wt_ws/wt_wbc/dataset/smpl/smpl_filtered
+NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 NUM_ENVS="${NUM_ENVS:-8192}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
-MASTER_PORT="${MASTER_PORT:-29500}"
+MASTER_PORT="${MASTER_PORT:-29520}"
 
 python -m torch.distributed.run \
   --nnodes=1 \
@@ -21,11 +23,16 @@ python -m torch.distributed.run \
   --master_port="${MASTER_PORT}" \
   scripts/rsl_rl/train.py \
   --registry_name=test1 \
-  --task=Tracking-Flat-RobanS22-v0 \
+  --task=AMP-RobanS22 \
   --headless \
-  --kit_args="--/physics/collisionApproximateCylinders=true" \
   --distributed \
   --num_envs="${NUM_ENVS}" \
-  --motion_file=data/roban_motions/210531 \
-#  --resume=true \
-#  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_94500.pt"
+  --motion_file="/home/zhangqiqi/Downloads/data/roban_motions" \
+  --dataset_txt="/home/zhangqiqi/Downloads/data/roban_motions_list/motions_all_kept.txt"  \
+  --logger wandb \
+  --log_project_name=roban_amp \
+  # --resume=True \
+  # --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt" \
+  # --encoder_mode=robot \
+
+
