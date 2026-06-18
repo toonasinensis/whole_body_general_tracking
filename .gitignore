@@ -4,7 +4,6 @@ eval_results/
 dataset_txt/
 
 # Qiqi in Dev Folders
-v_stack/
 .vscode/*
 utilities/*
 # ide configs

@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 import isaaclab.utils.math as math_utils
 from isaaclab.managers import TerminationManager
 
+# Isaac Lab 2.3 on Isaac Sim 4.5 exposes quat_rotate_inverse instead of quat_apply_inverse.
+if not hasattr(math_utils, "quat_apply_inverse"):
+    math_utils.quat_apply_inverse = math_utils.quat_rotate_inverse
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -15,10 +19,6 @@ from isaaclab.managers import SceneEntityCfg
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
 from whole_body_tracking.tasks.tracking.mdp.rewards import _get_body_indexes
 
-
-###
-# Termination wrapper
-###
 
 class DelayedTerminationManager(TerminationManager):
     """Wrap ``TerminationManager`` and delay early terminations for a subset of envs."""
@@ -30,13 +30,11 @@ class DelayedTerminationManager(TerminationManager):
         max_delay_steps: int,
     ) -> None:
         self.__dict__.update(base.__dict__)
-        self._max_delay_steps = int(max_delay_steps)
-
         self._delay_env_mask = delay_env_mask
         self.delayed_termination_env_mask = delay_env_mask
-
         self._delay_counters = torch.zeros_like(delay_env_mask, dtype=torch.long)
         self.delayed_termination_active_mask = torch.zeros_like(delay_env_mask, dtype=torch.bool)
+        self._max_delay_steps = int(max_delay_steps)
 
     def reset(self, env_ids=None) -> dict[str, torch.Tensor]:
         extras = super().reset(env_ids=env_ids)
@@ -44,34 +42,28 @@ class DelayedTerminationManager(TerminationManager):
             env_ids = slice(None)
         self._delay_counters[env_ids] = 0
         self.delayed_termination_active_mask[env_ids] = False
-        return extras 
+        return extras
 
     def compute(self) -> torch.Tensor:
-        """
-            将由于 bad state 导致 termiation 的环境，
-            依据其特权情况修改为 dones = False 
-        """
         dones = super().compute()
         self.delayed_termination_active_mask[:] = False
         if self._max_delay_steps <= 0:
             return dones
-        
-        # 有 delay 权限，同时又处于 bad termination 状态的环境 ID
-        delay_and_terminated = self._delay_env_mask & self._terminated_buf
-        self._delay_counters[delay_and_terminated]
 
-        # 有 delay 权限，同时又处于 bad termination 状态, 而且在 delay 周期内 的环境 ID
+        # Delay only task failures. Time-outs should still reset immediately.
+        delay_and_terminated = self._delay_env_mask & self._terminated_buf
+        self._delay_counters[delay_and_terminated] += 1
+
         not_ready = delay_and_terminated & (self._delay_counters < self._max_delay_steps)
         # Expose only the currently suppressed termination window. Rewards use this
         # to switch from full tracking to recovery tracking on the same step.
         self.delayed_termination_active_mask[not_ready] = True
-        # 将 not_ready 的环境 terminate mark 设置为 False
         self._terminated_buf[not_ready] = False
 
         ready = delay_and_terminated & (self._delay_counters >= self._max_delay_steps)
         self._delay_counters[ready] = 0
+
         self._delay_counters[self._delay_env_mask & ~self._terminated_buf & ~not_ready] = 0
-        
         return self._truncated_buf | self._terminated_buf
 
 
@@ -82,12 +74,7 @@ def install_delayed_termination(
     max_delay_steps: int = 0,
     use_motion_pose_range_mask: bool = True,
 ) -> None:
-    """
-        Startup event that installs delayed termination on the pose-range env subset.
-
-    """
-    
-    # TODO env_ids shall not be passed to install_delayed_termination
+    """Startup event that installs delayed termination on the pose-range env subset."""
     del env_ids  # startup event applies globally
 
     if isinstance(env.termination_manager, DelayedTerminationManager):
@@ -99,12 +86,8 @@ def install_delayed_termination(
     delay_mask = None
     if use_motion_pose_range_mask:
         delay_mask = getattr(env, "_motion_pose_range_env_mask", None)
-    
-    # TODO 这里的 fallback 机制太多，不是一个算法框架应该有的
-    # 将之改的更简约一些
     if delay_mask is not None:
         delay_mask = delay_mask.to(device=env.device, dtype=torch.bool).clone()
-        # 限制启用数量不超过 delay_reset_env_ratio
         if delay_reset_env_ratio > 0.0:
             max_count = int(env.num_envs * delay_reset_env_ratio)
             enabled = torch.where(delay_mask)[0]
@@ -112,7 +95,6 @@ def install_delayed_termination(
                 delay_mask[enabled[max_count:]] = False
     else:
         ratio = delay_reset_env_ratio
-        # 如果 use_motion_pose_range_mask=True，但 env 里没有现成 mask，它会尝试从 config 里读
         if use_motion_pose_range_mask:
             command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
             pose_range_env_ratio = getattr(command_cfg, "pose_range_env_ratio", None)
@@ -138,13 +120,21 @@ def install_delayed_termination(
     )
 
 
-###
-# Normal termination conditions
-###
-
 def bad_anchor_pos(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     return torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1) > threshold
+
+
+def _disable_termination_on_delayed_envs(
+    env: ManagerBasedRLEnv, terminated: torch.Tensor, disable_on_delayed_termination_envs: bool
+) -> torch.Tensor:
+    if not disable_on_delayed_termination_envs:
+        return terminated
+
+    mask = getattr(env.termination_manager, "delayed_termination_env_mask", None)
+    if mask is None:
+        return terminated
+    return terminated & ~mask.to(device=terminated.device, dtype=torch.bool)
 
 
 def bad_anchor_pos_z_only(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:
@@ -156,25 +146,40 @@ def bad_anchor_ori(
     env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, command_name: str, threshold: float
 ) -> torch.Tensor:
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+
     command: MotionCommand = env.command_manager.get_term(command_name)
-    motion_projected_gravity_b = math_utils.quat_rotate_inverse(command.anchor_quat_w, asset.data.GRAVITY_VEC_W)
-    robot_projected_gravity_b = math_utils.quat_rotate_inverse(command.robot_anchor_quat_w, asset.data.GRAVITY_VEC_W)
+    motion_projected_gravity_b = math_utils.quat_apply_inverse(command.anchor_quat_w, asset.data.GRAVITY_VEC_W)
+
+    robot_projected_gravity_b = math_utils.quat_apply_inverse(command.robot_anchor_quat_w, asset.data.GRAVITY_VEC_W)
+
     return (motion_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2]).abs() > threshold
 
 
 def bad_motion_body_pos(
-    env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    body_names: list[str] | None = None,
+    disable_on_delayed_termination_envs: bool = False,
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
+
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.norm(command.body_pos_relative_w[:, body_indexes] - command.robot_body_pos_w[:, body_indexes], dim=-1)
-    return torch.any(error > threshold, dim=-1)
+    terminated = torch.any(error > threshold, dim=-1)
+    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
 
 
 def bad_motion_body_pos_z_only(
-    env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    body_names: list[str] | None = None,
+    disable_on_delayed_termination_envs: bool = False,
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
+
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.abs(command.body_pos_relative_w[:, body_indexes, -1] - command.robot_body_pos_w[:, body_indexes, -1])
-    return torch.any(error > threshold, dim=-1)
+    terminated = torch.any(error > threshold, dim=-1)
+    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)

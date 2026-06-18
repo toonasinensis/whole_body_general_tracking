@@ -26,6 +26,7 @@ class MotionReferenceCache:  #checked
         robot_anchor_quat_w: torch.Tensor,
     ) -> None:
         """
+            用于下一帧参考动作的临时存储以及相关奖励和终止条件的计算和判断
             align reference motion to the robot's current XY position and yaw, 
             but keep the reference motion's absolute height profile.
             used for computing rewards.
@@ -42,5 +43,3 @@ class MotionReferenceCache:  #checked
 
         self.body_quat_relative_w[:] = quat_mul(delta_ori_w, body_quat_w)
         self.body_pos_relative_w[:]  = delta_pos_w + quat_apply(delta_ori_w, body_pos_w - anchor_pos_w_repeat)
-
-    """负责环境重置逻辑"""
