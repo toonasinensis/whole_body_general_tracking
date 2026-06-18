@@ -25,7 +25,7 @@ NPROC_PER_NODE=1
 NUM_ENVS="${NUM_ENVS:-8192}"
 # Cap number of motions loaded to avoid dataset OOM (override if needed).
 MAX_MOTION_NUM="${MAX_MOTION_NUM:-25000}"
-MOTION_FILE_TXT="${MOTION_FILE_TXT:-dataset_txt/bones_seed/squat.txt}"
+MOTION_FILE_TXT="${MOTION_FILE_TXT:-dataset_txt/bones_seed/test.txt}"
 # Default run name = motion list filename without extension.
 RUN_NAME="${RUN_NAME:-$(basename "${MOTION_FILE_TXT}" .txt)}"
 
@@ -64,7 +64,7 @@ python -m torch.distributed.run \
   --run_name="${RUN_NAME}" \
   --max_motion_num="${MAX_MOTION_NUM}" \
   --logger tensorboard \
+  --resume=true \
+  --resume_path="logs/rsl_rl/d20_flat/0609_all/model_103500.pt"
 #   --log_project_name=d20_flat \
-#   --resume=true \
-#   --resume_path="logs/rsl_rl/roban_flat/0509_crawl_squat_kept/model_76500.pt"
 #   --distributed
