@@ -1,0 +1,9 @@
+{
+  "name": "g1",
+  "xml_path": "source/whole_body_tracking/whole_body_tracking/assets/unitree_description/mjcf/g1.xml",
+  "imu_quat_sensor": "base_quat",
+  "imu_gyro_sensor": "base_gyro",
+  "actuator_name_pattern": "{joint_name}",
+  "default_root_height": 0.793,
+  "reference_geom_groups": [2]
+}

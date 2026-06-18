@@ -228,6 +228,19 @@ Use this when AMP training looks wrong; it shows the exact body order after the 
 
 ## Sim2sim
 
+The MuJoCo runner is robot-config driven. Built-in configs live under
+`scripts/deploy/sim2sim_g1/configs/`; use `--robot_config g1` or
+`--robot_config roban`, or pass a custom JSON config path.
+
+Run Roban with the existing checkpoint and motion directory:
+
+```bash
+EXPORT_ONNX=1 RENDER=0 ./scripts/deploy/sim2sim_roban_mujoco.sh --steps 100
+```
+
+After the ONNX has been exported once, omit `EXPORT_ONNX=1`. The wrapper uses
+the `mimic` conda environment by default.
+
 Run MuJoCo sim2sim with an existing ONNX:
 
 ```bash

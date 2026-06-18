@@ -84,7 +84,7 @@ def test_prop_terms_fallback_for_old_metadata() -> None:
     ]
 
 
-def test_build_obs_keeps_robot_future_command_zeroed_like_training(monkeypatch) -> None:
+def test_build_obs_keeps_robot_and_smpl_future_commands(monkeypatch) -> None:
     class SensorView:
         def __init__(self, data):
             self.data = data
@@ -132,5 +132,5 @@ def test_build_obs_keeps_robot_future_command_zeroed_like_training(monkeypatch) 
         prop_history=history,
     )
 
-    assert np.array_equal(obs["rbt_cmd_mf"], np.zeros((1, 4), dtype=np.float32))
+    assert np.array_equal(obs["rbt_cmd_mf"], np.ones((1, 4), dtype=np.float32))
     assert np.array_equal(obs["smpl_cmd_mf"], np.ones((1, 2), dtype=np.float32))

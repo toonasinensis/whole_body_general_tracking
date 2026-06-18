@@ -111,6 +111,12 @@ parser.add_argument(
     help="Number of values to print per observation group in --debug_zero_obs.",
 )
 parser.add_argument("--max_steps", type=int, default=None, help="Exit play after this many environment steps.")
+parser.add_argument(
+    "--sim2sim_debug_dump",
+    type=str,
+    default=None,
+    help="Write a deterministic single-environment rollout to NPZ for sim2sim comparison.",
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -222,6 +228,13 @@ def _maybe_first_env_list(value, env_id: int = 0):
     return value
 
 
+def _nominal_joint_tensor(robot, name: str, fallback):
+    value = getattr(robot.data, name, None)
+    if value is None:
+        value = fallback
+    return _first_env_value(value)
+
+
 def _log_completed_episode_lengths(tb_writer, lengths: torch.Tensor, env_ids: torch.Tensor, timestep: int) -> None:
     if lengths.numel() == 0:
         return
@@ -272,11 +285,29 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
     obs = vec_env.get_observations()
     observation_groups = resolve_policy_observation_groups(policy, obs)
     scale = _first_env_value(getattr(action_term, "_scale", 1.0))
-    offset = _first_env_value(getattr(action_term, "_offset", 0.0))
-    default_joint_pos = robot.data.default_joint_pos[0]
-    default_joint_vel = getattr(robot.data, "default_joint_vel", torch.zeros_like(robot.data.joint_vel))[0]
-    joint_stiffness = _maybe_first_env_list(getattr(robot.data, "joint_stiffness", []))
-    joint_damping = _maybe_first_env_list(getattr(robot.data, "joint_damping", []))
+    default_joint_pos = _nominal_joint_tensor(
+        robot,
+        "default_joint_pos_nominal",
+        robot.data.default_joint_pos,
+    )
+    default_joint_vel = _nominal_joint_tensor(
+        robot,
+        "default_joint_vel",
+        torch.zeros_like(robot.data.joint_vel),
+    )
+    joint_stiffness = _nominal_joint_tensor(
+        robot,
+        "default_joint_stiffness",
+        getattr(robot.data, "joint_stiffness", []),
+    )
+    joint_damping = _nominal_joint_tensor(
+        robot,
+        "default_joint_damping",
+        getattr(robot.data, "joint_damping", []),
+    )
+    offset = default_joint_pos if getattr(action_term.cfg, "use_default_offset", False) else _first_env_value(
+        getattr(action_term, "_offset", 0.0)
+    )
     return {
         "encoder_mode": encoder_mode,
         "fsq_sample_mode": fsq_sample_mode,
@@ -289,8 +320,8 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
         "robot_joint_names": list(robot.data.joint_names),
         "default_joint_pos": _to_serializable(default_joint_pos),
         "default_joint_vel": _to_serializable(default_joint_vel),
-        "joint_stiffness": joint_stiffness,
-        "joint_damping": joint_damping,
+        "joint_stiffness": _to_serializable(joint_stiffness),
+        "joint_damping": _to_serializable(joint_damping),
         "action_scale": _to_serializable(scale),
         "action_offset": _to_serializable(offset),
         "motion_body_names": list(base_env.cfg.commands.motion.body_names),
@@ -339,6 +370,39 @@ def main(  # noqa: C901
     """Play with RSL-RL agent."""
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    if args_cli.sim2sim_debug_dump:
+        env_cfg.scene.num_envs = 1
+        for event_name in (
+            "physics_material",
+            "add_joint_default_pos",
+            "base_com",
+            "waist_com",
+            "add_base_mass",
+            "add_waist_mass",
+            "link_com",
+            "add_link_mass",
+            "scale_actuator_gains",
+            "scale_joint_parameters",
+            "push_robot",
+            "delayed_termination",
+        ):
+            if hasattr(env_cfg.events, event_name):
+                setattr(env_cfg.events, event_name, None)
+        env_cfg.commands.motion.eval_mode = True
+        env_cfg.commands.motion.pose_range_env_ratio = 0.0
+        env_cfg.commands.motion.velocity_range = {
+            key: (0.0, 0.0) for key in ("x", "y", "z", "roll", "pitch", "yaw")
+        }
+        env_cfg.commands.motion.joint_position_range = (0.0, 0.0)
+        for group_name in ("prop", "rbt_cmd_mf", "smpl_cmd_mf"):
+            group_cfg = getattr(env_cfg.observations, group_name, None)
+            if group_cfg is not None:
+                group_cfg.enable_corruption = False
+        for actuator_cfg in env_cfg.scene.robot.actuators.values():
+            if hasattr(actuator_cfg, "min_delay"):
+                actuator_cfg.min_delay = 0
+            if hasattr(actuator_cfg, "max_delay"):
+                actuator_cfg.max_delay = 0
 
     # env_cfg.terminations.ee_body_pos = None
     # env_cfg.terminations.anchor_ori = None
@@ -463,6 +527,19 @@ def main(  # noqa: C901
 
     obs = env.get_observations()
     timestep = 0
+    debug_rollout = {
+        "prop": [],
+        "rbt_cmd_mf": [],
+        "smpl_cmd_mf": [],
+        "actions": [],
+        "joint_pos": [],
+        "joint_vel": [],
+        "root_pos_w": [],
+        "root_quat_w": [],
+        "root_lin_vel_w": [],
+        "root_ang_vel_w": [],
+        "anchor_quat_w": [],
+    }
     episode_length_steps = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
     episode_length_sums = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
     episode_length_counts = torch.zeros(env.num_envs, dtype=torch.long, device=env.unwrapped.device)
@@ -470,6 +547,20 @@ def main(  # noqa: C901
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
+            if args_cli.sim2sim_debug_dump:
+                robot = env.unwrapped.scene["robot"]
+                debug_rollout["prop"].append(obs["prop"][0].detach().cpu().numpy().copy())
+                debug_rollout["rbt_cmd_mf"].append(obs["rbt_cmd_mf"][0].detach().cpu().numpy().copy())
+                debug_rollout["smpl_cmd_mf"].append(obs["smpl_cmd_mf"][0].detach().cpu().numpy().copy())
+                debug_rollout["joint_pos"].append(robot.data.joint_pos[0].detach().cpu().numpy().copy())
+                debug_rollout["joint_vel"].append(robot.data.joint_vel[0].detach().cpu().numpy().copy())
+                debug_rollout["root_pos_w"].append(robot.data.root_pos_w[0].detach().cpu().numpy().copy())
+                debug_rollout["root_quat_w"].append(robot.data.root_quat_w[0].detach().cpu().numpy().copy())
+                debug_rollout["root_lin_vel_w"].append(robot.data.root_lin_vel_w[0].detach().cpu().numpy().copy())
+                debug_rollout["root_ang_vel_w"].append(robot.data.root_ang_vel_w[0].detach().cpu().numpy().copy())
+                debug_rollout["anchor_quat_w"].append(
+                    motion_cmd.robot_anchor_quat_w[0].detach().cpu().numpy().copy()
+                )
             # agent stepping
             if onnx_policy is not None:
                 actions = onnx_policy(obs)
@@ -489,6 +580,8 @@ def main(  # noqa: C901
                 actions = policy(obs)
                 if isinstance(actions, dict) and "actions" in actions:
                     actions = actions["actions"]
+            if args_cli.sim2sim_debug_dump:
+                debug_rollout["actions"].append(actions[0].detach().cpu().numpy().copy())
 
             obs, _, dones, _ = env.step(actions)
             episode_length_steps += 1
@@ -528,6 +621,11 @@ def main(  # noqa: C901
     if tb_writer is not None:
         tb_writer.flush()
         tb_writer.close()
+    if args_cli.sim2sim_debug_dump:
+        debug_path = os.path.abspath(os.path.expanduser(args_cli.sim2sim_debug_dump))
+        os.makedirs(os.path.dirname(debug_path), exist_ok=True)
+        np.savez(debug_path, **{name: np.asarray(values) for name, values in debug_rollout.items()})
+        print(f"[INFO]: Wrote sim2sim debug rollout: {debug_path}")
 
     # close the simulator
     env.close()

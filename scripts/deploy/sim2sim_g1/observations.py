@@ -149,6 +149,7 @@ def build_obs(
     joint_qvel: np.ndarray,
     last_action: np.ndarray,
     prop_history: TermMajorHistory,
+    robot_anchor_quat_w: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     root_quat, root_ang_vel_b, gravity_b = imu_reader.read(data)
     default_joint_pos = as_vector(meta, "default_joint_pos", len(joint_qpos), 0.0)
@@ -164,7 +165,9 @@ def build_obs(
     }
 
     prop = prop_history.update(prop_terms)
-    rbt_cmd_mf, smpl_cmd_mf = motion_groups(motion, t, meta, root_quat)
+    if robot_anchor_quat_w is None:
+        robot_anchor_quat_w = root_quat
+    rbt_cmd_mf, smpl_cmd_mf = motion_groups(motion, t, meta, robot_anchor_quat_w)
     return {
         "prop": prop.astype(np.float32),
         "rbt_cmd_mf": rbt_cmd_mf,

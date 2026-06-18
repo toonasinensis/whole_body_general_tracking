@@ -83,6 +83,7 @@ class MotionData:
         *,
         joint_names: Sequence[str],
         body_names: Sequence[str],
+        legacy_body_names: Sequence[str] = (),
         model_nbody: int | None = None,
         body_ids: np.ndarray | None = None,
     ) -> tuple[MotionData, dict[str, np.ndarray | str]]:
@@ -116,6 +117,7 @@ class MotionData:
         body_indexes = resolve_body_indices_from_names(
             arrays=arrays,
             target_body_names=body_names,
+            legacy_body_names=legacy_body_names,
             model_nbody=model_nbody,
             body_ids=body_ids,
             path=self.path,
@@ -144,6 +146,7 @@ def resolve_body_indices_from_names(
     *,
     arrays: dict[str, np.ndarray],
     target_body_names: Sequence[str],
+    legacy_body_names: Sequence[str] = (),
     model_nbody: int | None,
     body_ids: np.ndarray | None,
     path: str,
@@ -157,6 +160,13 @@ def resolve_body_indices_from_names(
             )
 
     source_body_names = _read_name_list_from_arrays(arrays, BODY_NAME_KEYS)
+    if source_body_names is None and legacy_body_names:
+        if len(legacy_body_names) != body_dim:
+            raise ValueError(
+                f"Motion {path} body dim {body_dim} does not match configured legacy body order "
+                f"length {len(legacy_body_names)}."
+            )
+        source_body_names = list(legacy_body_names)
     if source_body_names is not None:
         if len(source_body_names) != body_dim:
             raise ValueError(

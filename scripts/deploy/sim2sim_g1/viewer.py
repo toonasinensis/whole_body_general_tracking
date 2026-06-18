@@ -12,8 +12,10 @@ class ReferenceMotionPlayer:
         motion: MotionData,
         meta: dict,
         joint_qpos: np.ndarray,
+        root_qpos: np.ndarray,
         root_body_name: str | None,
         rgba: np.ndarray,
+        geom_groups: tuple[int, ...] = (2,),
     ):
         import mujoco
 
@@ -26,6 +28,7 @@ class ReferenceMotionPlayer:
         self.motion = motion
         self.data = mujoco.MjData(model)
         self.joint_qpos = np.asarray(joint_qpos, dtype=np.int32)
+        self.root_qpos = np.asarray(root_qpos, dtype=np.int32)
         self.rgba = np.asarray(rgba, dtype=np.float32)
         self.vopt = mujoco.MjvOption()
         self.pert = mujoco.MjvPerturb()
@@ -47,7 +50,8 @@ class ReferenceMotionPlayer:
             )
         try:
             self.vopt.geomgroup[:] = 0
-            self.vopt.geomgroup[2] = 1
+            for group in geom_groups:
+                self.vopt.geomgroup[int(group)] = 1
         except Exception:
             pass
         self._last_frame = None
@@ -61,8 +65,9 @@ class ReferenceMotionPlayer:
         self._last_frame = frame
         self.data.qpos[:] = self.model.qpos0
         self.data.qvel[:] = 0.0
-        self.data.qpos[:3] = self.motion["body_pos_w"][frame, self.root_body_index]
-        self.data.qpos[3:7] = self.motion["body_quat_w"][frame, self.root_body_index]
+        root_qpos = getattr(self, "root_qpos", np.arange(7, dtype=np.int32))
+        self.data.qpos[root_qpos[:3]] = self.motion["body_pos_w"][frame, self.root_body_index]
+        self.data.qpos[root_qpos[3:7]] = self.motion["body_quat_w"][frame, self.root_body_index]
         self.data.qpos[self.joint_qpos] = self.motion["joint_pos"][frame]
         mujoco.mj_forward(self.model, self.data)
 
