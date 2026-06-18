@@ -58,7 +58,7 @@ class DelayedTerminationManager(TerminationManager):
         
         # 有 delay 权限，同时又处于 bad termination 状态的环境 ID
         delay_and_terminated = self._delay_env_mask & self._terminated_buf
-        self._delay_counters[delay_and_terminated]
+        self._delay_counters[delay_and_terminated] += 1
 
         # 有 delay 权限，同时又处于 bad termination 状态, 而且在 delay 周期内 的环境 ID
         not_ready = delay_and_terminated & (self._delay_counters < self._max_delay_steps)
