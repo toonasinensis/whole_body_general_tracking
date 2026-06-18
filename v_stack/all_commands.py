@@ -26,16 +26,13 @@ from isaaclab.utils.math import euler_xyz_from_quat  # noqa: F401
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
 from isaaclab.utils.math import (
     quat_apply,
-    quat_rotate_inverse,
+    quat_apply_inverse,
     quat_error_magnitude,
     quat_inv,
     quat_mul,
     sample_uniform,
     yaw_quat,
 )
-
-# Isaac Lab 2.3 on Isaac Sim 4.5 exposes quat_rotate_inverse instead of quat_apply_inverse.
-quat_apply_inverse = quat_rotate_inverse
 
 from .math_utils import quat_to_6d
 from .motion_sampling import (
@@ -826,17 +823,7 @@ class MotionCommand(CommandTerm):
             )
             # NOTE terminated envs are early terminated or out of motion range ?
             fail_bins = current_bin_index[env_ids][episode_failed]
-            """
-            下面这段函数会在一个 sim step 中被调用多次
-            1. 首先会在 isaaclab 计算完 termination 和 rewards 之后被调用一次，本次调用会更新 _current_bin_failed
-            2. 然后会在 command manager 的 compute 函数中当 time_left 小于 0 时被调用一次，本项目中未设置 time_left，所以可以忽略
-            3. 其次会在 _resample_command 函数收尾，此函数中输入的 env_ids 是 
-                #   env_ids = torch.where(self.local_time_steps >= self.frame_end_per_env - self.cfg.max_future_step)[0]
-            4. 最后 在 _resample_command 函数中 _current_bin_failed 累加进入 bin_failed_count 用于 sampling prob 计算
-            所以，相当于之前两步的计数是无效的，他们总会被第三步的计数覆盖，而真正被计数应该是第一次调用时计数的结果
-            """
             self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
-
             fail_global_ts = global_ts[env_ids][episode_failed]
             fail_motion_ids = self.motion.motion_ids_from_timestamps(fail_global_ts)
             fail_local_frames = fail_global_ts - self.motion.time_step_start_idx[fail_motion_ids]
@@ -1235,7 +1222,7 @@ class MotionCommandCfg(CommandTermCfg):
     log_save_path: str = "train_logs"
     log_run_name: str | None = None
     pose_range: dict[str, tuple[float, float]] = {}
-    pose_range_env_ratio: float = 0.3
+    pose_range_env_ratio: float = 1.0
     pose_range_init_mode: str = "range"
     pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
     velocity_range: dict[str, tuple[float, float]] = {}
