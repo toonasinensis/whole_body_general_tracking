@@ -128,7 +128,7 @@ class RobanS22FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     critic = CriticCfg()
 
     obs_groups = {
-        "actor": ["prop", "rbt_cmd_mf", "smpl_cmd_mf"],
+        "actor": ["prop", "rbt_cmd_mf"],
         "critic": ["critic"],
     }
 

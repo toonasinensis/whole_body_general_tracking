@@ -271,11 +271,13 @@ class RobanS22FlatEnvCfg(TrackingEnvCfg):
         # Use waist_yaw_link as the motion anchor to preserve previous "torso anchor" semantics.
         self.commands.motion.anchor_body_name = ROBAN_S22_MOTION_ANCHOR_BODY_NAME
         self.commands.motion.body_names = list(ROBAN_S22_MOTION_BODY_NAMES)
+        self.commands.motion.smpl_file_path = None
         self.commands.motion.motion_sampling_start_frame = 5
         self.commands.motion.adaptive_sample_rewind_min_bins = 0
         self.commands.motion.adaptive_sample_rewind_bins = 0
         self.commands.motion.pose_range_init_mode = "lying"
         self.commands.motion.pose_range_lying_height_range = (0.25, 0.45)
+        self.observations.smpl_cmd_mf = None
         self.events.delayed_termination = EventTerm(
             func=mdp.install_delayed_termination,
             mode="startup",
