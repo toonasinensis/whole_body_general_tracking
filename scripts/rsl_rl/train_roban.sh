@@ -12,7 +12,7 @@ set -euo pipefail
 # Override when needed, e.g. NPROC_PER_NODE=4 ./scripts/rsl_rl/train.sh
 #/home/xiechunyang/wt_ws/wt_wbc/dataset/smpl/smpl_filtered
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
-NUM_ENVS="${NUM_ENVS:-12}"
+NUM_ENVS="${NUM_ENVS:-8192}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29520}"
 
@@ -24,10 +24,11 @@ python -m torch.distributed.run \
   scripts/rsl_rl/train.py \
   --registry_name=test1 \
   --task=AMP-RobanS22 \
+  --headless \
   --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file="data/omini_passed_npz_train" \
-  --dataset_txt="dataset_txt/omini_smoke.txt"  \
+  --dataset_txt="dataset_txt/omini_train.txt"  \
   --logger wandb \
   --log_project_name=roban_amp \
   # --resume=True \
