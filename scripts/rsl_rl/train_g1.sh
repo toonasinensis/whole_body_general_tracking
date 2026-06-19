@@ -28,7 +28,7 @@ python -m torch.distributed.run \
   --num_envs="${NUM_ENVS}" \
   --motion_file="/home/lianwenkang/workspace/motion_data/mimic_data/g1/lafan" \
   --dataset_txt="dataset_txt/lafan/fall.txt"  \
-  # --distributed \
+  --distributed \
   # --resume=True \
   # --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt" \
   # --encoder_mode=robot \

@@ -79,7 +79,7 @@ class ActorShellCfg:
         "main_encoder": "encoder_g1",
         "encoder": {
             "encoder_g1": {
-                "encoder_groups": ["policy"],  # 输入的 encoder_groups
+                "encoder_groups": ["rbt_cmd_mf"],  # 输入的 encoder_groups
                 "hidden_dims": [2048, 1024, 512, 512],  # ecoder MLP 隐层
                 "activation": "swish",
             },

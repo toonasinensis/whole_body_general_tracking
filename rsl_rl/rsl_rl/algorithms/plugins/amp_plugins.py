@@ -122,6 +122,7 @@ class AMPPlugin(PPOPlugin):
         self.discriminator = self._build_discriminator(obs_dim, ppo.device)
 
         # 判别器参数加入 PPO optimizer，使单次 backward 同时更新策略和判别器
+        # TODO AMP 多卡下 discriminator 不同步
         ppo.optimizer.add_param_group(
             {"params": self.discriminator.trunk.parameters(), "weight_decay": 10e-4}
         )
