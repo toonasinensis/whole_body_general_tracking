@@ -8,7 +8,6 @@ dataset_txt/
 utilities/*
 # ide configs
 pyrightconfig.json
-rsl_rl/
 
 # Omniverse
 **/*.dmp
