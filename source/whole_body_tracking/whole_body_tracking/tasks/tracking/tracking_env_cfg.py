@@ -112,10 +112,12 @@ class CommandsCfg:
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
             "z": (0.05, 0.1),
-            "roll": (-0.0, 0.0),
-            "pitch": (-0.0, 0.0),
+            "roll": (-1.0, 1.0),
+            "pitch": (-1.0, 1.0),
             "yaw": (-0.0, 0.0),
         },
+        # pose_range_env_ratio=0.3,
+        pose_init_method_ratios = {"lying": 0.3, "range": 0.7}，
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
@@ -137,8 +139,6 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        # command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
-        # items listed in old version commands
         motion_joint_pos = ObsTerm(
             func=mdp.motion_joint_pos, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
@@ -152,16 +152,16 @@ class ObservationsCfg:
             func=mdp.motion_anchor_ang_vel_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.2, n_max=0.2)
         )
         motion_anchor_project_gravity = ObsTerm(
-            func=mdp.motion_anchor_project_gravity, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+            func=mdp.motion_anchor_project_gravity,
+            params={"command_name": "motion"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
         )
         motion_anchor_pos_z = ObsTerm(
             func=mdp.motion_anchor_pos_z, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
-
         motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
 
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
-        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel) # not observable
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
@@ -169,6 +169,74 @@ class ObservationsCfg:
 
         def __post_init__(self):
             self.history_length = 10
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class PropCfg(ObsGroup):
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        actions = ObsTerm(func=mdp.last_action)
+
+        def __post_init__(self):
+            self.history_length = 10
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class RbtCmdMfCfg(ObsGroup):
+        motion_joint_pos_multi_future = ObsTerm(
+            func=mdp.motion_joint_pos_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        motion_joint_vel_multi_future = ObsTerm(
+            func=mdp.motion_joint_vel_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.5, n_max=0.5)
+        )
+        motion_anchor_ori_b_multi_future = ObsTerm(
+            func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        # motion_anchor_z_multi_future = ObsTerm(
+        #     func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        # )
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class ZRbtCmdMfCfg(ObsGroup):
+        motion_joint_pos_multi_future = ObsTerm(
+            func=mdp.motion_joint_pos_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        motion_joint_vel_multi_future = ObsTerm(
+            func=mdp.motion_joint_vel_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.5, n_max=0.5)
+        )
+        motion_anchor_ori_b_multi_future = ObsTerm(
+            func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        motion_anchor_z_multi_future = ObsTerm(
+            func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class SmplCmdMfCfg(ObsGroup):
+        smpl_joints_local_multi_future = ObsTerm(
+            func=mdp.smpl_joints_local_multi_future,
+            params={"command_name": "motion"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+        smpl_root_quat_w_dif_l_multi_future = ObsTerm(
+            func=mdp.smpl_root_quat_w_dif_l_multi_future,
+            params={"command_name": "motion"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+
+        def __post_init__(self):
             self.enable_corruption = True
             self.concatenate_terms = True
 
@@ -185,9 +253,54 @@ class ObservationsCfg:
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         actions = ObsTerm(func=mdp.last_action)
 
+    @configclass
+    class AmpCfg(ObsGroup):
+        body_pos_b = ObsTerm(
+            func=mdp.amp_robot_body_pos_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+        body_ori_b = ObsTerm(
+            func=mdp.amp_robot_body_ori_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+        body_lin_vel_b = ObsTerm(
+            func=mdp.amp_robot_body_lin_vel_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+        body_ang_vel_b = ObsTerm(
+            func=mdp.amp_robot_body_ang_vel_b,
+            params={
+                "asset_name": "robot",
+                "anchor_body_name": "",
+                "body_names": (),
+            },
+        )
+
+        def __post_init__(self):
+            self.history_length = 1
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
     # observation groups
-    policy: PolicyCfg = PolicyCfg()
+    # policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
+    rbt_cmd_mf: RbtCmdMfCfg = RbtCmdMfCfg()
+    zrbt_cmd_mf: ZRbtCmdMfCfg = ZRbtCmdMfCfg()
+    smpl_cmd_mf: SmplCmdMfCfg = SmplCmdMfCfg()
+    prop: PropCfg = PropCfg()
+    amp: AmpCfg | None = None
 
 
 @configclass
@@ -242,6 +355,11 @@ class RewardsCfg:
     motion_global_anchor_pos = RewTerm(
         func=mdp.motion_global_anchor_position_error_exp,
         weight=0.5,
+        params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
+    )
+    motion_global_anchor_pos_z = RewTerm(
+        func=mdp.motion_global_anchor_position_z_error_exp,
+        weight=1.0,
         params={"command_name": "motion", "std": 0.3},
     )
     motion_global_anchor_ori = RewTerm(
@@ -252,22 +370,22 @@ class RewardsCfg:
     motion_body_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 0.3},
+        params={"command_name": "motion", "std": 0.3, "disable_on_delayed_termination": True},
     )
     motion_body_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 0.4},
+        params={"command_name": "motion", "std": 0.4, "disable_on_delayed_termination": True},
     )
     motion_body_lin_vel = RewTerm(
         func=mdp.motion_global_body_linear_velocity_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 1.0},
+        params={"command_name": "motion", "std": 1.0, "disable_on_delayed_termination": True},
     )
     motion_body_ang_vel = RewTerm(
         func=mdp.motion_global_body_angular_velocity_error_exp,
         weight=1.0,
-        params={"command_name": "motion", "std": 3.14},
+        params={"command_name": "motion", "std": 3.14, "disable_on_delayed_termination": True},
     )
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-1)
     joint_limit = RewTerm(
@@ -314,6 +432,7 @@ class TerminationsCfg:
                 "left_wrist_yaw_link",
                 "right_wrist_yaw_link",
             ],
+            "disable_on_delayed_termination_envs": True,
         },
     )
 

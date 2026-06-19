@@ -171,6 +171,16 @@ def bad_anchor_pos(env: ManagerBasedRLEnv, command_name: str, threshold: float) 
     command: MotionCommand = env.command_manager.get_term(command_name)
     return torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1) > threshold
 
+def _disable_termination_on_delayed_envs(
+    env: ManagerBasedRLEnv, terminated: torch.Tensor, disable_on_delayed_termination_envs: bool
+) -> torch.Tensor:
+    if not disable_on_delayed_termination_envs:
+        return terminated
+
+    mask = getattr(env.termination_manager, "delayed_termination_env_mask", None)
+    if mask is None:
+        return terminated
+    return terminated & ~mask.to(device=terminated.device, dtype=torch.bool)
 
 def bad_anchor_pos_z_only(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
@@ -188,18 +198,28 @@ def bad_anchor_ori(
 
 
 def bad_motion_body_pos(
-    env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
+    env: ManagerBasedRLEnv, 
+    command_name: str, 
+    threshold: float, 
+    body_names: list[str] | None = None,
+    disable_on_delayed_termination_envs: bool = False,
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.norm(command.body_pos_relative_w[:, body_indexes] - command.robot_body_pos_w[:, body_indexes], dim=-1)
-    return torch.any(error > threshold, dim=-1)
+    terminated = torch.any(error > threshold, dim=-1)
+    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
 
 
 def bad_motion_body_pos_z_only(
-    env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
+    env: ManagerBasedRLEnv, 
+    command_name: str, 
+    threshold: float, 
+    body_names: list[str] | None = None,
+    disable_on_delayed_termination_envs: bool = False,
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.abs(command.body_pos_relative_w[:, body_indexes, -1] - command.robot_body_pos_w[:, body_indexes, -1])
-    return torch.any(error > threshold, dim=-1)
+    terminated = torch.any(error > threshold, dim=-1)
+    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)

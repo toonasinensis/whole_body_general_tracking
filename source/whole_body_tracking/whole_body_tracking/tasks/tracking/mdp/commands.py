@@ -328,6 +328,110 @@ class MotionCommand(CommandTerm):
         return self.motion.joint_vel[self.future_time_steps].view(self.num_envs, -1)
 
     @property
+    def has_smpl_data(self) -> bool:
+        return (
+            getattr(self.motion, "smpl_joints", None) is not None
+            and getattr(self.motion, "smpl_transl", None) is not None
+            and getattr(self.motion, "smpl_poses", None) is not None
+        )
+
+    @property
+    def smpl_joints(self) -> torch.Tensor:
+        return self.motion.smpl_joints[self.global_time_steps]
+
+    @property
+    def smpl_transl(self) -> torch.Tensor:
+        return self.motion.smpl_transl[self.global_time_steps]
+
+    @property
+    def smpl_poses(self) -> torch.Tensor:
+        return self.motion.smpl_poses[self.global_time_steps]
+
+    @property
+    def smpl_poses_future(self) -> torch.Tensor:
+        return self.motion.smpl_poses[self.future_time_steps]
+
+    @property
+    def smpl_joints_future(self) -> torch.Tensor:
+        return self.motion.smpl_joints[self.future_time_steps]
+
+    @property
+    def smpl_transl_future(self) -> torch.Tensor:
+        return self.motion.smpl_transl[self.future_time_steps]
+
+    @property
+    def smpl_global_position(self) -> torch.Tensor | None:
+        if not self.has_smpl_data:
+            return None
+        smpl_global = self.motion.get_smpl_global_position(self.motion_ids, self.local_time_steps)
+        return smpl_global + self._env.scene.env_origins[:, None, :]
+
+    @property
+    def smpl_global_position_future(self) -> torch.Tensor | None:
+        if not self.has_smpl_data:
+            return None
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        )
+        smpl_global = self.motion.get_smpl_global_position(self.future_motion_ids, future_local.reshape(-1))
+        smpl_global = smpl_global.view(self.num_envs, self.num_future_frames, 24, 3)
+        return smpl_global + self._env.scene.env_origins[:, None, None, :]
+
+    def get_smpl_joints(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        return self.motion.get_smpl_joints(motion_ids, motion_steps)
+
+    def get_smpl_transl(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        return self.motion.get_smpl_transl(motion_ids, motion_steps)
+
+    def get_smpl_pose(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        return self.motion.get_smpl_pose(motion_ids, motion_steps)
+
+    def get_smpl_global_position(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
+        return self.motion.get_smpl_global_position(motion_ids, motion_steps)
+
+    @property
+    def smpl_root_quat_w(self) -> torch.Tensor:
+        return self.motion.get_smpl_root_quat_w(self.motion_ids, self.local_time_steps)
+
+    @property
+    def smpl_root_quat_w_multi_future(self) -> torch.Tensor:
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        ).reshape(-1)
+        return self.motion.get_smpl_root_quat_w(self.future_motion_ids, future_local).view(
+            self.num_envs, self.num_future_frames, 4
+        )
+
+    @property
+    def smpl_root_quat_w_dif_l_multi_future(self) -> torch.Tensor:
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        ).reshape(-1)
+        robot_anchor = self.robot_anchor_quat_w[:, None, :].expand(-1, self.num_future_frames, -1)
+        return self.motion.get_smpl_root_quat_w_dif_l(
+            self.future_motion_ids,
+            future_local,
+            robot_anchor.reshape(-1, 4),
+        ).view(self.num_envs, -1)
+
+    @property
+    def smpl_joints_local_multi_future(self) -> torch.Tensor:
+        local_max = (self.motion_num_steps - 1).clamp(min=0)
+        future_local = torch.clip(
+            self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
+            max=local_max[:, None],
+        ).reshape(-1)
+        return self.motion.get_smpl_joints_local(self.future_motion_ids, future_local).view(
+            self.num_envs, self.num_future_frames, 24, 3
+        )
+
+    @property
     def anchor_lin_vel_b(self) -> torch.Tensor:
         anchor_lin_vel_b = quat_apply_inverse(self.anchor_quat_w, self.anchor_lin_vel_w)
         return anchor_lin_vel_b

@@ -12,6 +12,12 @@ from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+# rewards 的设计应该在 IsaacLab 的 框架内，用一种更优雅的方式实现
+# 针对的场景是：
+# 1. 对于不同的场景模式，对每个 rewards 采用不同的计算方式
+# 大致思路
+# 1. 基础的 rewards 函数
+# 2. 在基础 rewards 函数的基础上，添加 wrapper 来决定是否在模式下采用该 rewards
 
 def _get_body_indexes(command: MotionCommand, body_names: list[str] | None) -> list[int]:
     return [i for i, name in enumerate(command.cfg.body_names) if (body_names is None) or (name in body_names)]
