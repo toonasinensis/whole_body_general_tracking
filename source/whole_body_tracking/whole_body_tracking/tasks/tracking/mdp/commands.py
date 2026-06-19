@@ -477,6 +477,7 @@ class MotionCommand(CommandTerm):
             body_ang_vel_w=self.body_ang_vel_w,
             joint_pos=self.joint_pos,
             joint_vel=self.joint_vel,
+            env_origins=self._env.scene.env_origins,
         )
         self._refresh_reference_cache()
 
@@ -603,9 +604,11 @@ class MotionCommandCfg(CommandTermCfg):
     
     # randomization configs
     pose_range: dict[str, tuple[float, float]] = {}
+    pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
+    pose_init_method_ratios: dict[str, float] = {"lying": 0.3, "range": 0.7}
     velocity_range: dict[str, tuple[float, float]] = {}
     joint_position_range: tuple[float, float] = (-0.52, 0.52)
-    
+
     # adaptive sampling configs
     adaptive_kernel_size: int = 3
     adaptive_lambda: float = 0.8

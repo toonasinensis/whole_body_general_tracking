@@ -84,9 +84,9 @@ def install_delayed_termination(
 ) -> None:
     """
         Startup event that installs delayed termination on the pose-range env subset.
-
+        TODO 对 commands 中相关的 字段做相应改动
     """
-    
+
     # TODO env_ids shall not be passed to install_delayed_termination
     del env_ids  # startup event applies globally
 
@@ -96,9 +96,28 @@ def install_delayed_termination(
     if delay_reset_env_ratio <= 0.0 or max_delay_steps <= 0:
         return
 
+    def _build_non_range_reset_method_mask(command_cfg) -> torch.Tensor | None:
+        ratios = getattr(command_cfg, "pose_init_method_ratios", None)
+        if not ratios:
+            return None
+        total_ratio = sum(max(0.0, float(ratio)) for ratio in ratios.values())
+        if total_ratio <= 0.0:
+            return None
+
+        mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        start = 0
+        items = list(ratios.items())
+        for index, (method, ratio) in enumerate(items):
+            ratio = max(0.0, float(ratio)) / total_ratio
+            end = env.num_envs if index == len(items) - 1 else start + int(env.num_envs * ratio)
+            if str(method) != "range":
+                mask[start:end] = True
+            start = end
+        return mask
+
     delay_mask = None
     if use_motion_pose_range_mask:
-        delay_mask = getattr(env, "_motion_pose_range_env_mask", None)
+        delay_mask = getattr(env, "_motion_non_range_reset_method_env_mask", None)
     
     # TODO 这里的 fallback 机制太多，不是一个算法框架应该有的
     # 将之改的更简约一些
@@ -115,13 +134,19 @@ def install_delayed_termination(
         # 如果 use_motion_pose_range_mask=True，但 env 里没有现成 mask，它会尝试从 config 里读
         if use_motion_pose_range_mask:
             command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
-            pose_range_env_ratio = getattr(command_cfg, "pose_range_env_ratio", None)
-            if pose_range_env_ratio is not None:
-                ratio = min(float(delay_reset_env_ratio), float(pose_range_env_ratio))
-        num_delay = int(env.num_envs * ratio)
-        delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-        if num_delay > 0:
-            delay_mask[:num_delay] = True
+            if command_cfg is not None:
+                delay_mask = _build_non_range_reset_method_mask(command_cfg)
+
+        if delay_mask is None:
+            num_delay = int(env.num_envs * ratio)
+            delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+            if num_delay > 0:
+                delay_mask[:num_delay] = True
+        elif delay_reset_env_ratio > 0.0:
+            max_count = int(env.num_envs * delay_reset_env_ratio)
+            enabled = torch.where(delay_mask)[0]
+            if enabled.numel() > max_count:
+                delay_mask[enabled[max_count:]] = False
 
     num_delay = int(delay_mask.sum().item())
     if num_delay <= 0:
