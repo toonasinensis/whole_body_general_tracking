@@ -117,7 +117,7 @@ class CommandsCfg:
             "yaw": (-0.0, 0.0),
         },
         # pose_range_env_ratio=0.3,
-        pose_init_method_ratios={"lying": 0.3, "range": 0.7},
+        pose_init_method_ratios = {"lying": 0.3, "range": 0.7},
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
@@ -294,7 +294,7 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     # observation groups
-    # policy: PolicyCfg = PolicyCfg()
+    policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
     rbt_cmd_mf: RbtCmdMfCfg = RbtCmdMfCfg()
     zrbt_cmd_mf: ZRbtCmdMfCfg = ZRbtCmdMfCfg()
