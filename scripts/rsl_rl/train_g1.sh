@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}/rsl_rl${PYTHONPATH:+:${PYTHONPATH}}"
+
 # Always run under wt_env unless caller already activated an environment.
 # if [[ -z "${CONDA_DEFAULT_ENV:-}" || "${CONDA_DEFAULT_ENV}" != "wt_env" ]]; then
 #   source /home/xiechunyang/miniforge3/etc/profile.d/conda.sh
