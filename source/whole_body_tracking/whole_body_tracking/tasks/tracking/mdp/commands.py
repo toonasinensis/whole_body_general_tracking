@@ -703,7 +703,8 @@ class MotionCommandCfg(CommandTermCfg):
     # reference motion obs configs
     anchor_body_name: str = MISSING
     body_names: list[str] = MISSING
-    future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    # future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    future_step_num = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     max_future_step = max(future_step_num)
     
     # randomization configs
@@ -716,15 +717,16 @@ class MotionCommandCfg(CommandTermCfg):
     # adaptive sampling configs
     adaptive_kernel_size: int = 3
     adaptive_lambda: float = 0.8
-    motion_ratio = [0.2, 0.79, 0.01]  # 预留参数，暂时不使用 # 越来越难
+    motion_ratio = [0.2, 0.6, 0.2]  # 预留参数，暂时不使用 # 越来越难
     adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
+    motion_sampling_start_frame: int = 5
     adaptive_sample_rewind_min_bins: int = 1
     adaptive_sample_rewind_bins: int = 4
 
     failure_cap: bool = True
     failure_cap_beta: float = 200.0
-    failure_most_hard_cap_beta: float = 5000.0
+    failure_most_hard_cap_beta: float = 10000.0
 
     # adaptive bins log configs
     # 每隔多少步导出一次 adaptive bins 概率和 bin->motion 反查映射，-1 表示不保存

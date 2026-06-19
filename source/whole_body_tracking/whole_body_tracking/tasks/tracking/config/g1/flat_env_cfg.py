@@ -49,8 +49,8 @@ class G1FlatEnvCfg(TrackingEnvCfg):
             "right_wrist_yaw_link",
         ]
         self.commands.motion.motion_sampling_start_frame = 5
-        self.commands.motion.adaptive_sample_rewind_min_bins = 0
-        self.commands.motion.adaptive_sample_rewind_bins = 0
+        self.commands.motion.adaptive_sample_rewind_min_bins = 3
+        self.commands.motion.adaptive_sample_rewind_bins = 4
         # self.commands.motion.pose_range_init_mode = "lying"
         self.commands.motion.pose_init_method_ratios = {"lying": 0.3, "range": 0.7}
         self.commands.motion.pose_range_lying_height_range = (0.25, 0.45)

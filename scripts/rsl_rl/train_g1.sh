@@ -15,7 +15,7 @@ export PYTHONPATH="${REPO_ROOT}/rsl_rl${PYTHONPATH:+:${PYTHONPATH}}"
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
 #/home/xiechunyang/wt_ws/wt_wbc/dataset/smpl/smpl_filtered
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
-NUM_ENVS="${NUM_ENVS:-800}"
+NUM_ENVS="${NUM_ENVS:-8192}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29520}"
 

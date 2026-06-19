@@ -23,25 +23,45 @@ class AdaptiveMotionSampler:
     def __init__(self, cfg, device: str):
         self.cfg = cfg
         self.device = device
+        self.adaptive_bin_frame_width = 1
         self.bin_count = 0  # num of 1s motion bins
         self.bin_failed_count = torch.zeros(0, dtype=torch.float, device=device)
         self._current_bin_failed = torch.zeros(0, dtype=torch.float, device=device)
+        self.motion_sample_bin_counts = torch.zeros(0, dtype=torch.long, device=device)
+        self.max_motion_sample_bin_count = 0
+        self.motion_bin_failed_count = torch.zeros(0, dtype=torch.float, device=device)
+        self._current_motion_bin_failed = torch.zeros(0, dtype=torch.float, device=device)
         self.kernel = torch.zeros(0, dtype=torch.float, device=device)
         self.success_motion = torch.zeros(0, dtype=torch.float32, device=device)  # used for evaluation
         self._last_export_step = -1
 
     def reset_for_motion_source(self, motion_source: MotionDataSource, *, decimation: int, sim_dt: float) -> None:
         """called when load new motion """
-        self.bin_count = int(motion_source.time_step_total // (1 / (decimation * sim_dt))) + 1
+        self.adaptive_bin_frame_width = max(1, int(round(1.0 / (decimation * sim_dt))))
+        self.bin_count = int(motion_source.time_step_total // self.adaptive_bin_frame_width) + 1
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
+        self.motion_sample_bin_counts = compute_motion_sample_bin_counts(
+            time_step_start_idx=motion_source.time_step_start_idx,
+            time_step_end_idx=motion_source.time_step_end_idx,
+            min_local_frame=int(getattr(self.cfg, "motion_sampling_start_frame", 0)),
+            max_future_step=int(self.cfg.max_future_step),
+            bin_frame_width=int(self.adaptive_bin_frame_width),
+        )
+        self.max_motion_sample_bin_count = int(self.motion_sample_bin_counts.max().item())
+        motion_num = int(getattr(motion_source, "motion_num", 0) or 0)
+        self.motion_bin_failed_count = torch.zeros(
+            (motion_num, self.max_motion_sample_bin_count),
+            dtype=torch.float,
+            device=self.device,
+        )
+        self._current_motion_bin_failed = torch.zeros_like(self.motion_bin_failed_count)
         self.kernel = torch.tensor(
             [self.cfg.adaptive_lambda**i for i in range(self.cfg.adaptive_kernel_size)],
             device=self.device,
         )
         self.kernel = self.kernel / self.kernel.sum()
         # used for evaluation
-        motion_num = int(getattr(motion_source, "motion_num", 0) or 0)
         self.success_motion = torch.zeros(motion_num, dtype=torch.float32, device=self.device)
         self._last_export_step = -1
 
@@ -78,22 +98,47 @@ class AdaptiveMotionSampler:
             )
             fail_bins = current_bin_index[env_ids][episode_failed]
             self._current_bin_failed += torch.bincount(fail_bins, minlength=self.bin_count)
+            fail_global_ts = global_ts[env_ids][episode_failed]
+            fail_motion_ids = motion_source.motion_ids_from_timestamps(fail_global_ts)
+            fail_local_frames = fail_global_ts - motion_source.time_step_start_idx[fail_motion_ids]
+            self._current_motion_bin_failed += accumulate_rewinded_motion_sample_bin_counts(
+                fail_motion_ids=fail_motion_ids,
+                fail_local_frames=fail_local_frames,
+                time_step_start_idx=motion_source.time_step_start_idx,
+                time_step_end_idx=motion_source.time_step_end_idx,
+                min_local_frame=int(getattr(self.cfg, "motion_sampling_start_frame", 0)),
+                max_future_step=int(self.cfg.max_future_step),
+                bin_frame_width=int(self.adaptive_bin_frame_width),
+                rewind_bins=int(getattr(self.cfg, "adaptive_sample_rewind_bins", 0)),
+                min_rewind_bins=int(getattr(self.cfg, "adaptive_sample_rewind_min_bins", 1)),
+                max_sample_bin_count=int(self.max_motion_sample_bin_count),
+            )
 
-        sampling_probabilities = self._compute_sampling_probabilities(metrics)
-        sampled_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
-        global_ts = timeline.global_timestamps_from_sampled_bins(
-            motion_source,
-            sampled_bins,
-            bin_count=self.bin_count,
-            rewind_min_bins=getattr(self.cfg, "adaptive_sample_rewind_min_bins", 0),
-            rewind_max_bins=getattr(self.cfg, "adaptive_sample_rewind_bins", 0),
+        # Keep global-bin metrics/export as the "where did it fail" view.
+        self._compute_sampling_probabilities(metrics)
+        # Runtime sampling uses motion-local spawn bins, so rewinding never crosses into another clip.
+        sampling_probabilities, valid_motion_bin_mask = self._compute_motion_bin_sampling_probabilities()
+        sampled_flat_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
+        sampled_motion_ids = sampled_flat_bins // self.max_motion_sample_bin_count
+        sampled_local_bins = sampled_flat_bins % self.max_motion_sample_bin_count
+        sampled_motion_ids, local_t = sample_motion_local_times_from_bins(
+            motion_ids=sampled_motion_ids,
+            local_bin_ids=sampled_local_bins,
+            time_step_start_idx=motion_source.time_step_start_idx,
+            time_step_end_idx=motion_source.time_step_end_idx,
+            min_local_frame=int(getattr(self.cfg, "motion_sampling_start_frame", 0)),
+            max_future_step=int(self.cfg.max_future_step),
+            bin_frame_width=int(self.adaptive_bin_frame_width),
         )
 
-        selection = timeline.selection_from_global_timestamps(motion_source, global_ts)
-        #TODO think whether there is more clear logic for different sampling modes
+        selection = timeline.selection_from_motion_ids(
+            motion_source,
+            sampled_motion_ids,
+            local_time_steps=local_t,
+        )
         if self.cfg.eval_mode:
-            selection.local_time_steps.zero_()
-        self._update_sampling_metrics(metrics, sampling_probabilities)
+            selection.local_time_steps[:] = int(max(0, getattr(self.cfg, "motion_sampling_start_frame", 0)))
+        self._update_sampling_metrics(metrics, sampling_probabilities, valid_motion_bin_mask)
         return selection
 
     def step_post_update(
@@ -114,6 +159,11 @@ class AdaptiveMotionSampler:
             self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
         )
         self._current_bin_failed.zero_()
+        self.motion_bin_failed_count[:] = (
+            self.cfg.adaptive_alpha * self._current_motion_bin_failed
+            + (1 - self.cfg.adaptive_alpha) * self.motion_bin_failed_count
+        )
+        self._current_motion_bin_failed.zero_()
 
         if (
             self.cfg.save_adaptive_bins
@@ -169,19 +219,77 @@ class AdaptiveMotionSampler:
             + self.cfg.motion_ratio[2] * sampling_probabilities_most_hard
         )
 
+    def _compute_motion_bin_sampling_probabilities(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return probabilities over valid motion-local restart bins."""
+        counts = self.motion_bin_failed_count
+        valid_mask = (
+            torch.arange(self.max_motion_sample_bin_count, device=self.device)[None, :]
+            < self.motion_sample_bin_counts[:, None]
+        )
+        valid_flat = valid_mask.reshape(-1)
+        valid_count = int(valid_flat.sum().item())
+        if valid_count <= 0:
+            raise RuntimeError("No valid adaptive sampling bins. Check motion lengths and max_future_step.")
+
+        valid_count_mean = counts[valid_mask].mean()
+        clipped = torch.clamp(counts, max=self.cfg.failure_most_hard_cap_beta * valid_count_mean)
+        clipped = torch.where(valid_mask, clipped, torch.zeros_like(clipped))
+        smoothed = torch.nn.functional.pad(
+            clipped.unsqueeze(1),
+            (0, self.cfg.adaptive_kernel_size - 1),
+            mode="constant",
+            value=0.0,
+        )
+        smoothed = torch.nn.functional.conv1d(smoothed, self.kernel.view(1, 1, -1)).squeeze(1)
+        probabilities = torch.where(valid_mask, smoothed, torch.zeros_like(smoothed)).reshape(-1)
+
+        uniform = valid_flat.float() / float(valid_count)
+        total = probabilities.sum()
+        if total > 1e-12:
+            probabilities = probabilities / (total + 1e-12)
+            probabilities_middle_hard = torch.clamp(
+                probabilities, max=self.cfg.failure_cap_beta * probabilities[valid_flat].mean()
+            )
+            probabilities_middle_hard = torch.where(
+                valid_flat, probabilities_middle_hard, torch.zeros_like(probabilities_middle_hard)
+            )
+            probabilities_middle_hard = probabilities_middle_hard / (probabilities_middle_hard.sum() + 1e-12)
+
+            probabilities_most_hard = torch.clamp(
+                probabilities, max=self.cfg.failure_most_hard_cap_beta * probabilities[valid_flat].mean()
+            )
+            probabilities_most_hard = torch.where(
+                valid_flat, probabilities_most_hard, torch.zeros_like(probabilities_most_hard)
+            )
+            probabilities_most_hard = probabilities_most_hard / (probabilities_most_hard.sum() + 1e-12)
+        else:
+            probabilities_middle_hard = uniform
+            probabilities_most_hard = uniform
+
+        sampling_probabilities = (
+            self.cfg.motion_ratio[0] * uniform
+            + self.cfg.motion_ratio[1] * probabilities_middle_hard
+            + self.cfg.motion_ratio[2] * probabilities_most_hard
+        )
+        sampling_probabilities = torch.where(valid_flat, sampling_probabilities, torch.zeros_like(sampling_probabilities))
+        sampling_probabilities = sampling_probabilities / (sampling_probabilities.sum() + 1e-12)
+        return sampling_probabilities, valid_flat
+
     def _update_sampling_metrics(
         self,
         metrics: dict[str, torch.Tensor],
         sampling_probabilities: torch.Tensor,
+        valid_motion_bin_mask: torch.Tensor | None = None,
     ) -> None:
         H = -(sampling_probabilities * (sampling_probabilities + 1e-12).log()).sum()
-        H_norm = H / math.log(self.bin_count)
+        valid_count = int(valid_motion_bin_mask.sum().item()) if valid_motion_bin_mask is not None else self.bin_count
+        H_norm = H / math.log(max(valid_count, 2))
         pmax, imax = sampling_probabilities.max(dim=0)
         metrics["sampling_entropy"][:] = H_norm
         metrics["sampling_top1_prob_max"][:] = pmax
-        metrics["prob_max_over_uniform"][:] = pmax / (1 / self.bin_count)
-        metrics["prob_uniform"][:] = 1 / self.bin_count
-        metrics["sampling_top1_prob_bin"][:] = imax.float() / self.bin_count
+        metrics["prob_max_over_uniform"][:] = pmax / (1 / max(float(valid_count), 1.0))
+        metrics["prob_uniform"][:] = 1 / max(float(valid_count), 1.0)
+        metrics["sampling_top1_prob_bin"][:] = imax.float() / max(float(sampling_probabilities.numel()), 1.0)
         metrics["sampling_top1_prob_mean"][:] = sampling_probabilities.mean()
         metrics["sampling_top1_prob_min"][:] = sampling_probabilities.min()
         metrics["num_concentrate_bins"][:] = (

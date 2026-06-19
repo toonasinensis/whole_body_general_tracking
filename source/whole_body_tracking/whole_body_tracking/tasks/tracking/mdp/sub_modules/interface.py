@@ -13,6 +13,7 @@ class MotionDataSource(Protocol):   #checked
     time_step_total: int
     time_step_start_idx: torch.Tensor
     time_step_end_idx: torch.Tensor
+    motion_num: int
 
     def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
         """Map global timestamps to motion ids."""
