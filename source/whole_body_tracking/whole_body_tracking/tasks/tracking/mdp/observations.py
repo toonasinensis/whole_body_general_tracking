@@ -4,7 +4,13 @@ import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, quat_inv, quat_mul, subtract_frame_transforms
+from isaaclab.utils.math import (
+    matrix_from_quat,
+    quat_inv,
+    quat_mul,
+    quat_rotate_inverse as quat_apply_inverse,
+    subtract_frame_transforms,
+)
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
 

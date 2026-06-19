@@ -185,7 +185,7 @@ def assist_fallen_robots_with_upward_force(
     robot_anchor_pos = asset.data.body_pos_w[:, anchor_body_id]
     robot_anchor_quat = asset.data.body_quat_w[:, anchor_body_id]
     robot_anchor_lin_vel = asset.data.body_lin_vel_w[:, anchor_body_id]
-    projected_gravity = math_utils.quat_apply_inverse(robot_anchor_quat, asset.data.GRAVITY_VEC_W)
+    projected_gravity = math_utils.quat_rotate_inverse(robot_anchor_quat, asset.data.GRAVITY_VEC_W)
     z_error = command.anchor_pos_w[:, 2] - robot_anchor_pos[:, 2]
     too_low = z_error > z_error_threshold
     tilted = projected_gravity[:, 2] > -gravity_z_threshold

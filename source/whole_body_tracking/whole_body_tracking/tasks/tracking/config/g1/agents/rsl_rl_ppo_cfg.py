@@ -6,7 +6,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 from whole_body_tracking.tasks.tracking.config.g1.flat_env_cfg import G1_AMP_ANCHOR_BODY_NAME, G1_AMP_BODY_NAMES
 
 G1_AMP_MOTION_DIR = os.path.normpath(
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../../../data/g1_amp/Recovery"))
+    "/home/lianwenkang/workspace/whole_body_general_tracking/dataset_txt/lafan/amp"
 )
 G1_RLBC_TEACHER_CHECKPOINT_PATH = os.path.normpath(
     os.path.abspath(
@@ -75,11 +75,11 @@ class ActorShellCfg:
         "std_type": "scalar",
     }
     backbone: dict = {
-        "class_name": "MyModel",
+        "class_name": "FSQModel",
         "main_encoder": "encoder_g1",
         "encoder": {
             "encoder_g1": {
-                "encoder_groups": ["rbt_cmd_mf"],  # 输入的 encoder_groups
+                "encoder_groups": ["policy"],  # 输入的 encoder_groups
                 "hidden_dims": [2048, 1024, 512, 512],  # ecoder MLP 隐层
                 "activation": "swish",
             },
