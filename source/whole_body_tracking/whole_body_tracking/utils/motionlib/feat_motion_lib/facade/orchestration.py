@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..config import SmplLoadConfig, UnifiedLoadConfig
-from ..types import LoadReport, UnifiedMotionState
+from ..types import LoadReport
 
 from ..io import discover_npz_files
 from ..store import PairedMotionStore, RobotMotionStore, SmplMotionStore
@@ -17,10 +17,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class UnifiedLoadOutcome:
-    state: UnifiedMotionState
+    robot_store: RobotMotionStore
     smpl_lib: SmplMotionLib | None
     report: LoadReport
     next_sample_counter: int
+    base_dir: str
 
 
 @dataclass
@@ -83,10 +84,11 @@ def execute_unified_load(
             smpl_lib.load_motions(smpl_clips, target_fps=None)
             paired_store = PairedMotionStore(robot_store, smpl_lib._require_store())
             return UnifiedLoadOutcome(
-                state=paired_store.robot_store.build_state(base_dir),
+                robot_store=paired_store.robot_store,
                 smpl_lib=smpl_lib,
                 report=paired_result.report,
                 next_sample_counter=next_counter,
+                base_dir=base_dir,
             )
 
     robot_result = load_robot_clips(
@@ -100,8 +102,9 @@ def execute_unified_load(
     )
     robot_store = RobotMotionStore(robot_result.clips, device=load_config.load.device)
     return UnifiedLoadOutcome(
-        state=robot_store.build_state(base_dir),
+        robot_store=robot_store,
         smpl_lib=None,
         report=robot_result.report,
         next_sample_counter=next_counter,
+        base_dir=base_dir,
     )

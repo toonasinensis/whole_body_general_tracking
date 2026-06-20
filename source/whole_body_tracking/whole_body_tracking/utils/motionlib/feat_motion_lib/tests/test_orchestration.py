@@ -52,9 +52,9 @@ def test_execute_unified_load_robot_only(tmp_path) -> None:
 
     assert outcome.report.mode == "robot_only"
     assert outcome.smpl_lib is None
-    assert outcome.state.file_names == ["sample_a.npz", "sample_b.npz"]
-    assert outcome.state.time_step_total == 5
-    assert outcome.state.frame_list.tolist() == [3, 2]
+    assert outcome.robot_store.relative_file_names(outcome.base_dir) == ["sample_a.npz", "sample_b.npz"]
+    assert outcome.robot_store.time_step_total == 5
+    assert outcome.robot_store.frame_list.tolist() == [3, 2]
 
 
 def test_execute_unified_load_paired(tmp_path) -> None:
@@ -81,4 +81,4 @@ def test_execute_unified_load_paired(tmp_path) -> None:
     assert outcome.report.mode == "paired"
     assert outcome.report.loaded_pairs == 1
     assert outcome.smpl_lib is not None
-    assert outcome.state.time_step_total == 3
+    assert outcome.robot_store.time_step_total == 3

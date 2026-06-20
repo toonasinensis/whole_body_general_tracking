@@ -6,22 +6,22 @@ from pathlib import Path
 
 from ..io import load_smpl_motion_file, load_robot_motion_file
 from ..transform import pair_motion_paths, trim_paired_clips
-from ..types import LoadReport, MotionData, PairedLoadResult, RobotLoadResult
+from ..types import LoadReport, SmplMotionClip, PairedLoadResult, RobotLoadResult
 
 """
 加载 motion data
 """
 
 def load_smpl_clips(
-    files: Sequence[str | MotionData],
+    files: Sequence[str | SmplMotionClip],
     *,
     target_fps: float | None,
-) -> list[MotionData]:
+) -> list[SmplMotionClip]:
     if not files:
         raise ValueError("files list is empty")
-    clips: list[MotionData] = []
+    clips: list[SmplMotionClip] = []
     for entry in files:
-        if isinstance(entry, MotionData):
+        if isinstance(entry, SmplMotionClip):
             clips.append(entry)
         else:
             clips.append(load_smpl_motion_file(entry, target_fps=target_fps))

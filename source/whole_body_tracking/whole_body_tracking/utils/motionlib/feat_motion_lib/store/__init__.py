@@ -9,10 +9,5 @@ __all__ = [
     "PairedMotionStore",
     "RobotMotionStore",
     "SmplMotionStore",
-    "motion_ids_from_timestamps"
+    "motion_ids_from_timestamps",
 ]
-
-"""
-    1. 对外依赖 types.py 中预定义的 数据类型
-    2. 负责对 io 加载后的 motion clips 进行拼接和存储
-"""

@@ -5,12 +5,9 @@ from pathlib import Path
 
 import torch
 
-# 定义了本包中用到的所有数据类型
-# TODO 当前各data class的命名不准确，后续可以考虑重命名以更好地反映它们的用途
-
 
 @dataclass
-class MotionData:
+class SmplMotionClip:
     pose_aa: torch.Tensor
     smpl_joints: torch.Tensor
     transl: torch.Tensor
@@ -21,7 +18,7 @@ class MotionData:
 
 
 @dataclass
-class RobotMotionData:
+class RobotMotionClip:
     joint_pos: torch.Tensor
     joint_vel: torch.Tensor
     body_pos_w: torch.Tensor
@@ -45,10 +42,10 @@ class PairedPath:
 
 
 @dataclass
-class PairedMotionData:
+class PairedMotionClip:
     stem: str
-    robot: RobotMotionData
-    smpl: MotionData
+    robot: RobotMotionClip
+    smpl: SmplMotionClip
 
 
 @dataclass
@@ -57,23 +54,6 @@ class MotionIndex:
     start_idx: torch.Tensor
     end_idx: torch.Tensor
     total_frames: int
-
-
-@dataclass
-class UnifiedMotionState:
-    joint_pos: torch.Tensor
-    joint_vel: torch.Tensor
-    body_pos_w: torch.Tensor
-    body_quat_w: torch.Tensor
-    body_lin_vel_w: torch.Tensor
-    body_ang_vel_w: torch.Tensor
-    fps: float
-    time_step_total: int
-    file_names: list[str]
-    motion_num: int
-    frame_list: torch.Tensor
-    time_step_start_idx: torch.Tensor
-    time_step_end_idx: torch.Tensor
 
 
 @dataclass
@@ -89,11 +69,11 @@ class LoadReport:
 
 @dataclass
 class RobotLoadResult:
-    clips: list[RobotMotionData]
+    clips: list[RobotMotionClip]
     report: LoadReport
 
 
 @dataclass
 class PairedLoadResult:
-    clips: list[PairedMotionData]
+    clips: list[PairedMotionClip]
     report: LoadReport

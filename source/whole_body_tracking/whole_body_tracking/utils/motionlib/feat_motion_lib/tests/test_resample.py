@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import torch
 
-from feat_motion_lib.transform.resample import _resample_quaternion_sequence
+from feat_motion_lib.transform.resample import _interpolate_angular
 
 
-def test_resample_quaternion_sequence_uses_slerp_and_normalizes() -> None:
+def test_interpolate_angular_uses_slerp_and_normalizes() -> None:
     quat = torch.tensor(
         [
             [[1.0, 0.0, 0.0, 0.0]],
@@ -14,7 +14,7 @@ def test_resample_quaternion_sequence_uses_slerp_and_normalizes() -> None:
         dtype=torch.float32,
     )
 
-    resampled = _resample_quaternion_sequence(quat, source_fps=1.0, target_fps=2.0)
+    resampled = _interpolate_angular(quat, source_fps=1.0, target_fps=2.0)
 
     assert resampled.shape == (3, 1, 4)
     torch.testing.assert_close(torch.linalg.norm(resampled, dim=-1), torch.ones(3, 1))

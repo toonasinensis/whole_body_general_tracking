@@ -5,7 +5,7 @@ All functions operate on torch.Tensor. Batched slerp avoids per-joint Python loo
 
 import torch
 
-from .rotation import angle_axis_to_quaternion, quaternion_to_angle_axis
+from .rotation import angle_axis_to_quaternion, quaternion_to_angle_axis, normalize_quaternion
 
 
 def slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -70,6 +70,43 @@ def interpolate_linear(data: torch.Tensor, source_fps: float, target_fps: float)
         blend = blend.unsqueeze(-1)
 
     return (1.0 - blend) * data[idx0] + blend * data[idx1]
+
+
+def interpolate_angular(quat: torch.Tensor, source_fps: float, target_fps: float) -> torch.Tensor:
+    """Slerp-resample a wxyz quaternion tensor along its time axis."""
+    if quat.shape[-1] != 4:
+        raise ValueError(f"Quaternion tensor must have last dimension 4, got {quat.shape}.")
+    
+    num_frames = quat.shape[0]
+    duration = (num_frames - 1) / source_fps
+    
+    # 生成目标时间点
+    num_target = int(duration * target_fps) + 1
+    times = torch.linspace(0, duration, num_target, dtype=torch.float32, device=quat.device)
+    
+    # 计算插值索引和混合因子
+    frame_indices = times * source_fps
+    idx0 = torch.floor(frame_indices).long().clamp(0, num_frames - 2)  # 保证 idx1 有效
+    idx1 = idx0 + 1
+    blend = frame_indices - idx0.float()
+    
+    # 归一化并重塑
+    quat_norm = normalize_quaternion(quat)
+    original_shape = quat.shape
+    quat_flat = quat_norm.reshape(num_frames, -1, 4)
+    item_count = quat_flat.shape[1]
+    
+    # 使用广播避免 repeat_interleave
+    q0 = quat_flat[idx0]  # [num_target, item_count, 4]
+    q1 = quat_flat[idx1]  # [num_target, item_count, 4]
+    blend_expanded = blend.unsqueeze(-1).unsqueeze(-1)  # [num_target, 1, 1]
+    
+    # Slerp 插值
+    result = slerp(q0.reshape(-1, 4), q1.reshape(-1, 4), blend_expanded.expand(-1, item_count, -1).reshape(-1))
+    result = normalize_quaternion(result)
+    
+    # 恢复原始形状（除了时间维度）
+    return result.reshape(num_target, *original_shape[1:-1], 4)
 
 
 def interpolate_pose(

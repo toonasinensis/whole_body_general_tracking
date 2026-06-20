@@ -11,7 +11,7 @@ Allowed:
 - Build `MotionIndex` start/end metadata from per-clip frame counts.
 - Convert `(motion_id, local_frame)` into flat tensor indices.
 - Convert global frame timestamps into motion ids.
-- Build `UnifiedMotionState` for the facade layer.
+- Provide relative file-name metadata for facade reporting.
 - Validate that paired robot and SMPL stores share the same motion index.
 
 Forbidden:
@@ -35,12 +35,11 @@ Runtime libraries:
 Internal package dependencies:
 
 - `..types.MotionIndex`
-- `..types.MotionData`
-- `..types.RobotMotionData`
-- `..types.UnifiedMotionState`
+- `..types.SmplMotionClip`
+- `..types.RobotMotionClip`
 - `..errors.MotionValidationError`
-- `..transform.coordinate.yup_to_zup_root_pose`
-- `..transform.coordinate.yup_to_zup_points`
+- `..transform.yup_to_zup_root_pose`
+- `..transform.yup_to_zup_points`
 
 External project dependency:
 
@@ -62,9 +61,6 @@ Input assumptions provided by upstream layers:
 - `RobotMotionStore`
 - `SmplMotionStore`
 - `PairedMotionStore`
-- `build_length_starts`
-- `build_motion_index`
-- `flatten_indices`
 - `motion_ids_from_timestamps`
 
 Importing from submodules is allowed for internal maintenance, but callers should prefer this package API when depending on the store layer.
@@ -118,26 +114,23 @@ Services:
   - `motion_num`
   - `frame_list`
   - `time_step_total`
-  - `time_step_start_idx`
-  - `time_step_end_idx`
+- `time_step_start_idx`
+- `time_step_end_idx`
 - `relative_file_names(base_dir) -> list[str]`
-- `build_state(base_dir) -> UnifiedMotionState`
 
 Dependencies:
 
 - `os.path`
 - `torch`
-- `..types.RobotMotionData`
-- `..types.UnifiedMotionState`
+- `..types.RobotMotionClip`
 - `.index.build_motion_index`
 
 Contract:
 
 - `clips` must be non-empty; otherwise construction raises `ValueError`.
-- Each `RobotMotionData` tensor is concatenated along frame axis 0 and moved to `device`.
+- Each `RobotMotionClip` tensor is concatenated along frame axis 0 and moved to `device`.
 - `file_names` follows clip order and uses `clip.path.name` when present, otherwise `motion_{i}`.
 - `fps` is taken from `clips[0].fps`.
-- `build_state` packages the flat tensors and index metadata for facade consumption.
 - `relative_file_names` uses `os.path.relpath` for clips with a path.
 
 Caller responsibilities:
@@ -185,9 +178,9 @@ Dependencies:
 - `numpy`
 - `torch`
 - `angle_axis_to_rotation_matrix`
-- `..transform.coordinate.yup_to_zup_root_pose`
-- `..transform.coordinate.yup_to_zup_points`
-- `..types.MotionData`
+- `..transform.yup_to_zup_root_pose`
+- `..transform.yup_to_zup_points`
+- `..types.SmplMotionClip`
 - `.index.build_motion_index`
 - `.index.flatten_indices`
 

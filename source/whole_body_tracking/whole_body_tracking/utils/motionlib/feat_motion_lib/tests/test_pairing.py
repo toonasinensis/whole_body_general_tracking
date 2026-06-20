@@ -6,11 +6,11 @@ import numpy as np
 import torch
 
 from feat_motion_lib.transform.pairing import pair_motion_paths, trim_paired_clips
-from feat_motion_lib.types import MotionData, RobotMotionData
+from feat_motion_lib.types import SmplMotionClip, RobotMotionClip
 
 
-def _robot_clip(num_frames: int, path: str = "robot.npz") -> RobotMotionData:
-    return RobotMotionData(
+def _robot_clip(num_frames: int, path: str = "robot.npz") -> RobotMotionClip:
+    return RobotMotionClip(
         joint_pos=torch.zeros((num_frames, 2), dtype=torch.float32),
         joint_vel=torch.zeros((num_frames, 2), dtype=torch.float32),
         body_pos_w=torch.zeros((num_frames, 3, 3), dtype=torch.float32),
@@ -25,8 +25,8 @@ def _robot_clip(num_frames: int, path: str = "robot.npz") -> RobotMotionData:
     )
 
 
-def _smpl_clip(num_frames: int) -> MotionData:
-    return MotionData(
+def _smpl_clip(num_frames: int) -> SmplMotionClip:
+    return SmplMotionClip(
         pose_aa=torch.zeros((num_frames, 72), dtype=torch.float32),
         smpl_joints=torch.zeros((num_frames, 24, 3), dtype=torch.float32),
         transl=torch.zeros((num_frames, 3), dtype=torch.float32),

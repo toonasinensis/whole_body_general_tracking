@@ -7,7 +7,7 @@
 允许：
 
 - 编排多个底层模块。
-- 持有 store 或 flat state。
+- 持有 store，并通过 property / method 暴露 flat tensor 查询。
 - 暴露稳定查询 property / method。
 - 处理 legacy cfg 到 structured config 的适配。
 
@@ -72,7 +72,7 @@
 内部入口：
 
 - `load_robot_clips(...) -> RobotLoadResult`
-- `load_smpl_clips(...) -> list[MotionData]`
+- `load_smpl_clips(...) -> list[SmplMotionClip]`
 - `load_paired_clips(...) -> PairedLoadResult | None`
 
 输入契约：
@@ -119,9 +119,10 @@
 
 输出契约：
 
-- `UnifiedLoadOutcome.state` 是 `UnifiedMotionState`。
+- `UnifiedLoadOutcome.robot_store` 是已构建完成的 `RobotMotionStore`。
 - paired 成功时 `smpl_lib` 非 None。
 - robot-only fallback 时 `smpl_lib` 为 None 且 report 标明 fallback。
+- `base_dir` 传回 facade，用于生成相对 file names。
 - `next_sample_counter` 传回 facade 保存。
 
 禁止：

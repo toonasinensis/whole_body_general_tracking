@@ -26,6 +26,9 @@
 - `align_body_tensors`
 - `align_joint_tensors`
 - `pair_motion_paths`
+- `quat_apply`
+- `quat_inv`
+- `quat_mul`
 - `resample_smpl_motion`
 - `resample_robot_motion`
 - `trim_paired_clips`
@@ -94,8 +97,8 @@
 
 公开 API：
 
-- `resample_smpl_motion(raw, target_fps) -> MotionData`
-- `resample_robot_motion(clip, target_fps) -> RobotMotionData`
+- `resample_smpl_motion(raw, target_fps) -> SmplMotionClip`
+- `resample_robot_motion(clip, target_fps) -> RobotMotionClip`
 
 模块内部入口：
 
@@ -135,7 +138,7 @@
 - 提供 wxyz quaternion 的纯 tensor 数学 helper。
 - 当前服务 facade 中 SMPL root/robot anchor 的相对旋转和局部关节坐标查询。
 
-模块内部入口：
+公开 API：
 
 - `quat_mul(q1, q2) -> torch.Tensor`
 - `quat_inv(q) -> torch.Tensor`
@@ -151,7 +154,7 @@
 
 - 不读取文件。
 - 不构建 store。
-- 不作为 `transform/__init__.py` 的包级稳定 API 暴露。
+- 不依赖 facade 或 store。
 
 ## `pairing.py`
 
@@ -164,7 +167,7 @@
 公开 API：
 
 - `pair_motion_paths(robot_paths, smpl_dir) -> list[PairedPath]`
-- `trim_paired_clips(stem, robot, smpl, max_frame_diff=2) -> PairedMotionData | None`
+- `trim_paired_clips(stem, robot, smpl, max_frame_diff=2) -> PairedMotionClip | None`
 
 输入契约：
 
@@ -176,7 +179,7 @@
 输出契约：
 
 - `pair_motion_paths` 返回按 stem 排序的 `PairedPath` list。
-- `trim_paired_clips` 返回裁齐后的 `PairedMotionData` 或 `None`。
+- `trim_paired_clips` 返回裁齐后的 `PairedMotionClip` 或 `None`。
 - 每个 pair 中 robot 和 SMPL `num_frames` 一致。
 
 禁止：

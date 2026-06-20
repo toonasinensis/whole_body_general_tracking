@@ -1,6 +1,6 @@
 from .config import DiscoveryOptions, LoadOptions, SmplLoadConfig, UnifiedLoadConfig
 from .facade import SmplMotionLib, UnifiedMotionLib
-from .types import LoadReport, MotionData, PairedMotionData, PairedPath, RobotMotionData
+from .types import LoadReport, SmplMotionClip, PairedMotionClip, PairedPath, RobotMotionClip
 
 __all__ = [
     "DiscoveryOptions",
@@ -10,9 +10,9 @@ __all__ = [
     "LoadReport",
     "PairedPath",
 
-    "MotionData",
-    "RobotMotionData",
-    "PairedMotionData",
+    "SmplMotionClip",
+    "RobotMotionClip",
+    "PairedMotionClip",
 
     "SmplMotionLib",
     "UnifiedMotionLib",

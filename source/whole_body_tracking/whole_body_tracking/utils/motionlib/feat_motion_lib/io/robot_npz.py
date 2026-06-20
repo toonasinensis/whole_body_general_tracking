@@ -7,8 +7,8 @@ import numpy as np
 import torch
 
 from ..errors import MotionFileError, MotionValidationError
-from ..transform.alignment import align_body_tensors, align_joint_tensors
-from ..types import RobotMotionData
+from ..transform import align_body_tensors, align_joint_tensors, resample_robot_motion
+from ..types import RobotMotionClip
 
 _ROBOT_KEYS = ("joint_pos", "joint_vel", "body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w")
 
@@ -35,7 +35,7 @@ def parse_robot_npz(
     motion_body_names: Sequence[str] | None = None,
     all_body_names: Sequence[str] | None = None,
     body_indexes: Sequence[int] | None = None,
-) -> RobotMotionData:
+) -> RobotMotionClip:
     try:
         tensors = {key: torch.from_numpy(np.asarray(raw[key], dtype=np.float32)) for key in _ROBOT_KEYS}
     except KeyError as exc:
@@ -57,7 +57,7 @@ def parse_robot_npz(
     if num_frames <= 0:
         raise MotionValidationError(f"{path}: empty motion frames")
 
-    return RobotMotionData(
+    return RobotMotionClip(
         joint_pos=tensors["joint_pos"],
         joint_vel=tensors["joint_vel"],
         body_pos_w=tensors["body_pos_w"],
@@ -81,9 +81,9 @@ def load_robot_motion_file(
     motion_body_names: Sequence[str] | None = None,
     all_body_names: Sequence[str] | None = None,
     body_indexes: Sequence[int] | None = None,
-) -> RobotMotionData:
+) -> RobotMotionClip:
     """
-        从指定路径加载机器人运动数据，返回 RobotMotionData 对象
+        从指定路径加载机器人运动数据，返回 RobotMotionClip 对象
     """
     raw, source_fps = load_robot_npz_raw(path)
     clip = parse_robot_npz(
@@ -98,7 +98,6 @@ def load_robot_motion_file(
     
     # 如果指定了 target_fps 且与 source_fps 不同，则进行重采样
     if target_fps is not None and abs(source_fps - target_fps) > 1e-3:
-        from ..transform.resample import resample_robot_motion
         return resample_robot_motion(clip, target_fps)
     
     return clip

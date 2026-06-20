@@ -1,4 +1,12 @@
-from .interpolation import compute_resample_times, interpolate_linear, interpolate_pose, slerp
+from .interpolation import (
+    compute_resample_times, 
+    interpolate_linear, 
+    interpolate_angular, 
+    interpolate_pose, 
+    slerp,
+)
+
+
 from .rotation import (
     angle_axis_to_quaternion,
     angle_axis_to_rotation_matrix,

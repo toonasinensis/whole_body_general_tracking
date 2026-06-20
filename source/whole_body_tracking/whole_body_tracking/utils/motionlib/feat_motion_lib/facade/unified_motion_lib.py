@@ -14,10 +14,10 @@ except ModuleNotFoundError:  # pragma: no cover - direct package usage fallback
 
 from ..config import UnifiedLoadConfig
 from ..errors import MotionNotLoadedError
-from ..types import LoadReport, UnifiedMotionState
+from ..types import LoadReport
 
-from ..store import motion_ids_from_timestamps
-from ..transform.quaternion import quat_apply, quat_inv, quat_mul
+from ..store import RobotMotionStore, motion_ids_from_timestamps
+from ..transform import quat_apply, quat_inv, quat_mul
 
 from .config_adapter import cfg_to_unified_load_config
 from .orchestration import execute_unified_load
@@ -41,43 +41,20 @@ class UnifiedMotionLib:
     ) -> None:
         self.body_indexes = list(body_indexes)
         self.motion_anchor_body_index = motion_anchor_body_index
-        self.joint_names = list(joint_names) if joint_names is not None else None
         self.motion_body_names = list(motion_body_names) if motion_body_names is not None else None
         self.all_body_names = list(all_body_names) if all_body_names is not None else None
+                
+        self.joint_names = list(joint_names) if joint_names is not None else None
         self.device = device
 
-        self.joint_pos: torch.Tensor | None = None
-        self.joint_vel: torch.Tensor | None = None
-        self._body_pos_w_sel: torch.Tensor | None = None
-        self._body_quat_w_sel: torch.Tensor | None = None
-        self._body_lin_vel_w_sel: torch.Tensor | None = None
-        self._body_ang_vel_w_sel: torch.Tensor | None = None
-
-        self.fps: float | None = None
-        self.time_step_total: int | None = None
-        self.file_names: list[str] | None = None
-        self.motion_num: int | None = None
-        self.frame_list: torch.Tensor | None = None
-        self.time_step_start_idx: torch.Tensor | None = None
-        self.time_step_end_idx: torch.Tensor | None = None
-
+        self._robot_store: RobotMotionStore | None = None
+        self._file_names: list[str] | None = None
         self._smpl_lib: SmplMotionLib | None = None
         self._sample_counter = 0
 
     def reset(self) -> None:
-        self.joint_pos = None
-        self.joint_vel = None
-        self._body_pos_w_sel = None
-        self._body_quat_w_sel = None
-        self._body_lin_vel_w_sel = None
-        self._body_ang_vel_w_sel = None
-        self.fps = None
-        self.time_step_total = None
-        self.file_names = None
-        self.motion_num = None
-        self.frame_list = None
-        self.time_step_start_idx = None
-        self.time_step_end_idx = None
+        self._robot_store = None
+        self._file_names = None
         self._smpl_lib = None
 
     def load_from_cfg(self, cfg) -> LoadReport:
@@ -98,45 +75,80 @@ class UnifiedMotionLib:
             load_config=load_config,
         )
         self._sample_counter = outcome.next_sample_counter
-        self._apply_motion_state(outcome.state)
+        self._apply_robot_store(outcome.robot_store, outcome.base_dir)
         self._smpl_lib = outcome.smpl_lib
         return outcome.report
 
-    def _apply_motion_state(self, state: UnifiedMotionState) -> None:
-        self.joint_pos = state.joint_pos
-        self.joint_vel = state.joint_vel
-        self._body_pos_w_sel = state.body_pos_w
-        self._body_quat_w_sel = state.body_quat_w
-        self._body_lin_vel_w_sel = state.body_lin_vel_w
-        self._body_ang_vel_w_sel = state.body_ang_vel_w
-        self.frame_list = state.frame_list
-        self.motion_num = state.motion_num
-        self.fps = state.fps
-        self.time_step_total = state.time_step_total
-        self.time_step_start_idx = state.time_step_start_idx
-        self.time_step_end_idx = state.time_step_end_idx
-        self.file_names = state.file_names
+    def _apply_robot_store(self, robot_store: RobotMotionStore, base_dir: str) -> None:
+        self._robot_store = robot_store
+        self._file_names = robot_store.relative_file_names(base_dir)
 
-    def _require_robot_tensor(self, tensor: torch.Tensor | None, name: str) -> torch.Tensor:
-        if tensor is None:
-            raise MotionNotLoadedError(f"Robot motion data not loaded. Cannot access '{name}'.")
-        return tensor
+    #region robot data properties
+    def _require_robot_store(self) -> RobotMotionStore:
+        if self._robot_store is None:
+            raise MotionNotLoadedError("Robot motion data not loaded. Call load() or load_from_cfg() first.")
+        return self._robot_store
+
+    @property
+    def joint_pos(self) -> torch.Tensor:
+        """Joint-space positions, shape [total_frames, num_joints]."""
+        return self._require_robot_store().joint_pos
+
+    @property
+    def joint_vel(self) -> torch.Tensor:
+        """Joint-space velocities, shape [total_frames, num_joints]."""
+        return self._require_robot_store().joint_vel
 
     @property
     def body_pos_w(self) -> torch.Tensor:
-        return self._require_robot_tensor(self._body_pos_w_sel, "body_pos_w")
+        """Body positions in the world frame, shape [total_frames, num_bodies, 3]."""
+        return self._require_robot_store().body_pos_w
 
     @property
     def body_quat_w(self) -> torch.Tensor:
-        return self._require_robot_tensor(self._body_quat_w_sel, "body_quat_w")
+        """Body orientations in the world frame as wxyz quaternions, shape [total_frames, num_bodies, 4]."""
+        return self._require_robot_store().body_quat_w
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self._require_robot_tensor(self._body_lin_vel_w_sel, "body_lin_vel_w")
+        """Body linear velocities in the world frame, shape [total_frames, num_bodies, 3]."""
+        return self._require_robot_store().body_lin_vel_w
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
-        return self._require_robot_tensor(self._body_ang_vel_w_sel, "body_ang_vel_w")
+        """Body angular velocities in the world frame, shape [total_frames, num_bodies, 3]."""
+        return self._require_robot_store().body_ang_vel_w
+
+    @property
+    def fps(self) -> float:
+        return self._require_robot_store().fps
+
+    @property
+    def time_step_total(self) -> int:
+        return self._require_robot_store().time_step_total
+
+    @property
+    def file_names(self) -> list[str]:
+        self._require_robot_store()
+        if self._file_names is None:
+            raise MotionNotLoadedError("Robot motion file names not loaded. Call load() or load_from_cfg() first.")
+        return self._file_names
+
+    @property
+    def motion_num(self) -> int:
+        return self._require_robot_store().motion_num
+
+    @property
+    def frame_list(self) -> torch.Tensor:
+        return self._require_robot_store().frame_list
+
+    @property
+    def time_step_start_idx(self) -> torch.Tensor:
+        return self._require_robot_store().time_step_start_idx
+
+    @property
+    def time_step_end_idx(self) -> torch.Tensor:
+        return self._require_robot_store().time_step_end_idx
 
     @property
     def anchor_pos_w(self) -> torch.Tensor:
@@ -169,7 +181,9 @@ class UnifiedMotionLib:
     @property
     def smpl_poses(self) -> torch.Tensor | None:
         return self._smpl_lib.poses_flat if self._smpl_lib is not None else None
+    #endregion robot data properties
 
+    #region smpl data properties
     def _require_smpl(self) -> SmplMotionLib:
         if self._smpl_lib is None:
             raise MotionNotLoadedError("SMPL data not loaded.")
@@ -216,13 +230,13 @@ class UnifiedMotionLib:
         root_quat = self.get_smpl_root_quat_w(motion_ids, motion_steps)
         root_quat = root_quat.unsqueeze(-2).expand(ref_joints.shape[:-1] + (4,))
         return quat_apply(quat_inv(root_quat.reshape(-1, 4)), ref_joints.reshape(-1, 3)).view_as(ref_joints)
+    #endregion smpl data properties
 
     def motion_ids_from_timestamps(self, timestamps: torch.Tensor) -> torch.Tensor:
-        if self.time_step_end_idx is None or self.time_step_total is None or self.motion_num is None:
-            raise MotionNotLoadedError("UnifiedMotionLib not loaded. Call load() or load_from_cfg() first.")
+        robot_store = self._require_robot_store()
         return motion_ids_from_timestamps(
             timestamps=timestamps,
-            end_idx=self.time_step_end_idx,
-            total_frames=self.time_step_total,
-            motion_num=self.motion_num,
+            end_idx=robot_store.time_step_end_idx,
+            total_frames=robot_store.time_step_total,
+            motion_num=robot_store.motion_num,
         )

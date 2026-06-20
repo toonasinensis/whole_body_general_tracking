@@ -4,14 +4,14 @@ import os
 
 import torch
 
-from ..types import RobotMotionData, UnifiedMotionState, MotionIndex
+from ..types import MotionIndex, RobotMotionClip
 from .index import build_motion_index
 
 
 class RobotMotionStore:
-    def __init__(self, clips: list[RobotMotionData], device: str = "cpu") -> None:
+    def __init__(self, clips: list[RobotMotionClip], device: str = "cpu") -> None:
         """
-            拼接所有的 RobotMotionData clips
+            拼接所有的 RobotMotionClip clips
             并构建拼接后 MotionSequence 的基础 index 信息
         """
         if not clips:
@@ -42,26 +42,7 @@ class RobotMotionStore:
         self.time_step_start_idx = self.index.start_idx
         self.time_step_end_idx   = self.index.end_idx
 
-    def build_state(self, base_dir: str) -> UnifiedMotionState:
-        # UnifiedMotionState 是标准的 robot motion 数据结构
-        # 是 RobotMotionData list 的统一化封装
-        return UnifiedMotionState(
-            joint_pos=self.joint_pos,
-            joint_vel=self.joint_vel,
-            body_pos_w=self.body_pos_w,
-            body_quat_w=self.body_quat_w,
-            body_lin_vel_w=self.body_lin_vel_w,
-            body_ang_vel_w=self.body_ang_vel_w,
-            fps=self.fps,
-            time_step_total=self.time_step_total,
-            file_names=self._relative_file_names(base_dir),
-            motion_num=self.motion_num,
-            frame_list=self.frame_list,
-            time_step_start_idx=self.time_step_start_idx,
-            time_step_end_idx=self.time_step_end_idx,
-        )
-
-    def _relative_file_names(self, base_dir: str) -> list[str]:
+    def relative_file_names(self, base_dir: str) -> list[str]:
         return [
             os.path.relpath(str(clip.path), base_dir) if clip.path is not None else f"motion_{i}"
             for i, clip in enumerate(self.clips)

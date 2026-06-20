@@ -6,7 +6,7 @@ import torch
 
 from ..config import SmplLoadConfig
 from ..errors import MotionNotLoadedError
-from ..types import LoadReport, MotionData
+from ..types import LoadReport, SmplMotionClip
 
 from ..store import SmplMotionStore
 
@@ -25,7 +25,7 @@ class SmplMotionLib:
         self._store = None
         self._last_report = None
 
-    def load_motions(self, files: Sequence[str | MotionData], target_fps: float | None = None) -> None:
+    def load_motions(self, files: Sequence[str | SmplMotionClip], target_fps: float | None = None) -> None:
         self.reset()
         clips = load_smpl_clips(files, target_fps=target_fps)
         self._store = SmplMotionStore(clips, up_axis=self.up_axis, device=self.device)

@@ -68,27 +68,26 @@ user cfg / structured config
 
 核心类型：
 
-- `MotionData`: 单个 SMPL clip。
-- `RobotMotionData`: 单个 robot clip。
-- `PairedMotionData`: 已配对并裁齐的 robot + SMPL clip。
+- `SmplMotionClip`: 单个 SMPL clip。
+- `RobotMotionClip`: 单个 robot clip。
+- `PairedMotionClip`: 已配对并裁齐的 robot + SMPL clip。
 - `MotionIndex`: flat tensor 的 per-motion 起止索引。
-- `UnifiedMotionState`: store 输出给 unified facade 的 robot flat state。
 - `LoadReport`: 一次 load 的审计信息。
 - `RobotLoadResult` / `PairedLoadResult`: loading 层结果。
 
 shape 契约：
 
-- `MotionData.pose_aa`: `(T, J * 3)` 或 `(T, J, 3)`。
-- `MotionData.smpl_joints`: `(T, J, 3)`。
-- `MotionData.transl`: `(T, 3)`。
-- `RobotMotionData.joint_pos`: `(T, num_joints)`。
-- `RobotMotionData.joint_vel`: `(T, num_joints)`。
-- `RobotMotionData.body_pos_w`: `(T, num_bodies, 3)`。
-- `RobotMotionData.body_quat_w`: `(T, num_bodies, 4)`, wxyz, unit quaternion。
-- `RobotMotionData.body_lin_vel_w`: `(T, num_bodies, 3)`.
-- `RobotMotionData.body_ang_vel_w`: `(T, num_bodies, 3)`.
+- `SmplMotionClip.pose_aa`: `(T, J * 3)` 或 `(T, J, 3)`。
+- `SmplMotionClip.smpl_joints`: `(T, J, 3)`。
+- `SmplMotionClip.transl`: `(T, 3)`。
+- `RobotMotionClip.joint_pos`: `(T, num_joints)`。
+- `RobotMotionClip.joint_vel`: `(T, num_joints)`。
+- `RobotMotionClip.body_pos_w`: `(T, num_bodies, 3)`。
+- `RobotMotionClip.body_quat_w`: `(T, num_bodies, 4)`, wxyz, unit quaternion。
+- `RobotMotionClip.body_lin_vel_w`: `(T, num_bodies, 3)`.
+- `RobotMotionClip.body_ang_vel_w`: `(T, num_bodies, 3)`.
 - `MotionIndex.start_idx` and `MotionIndex.end_idx`: `(motion_num,)`, long, exclusive end.
-- `UnifiedMotionState` tensors use concatenated global frame dimension at axis 0.
+- `RobotMotionStore` owns concatenated flat robot tensors; facade reads them through store properties.
 
 禁止：
 
@@ -121,29 +120,19 @@ shape 契约：
 - 不打印日志。
 - 不依赖具体 IO 实现。
 
-### `api.py`
+### Legacy Wrappers
 
 职责：
 
-- legacy compatibility / script helper 层。
-- 当前不属于 `feat_motion_lib/__init__.py` 的包级公开入口。
-- 长期应删除或迁移到明确的 CLI / tools 模块。
-
-允许：
-
-- 调用 `io` / `facade` 层公开 API。
-- 做极薄的格式转换，例如 tensor -> numpy -> joblib dump。
+- legacy compatibility / script helper 不再作为 `feat_motion_lib` 的包级公开入口。
+- 如后续确实需要脚本工具，应迁移到明确的 CLI / tools 模块。
 
 禁止：
 
-- 不实现新的加载流程。
+- 不通过根包 `__init__.py` 暴露 legacy wrapper。
+- 不在 legacy helper 中实现新的加载流程。
 - 不绕开 facade 直接拼接 store。
 - 不加入训练环境逻辑。
-
-待实现：
-
-- 删除未使用的 legacy wrapper，或迁移到明确的脚本工具模块。
-- `resample_and_save_motion_file()` 的输出格式应与 `io/smpl_pkl.py` 的输入契约保持一致。
 
 ### `__init__.py`
 
@@ -159,10 +148,10 @@ shape 契约：
 - `SmplLoadConfig`
 - `UnifiedLoadConfig`
 - `LoadReport`
-- `MotionData`
-- `PairedMotionData`
+- `SmplMotionClip`
+- `PairedMotionClip`
 - `PairedPath`
-- `RobotMotionData`
+- `RobotMotionClip`
 - `SmplMotionLib`
 - `UnifiedMotionLib`
 
@@ -170,7 +159,7 @@ shape 契约：
 
 - 不在 import 时执行文件发现、load 或 device 初始化。
 - 不转发 `io` / `transform` / `store` 的底层 helper。
-- 不通过 `api.py` 暴露 legacy wrapper。
+- 不通过根包暴露 legacy wrapper。
 
 ## 跨模块规则
 

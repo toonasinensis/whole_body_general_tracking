@@ -8,8 +8,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - test/runtime fallback without importing whole_body_tracking package
     from smpl_math_utils import angle_axis_to_rotation_matrix
 
-from ..transform.coordinate import yup_to_zup_root_pose
-from ..types import MotionData
+from ..transform import yup_to_zup_points, yup_to_zup_root_pose
+from ..types import SmplMotionClip
 from .index import build_motion_index, flatten_indices
 
 _SMPL_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 12, 12, 13, 14, 16, 17, 18, 19, 20, 21]
@@ -18,7 +18,7 @@ _SMPL_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 12, 12, 13, 14, 16,
 # TODO check smpl motion store
 
 class SmplMotionStore:
-    def __init__(self, clips: list[MotionData], up_axis: str = "yup", device: str = "cpu") -> None:
+    def __init__(self, clips: list[SmplMotionClip], up_axis: str = "yup", device: str = "cpu") -> None:
         if up_axis not in ("yup", "zup"):
             raise ValueError(f"up_axis must be 'yup' or 'zup', got {up_axis!r}")
         if not clips:
@@ -57,8 +57,6 @@ class SmplMotionStore:
     def get_transl(self, motion_ids: torch.Tensor, motion_steps: torch.Tensor) -> torch.Tensor:
         transl = self.transl_flat[self._idx(motion_ids, motion_steps)]
         if self.up_axis == "yup":
-            from ..transform.coordinate import yup_to_zup_points
-
             return yup_to_zup_points(transl)
         return transl
 

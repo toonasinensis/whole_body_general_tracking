@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..types import MotionData, PairedMotionData, PairedPath, RobotMotionData
+from ..types import SmplMotionClip, PairedMotionClip, PairedPath, RobotMotionClip
 
 
 def pair_motion_paths(robot_paths: list[str | Path], smpl_dir: str | Path) -> list[PairedPath]:
@@ -22,16 +22,16 @@ def pair_motion_paths(robot_paths: list[str | Path], smpl_dir: str | Path) -> li
 
 def trim_paired_clips(
     stem: str,
-    robot: RobotMotionData,
-    smpl: MotionData,
+    robot: RobotMotionClip,
+    smpl: SmplMotionClip,
     max_frame_diff: int = 2,
-) -> PairedMotionData | None:
+) -> PairedMotionClip | None:
     diff = abs(robot.num_frames - smpl.num_frames)
     if diff > max_frame_diff:
         return None
 
     frame_count = min(robot.num_frames, smpl.num_frames)
-    trimmed_robot = RobotMotionData(
+    trimmed_robot = RobotMotionClip(
         joint_pos=robot.joint_pos[:frame_count],
         joint_vel=robot.joint_vel[:frame_count],
         body_pos_w=robot.body_pos_w[:frame_count],
@@ -46,7 +46,7 @@ def trim_paired_clips(
         body_names=robot.body_names,
         path=robot.path,
     )
-    trimmed_smpl = MotionData(
+    trimmed_smpl = SmplMotionClip(
         pose_aa=smpl.pose_aa[:frame_count],
         smpl_joints=smpl.smpl_joints[:frame_count],
         transl=smpl.transl[:frame_count],
@@ -55,4 +55,4 @@ def trim_paired_clips(
         num_frames=frame_count,
         duration=(frame_count - 1) / smpl.fps if frame_count > 1 else 0.0,
     )
-    return PairedMotionData(stem=stem, robot=trimmed_robot, smpl=trimmed_smpl)
+    return PairedMotionClip(stem=stem, robot=trimmed_robot, smpl=trimmed_smpl)

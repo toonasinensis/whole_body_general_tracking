@@ -12,7 +12,7 @@
 - 解析 `.npz` / `.pkl` / dataset txt。
 - 做文件格式相关校验。
 - 调用纯 transform：名称对齐、fps 重采样。
-- 返回 `MotionData` / `RobotMotionData` 或文件列表。
+- 返回 `SmplMotionClip` / `RobotMotionClip` 或文件列表。
 
 禁止：
 
@@ -94,13 +94,13 @@
 
 包级公开 API：
 
-- `load_robot_motion_file(...) -> RobotMotionData`
+- `load_robot_motion_file(...) -> RobotMotionClip`
 
 模块内部入口：
 
 - `read_npz_fps(raw, path) -> float`
 - `load_robot_npz_raw(path) -> tuple[np.lib.npyio.NpzFile, float]`
-- `parse_robot_npz(...) -> RobotMotionData`
+- `parse_robot_npz(...) -> RobotMotionClip`
 
 输入契约：
 
@@ -118,7 +118,7 @@
 
 输出契约：
 
-- 返回 `RobotMotionData`。
+- 返回 `RobotMotionClip`。
 - tensor dtype 为 `torch.float32`。
 - frame axis 为第 0 维。
 - `num_frames > 0`。
@@ -153,7 +153,7 @@
 包级公开 API：
 
 - `load_pkl(path) -> dict`
-- `load_smpl_motion_file(path, target_fps=None) -> MotionData`
+- `load_smpl_motion_file(path, target_fps=None) -> SmplMotionClip`
 
 输入契约：
 
@@ -163,7 +163,7 @@
 
 输出契约：
 
-- 返回 `MotionData`。
+- 返回 `SmplMotionClip`。
 - `pose_aa`、`smpl_joints`、`transl` frame 数一致。
 - 若重采样，`fps == target_fps`。
 

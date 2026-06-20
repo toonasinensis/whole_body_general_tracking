@@ -4,7 +4,8 @@ import joblib
 import numpy as np
 import torch
 
-from ..types import MotionData
+from ..transform import resample_smpl_motion
+from ..types import SmplMotionClip
 
 
 def _to_tensor(arr: np.ndarray, dtype=torch.float32) -> torch.Tensor:
@@ -47,12 +48,10 @@ def load_pkl(path: str) -> dict:
     }
 
 
-def load_smpl_motion_file(path: str, target_fps: float | None = None) -> MotionData:
+def load_smpl_motion_file(path: str, target_fps: float | None = None) -> SmplMotionClip:
     """
-        从指定路径加载 SMPL PKL 格式的运动数据，返回 MotionData 对象
+        从指定路径加载 SMPL PKL 格式的运动数据，返回 SmplMotionClip 对象
     """
-    from ..transform.resample import resample_smpl_motion
-
     raw = load_pkl(path)
     src_fps = float(raw["fps"])
 
@@ -64,7 +63,7 @@ def load_smpl_motion_file(path: str, target_fps: float | None = None) -> MotionD
     joints_t = _to_tensor(raw["smpl_joints"])
     transl_t = _to_tensor(raw["transl"])
     num_frames = pose_t.shape[0]
-    return MotionData(
+    return SmplMotionClip(
         pose_aa=pose_t,
         smpl_joints=joints_t,
         transl=transl_t,

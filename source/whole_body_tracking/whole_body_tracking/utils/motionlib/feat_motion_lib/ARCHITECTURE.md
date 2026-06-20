@@ -70,20 +70,20 @@ cfg / user input
 
 主要类型：
 
-- `MotionData`
+- `SmplMotionClip`
   表示单个 SMPL clip。
 
-- `RobotMotionData`
+- `RobotMotionClip`
   表示单个 robot clip。
 
-- `PairedMotionData`
+- `PairedMotionClip`
   表示一对已经裁齐的 robot + SMPL clip。
 
 - `MotionIndex`
   表示拼接后的索引信息。
 
-- `UnifiedMotionState`
-  表示已经构建好的统一 robot 运动状态。
+- `RobotMotionStore`
+  持有已经拼接好的 robot flat tensors；`UnifiedMotionLib` 直接持有该 store 并通过属性转发查询。
 
 - `LoadReport`
   表示一次 load 的结果、警告、fallback 状态。
@@ -167,10 +167,10 @@ cfg / user input
   - `motion_ids_from_timestamps`
 
 - `robot_store.py`
-  将多个 `RobotMotionData` 拼接成统一的 robot motion flat tensor。
+  将多个 `RobotMotionClip` 拼接成统一的 robot motion flat tensor。
 
 - `smpl_store.py`
-  将多个 `MotionData` 拼接成统一的 SMPL flat tensor，并提供：
+  将多个 `SmplMotionClip` 拼接成统一的 SMPL flat tensor，并提供：
   - `get_pose`
   - `get_joints`
   - `get_transl`
