@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..config import SmplLoadConfig, UnifiedLoadConfig
-from ..io.discovery import discover_npz_files
-from ..store import PairedMotionStore, RobotMotionStore, SmplMotionStore
 from ..types import LoadReport, UnifiedMotionState
+
+from ..io import discover_npz_files
+from ..store import PairedMotionStore, RobotMotionStore, SmplMotionStore
+
 from .loading import load_paired_clips, load_robot_clips, load_smpl_clips
 
 if TYPE_CHECKING:

@@ -57,7 +57,7 @@ def _interpolate_angular(quat: torch.Tensor, source_fps: float, target_fps: floa
     return result.reshape(num_target, *original_shape[1:-1], 4)
 
 
-def resample_motion(raw: dict, target_fps: float) -> MotionData:
+def resample_smpl_motion(raw: dict, target_fps: float) -> MotionData:
     src_fps = float(raw["fps"])
 
     pose_t = _to_tensor(raw["pose_aa"])

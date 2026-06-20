@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-
+# 定义了本包中用到的所有数据类型
 # TODO 当前各data class的命名不准确，后续可以考虑重命名以更好地反映它们的用途
 
 

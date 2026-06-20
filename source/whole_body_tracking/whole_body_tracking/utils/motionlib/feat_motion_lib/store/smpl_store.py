@@ -15,6 +15,8 @@ from .index import build_motion_index, flatten_indices
 _SMPL_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 12, 12, 13, 14, 16, 17, 18, 19, 20, 21]
 
 
+# TODO check smpl motion store
+
 class SmplMotionStore:
     def __init__(self, clips: list[MotionData], up_axis: str = "yup", device: str = "cpu") -> None:
         if up_axis not in ("yup", "zup"):

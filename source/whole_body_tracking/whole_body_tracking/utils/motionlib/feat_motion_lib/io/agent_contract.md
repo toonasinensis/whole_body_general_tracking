@@ -22,6 +22,18 @@
 - 不写 simulator。
 - 不实现 adaptive sampling 或 command runtime 逻辑。
 
+## 包级公开 API
+
+`io/__init__.py` 只暴露外部调用方应依赖的加载入口：
+
+- `discover_npz_files`
+- `discover_pkl_files`
+- `load_smpl_motion_file`
+- `load_pkl`
+- `load_robot_motion_file`
+
+子模块中的 raw loader、parser、字段读取 helper 可以被测试直测，也可以供同包维护使用，但不作为 `feat_motion_lib.io` 的包级稳定入口。
+
 ## `discovery.py`
 
 职责：
@@ -30,11 +42,14 @@
 - 支持目录扫描、`dataset_txt`、eval 顺序切片、distributed rank 切片。
 - 返回明确、有序、可复现的文件列表。
 
-公开 API：
+包级公开 API：
 
-- `find_npz_files(...) -> tuple[list[str], int]`
 - `discover_npz_files(options: DiscoveryOptions) -> tuple[list[str], int]`
 - `discover_pkl_files(input_path: str | Path) -> list[str]`
+
+模块内部入口：
+
+- `find_npz_files(...) -> tuple[list[str], int]`
 
 输入契约：
 
@@ -77,12 +92,15 @@
 - 按 joint/body name 或 fallback index 对齐张量。
 - 可按 `target_fps` 重采样单个 robot clip。
 
-公开 API：
+包级公开 API：
+
+- `load_robot_motion_file(...) -> RobotMotionData`
+
+模块内部入口：
 
 - `read_npz_fps(raw, path) -> float`
 - `load_robot_npz_raw(path) -> tuple[np.lib.npyio.NpzFile, float]`
 - `parse_robot_npz(...) -> RobotMotionData`
-- `load_robot_motion_file(...) -> RobotMotionData`
 
 输入契约：
 
@@ -132,10 +150,10 @@
 - 解析 `pose_aa`、`smpl_joints`、`transl`、`fps`。
 - 可按 `target_fps` 重采样单个 SMPL clip。
 
-公开 API：
+包级公开 API：
 
 - `load_pkl(path) -> dict`
-- `load_motion_file(path, target_fps=None) -> MotionData`
+- `load_smpl_motion_file(path, target_fps=None) -> MotionData`
 
 输入契约：
 

@@ -19,13 +19,22 @@
 - 不写 simulator。
 - 不实现 command sampling policy。
 
+## 包级公开 API
+
+`facade/__init__.py` 只暴露下游训练、评估和工具脚本应直接依赖的门面类：
+
+- `UnifiedMotionLib`
+- `SmplMotionLib`
+
+`config_adapter.py`、`loading.py` 和 `orchestration.py` 中的函数与 outcome dataclass 是 facade 内部编排层，可以被测试直测，但不作为 `feat_motion_lib.facade` 的包级稳定入口。
+
 ## `config_adapter.py`
 
 职责：
 
 - 将训练 cfg / SimpleNamespace / legacy object 转成 structured config。
 
-公开 API：
+内部入口：
 
 - `cfg_to_unified_load_config(cfg, sample_counter, device, ...) -> UnifiedLoadConfig`
 - `cfg_to_smpl_load_config(cfg, device, ...) -> SmplLoadConfig`
@@ -60,7 +69,7 @@
 - 根据已经发现的文件列表加载 robot clips / SMPL clips / paired clips。
 - 汇总 loaded/skipped/warnings 到 result dataclass。
 
-公开 API：
+内部入口：
 
 - `load_robot_clips(...) -> RobotLoadResult`
 - `load_smpl_clips(...) -> list[MotionData]`
@@ -97,7 +106,7 @@
 - 决定走 paired path 还是 robot-only fallback。
 - 构建 store 并返回 load outcome。
 
-公开 API：
+内部入口：
 
 - `execute_smpl_load(load_config) -> SmplLoadOutcome`
 - `execute_unified_load(...) -> UnifiedLoadOutcome`

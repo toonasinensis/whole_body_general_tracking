@@ -172,11 +172,7 @@ class MotionCommand(CommandTerm):
 
     #region normal property
     @property
-    def command(self) -> torch.Tensor:  
-        # TODO Consider again if this is the best observation
-        # TODO(refactor): Move observation-facing feature composition into a dedicated
-        # ReferenceFeatureView/MotionCommandFeatures facade so MotionCommand only
-        # owns IsaacLab lifecycle orchestration.
+    def command(self) -> torch.Tensor:
         return torch.cat(
             [
                 # self.joint_pos_future.view(self.num_envs, -1),
@@ -679,12 +675,11 @@ class MotionCommand(CommandTerm):
 
 @configclass
 class MotionCommandCfg(CommandTermCfg):
-    """Configuration for the motion command."""
+    """Configuration for the motion command.
+    TODO class 应该细分
+    """
 
     class_type: type = MotionCommand
-
-    # 新增参数
-
 
     # basic configs
     eval_mode: bool = False
@@ -692,9 +687,12 @@ class MotionCommandCfg(CommandTermCfg):
     adaptive_sample: bool = True
     asset_name: str = MISSING
     max_motion_num: int = 999999
-    resample_interval: int = 300000000000
-    motion_file: str = MISSING
-    dataset_txt: str = None  # "/home/xiechunyang/wt_ws/wt_wbc/dataset/g1-mimic-npz/dataset.txt"
+    resample_interval: int = 300000000000   # 训练时暂不需要 resample
+    
+    motion_file: str = MISSING # 改为 motion_folder
+    dataset_txt: str = None
+    
+    # smpl configs
     smpl_file_path: str | None = None
     target_fps: float = 50.0
     up_axis: str = "yup"
@@ -706,11 +704,13 @@ class MotionCommandCfg(CommandTermCfg):
     # future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
     future_step_num = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     max_future_step = max(future_step_num)
-    
-    # randomization configs
+
+    # env classification
     pose_range: dict[str, tuple[float, float]] = {}
     pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
     pose_init_method_ratios: dict[str, float] = {"lying": 0.3, "range": 0.7}
+
+    # randomization configs
     velocity_range: dict[str, tuple[float, float]] = {}
     joint_position_range: tuple[float, float] = (-0.52, 0.52)
 

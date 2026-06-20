@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
+from pathlib import Path
 
-from ..io import load_motion_file, load_robot_motion_file
-from ..transform.pairing import pair_motion_paths, trim_paired_clips
+from ..io import load_smpl_motion_file, load_robot_motion_file
+from ..transform import pair_motion_paths, trim_paired_clips
 from ..types import LoadReport, MotionData, PairedLoadResult, RobotLoadResult
 
+"""
+加载 motion data
+"""
 
 def load_smpl_clips(
     files: Sequence[str | MotionData],
@@ -20,7 +24,7 @@ def load_smpl_clips(
         if isinstance(entry, MotionData):
             clips.append(entry)
         else:
-            clips.append(load_motion_file(entry, target_fps=target_fps))
+            clips.append(load_smpl_motion_file(entry, target_fps=target_fps))
     return clips
 
 
@@ -72,7 +76,7 @@ def load_robot_clips(
 
 
 def load_paired_clips(
-    npz_files: list[str],
+    npz_files: list[str | Path],
     smpl_dir: str,
     *,
     target_fps: float,
@@ -102,7 +106,7 @@ def load_paired_clips(
                 all_body_names=all_body_names,
                 body_indexes=body_indexes,
             )
-            smpl = load_motion_file(str(pair.smpl_path), target_fps=target_fps)
+            smpl = load_smpl_motion_file(str(pair.smpl_path), target_fps=target_fps)
             trimmed = trim_paired_clips(pair.stem, robot, smpl, max_frame_diff=max_frame_diff)
             if trimmed is None:
                 diff = abs(robot.num_frames - smpl.num_frames)

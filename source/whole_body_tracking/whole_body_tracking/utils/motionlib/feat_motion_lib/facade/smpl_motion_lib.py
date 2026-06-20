@@ -6,12 +6,13 @@ import torch
 
 from ..config import SmplLoadConfig
 from ..errors import MotionNotLoadedError
-from ..store import SmplMotionStore
 from ..types import LoadReport, MotionData
+
+from ..store import SmplMotionStore
+
 from .config_adapter import cfg_to_smpl_load_config
 from .loading import load_smpl_clips
 from .orchestration import execute_smpl_load
-
 
 class SmplMotionLib:
     def __init__(self, up_axis: str = "yup", device: str = "cpu") -> None:

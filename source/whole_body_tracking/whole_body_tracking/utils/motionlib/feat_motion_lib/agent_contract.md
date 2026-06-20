@@ -125,9 +125,9 @@ shape 契约：
 
 职责：
 
-- 提供向后兼容或脚本友好的顶层入口。
-- 重新导出常用 facade / loader / discovery API。
-- 提供简单工具函数，例如 SMPL motion 重采样保存。
+- legacy compatibility / script helper 层。
+- 当前不属于 `feat_motion_lib/__init__.py` 的包级公开入口。
+- 长期应删除或迁移到明确的 CLI / tools 模块。
 
 允许：
 
@@ -142,7 +142,7 @@ shape 契约：
 
 待实现：
 
-- 明确 `api.py` 中哪些函数是稳定 public API，哪些只是 legacy compatibility。
+- 删除未使用的 legacy wrapper，或迁移到明确的脚本工具模块。
 - `resample_and_save_motion_file()` 的输出格式应与 `io/smpl_pkl.py` 的输入契约保持一致。
 
 ### `__init__.py`
@@ -150,12 +150,27 @@ shape 契约：
 职责：
 
 - 控制包级公开符号。
-- 尽量避免重型导入造成测试或工具启动成本增加。
+- 只暴露下游调用方应直接依赖的稳定配置、核心 clip 类型和 facade 类。
+
+公开 API：
+
+- `DiscoveryOptions`
+- `LoadOptions`
+- `SmplLoadConfig`
+- `UnifiedLoadConfig`
+- `LoadReport`
+- `MotionData`
+- `PairedMotionData`
+- `PairedPath`
+- `RobotMotionData`
+- `SmplMotionLib`
+- `UnifiedMotionLib`
 
 禁止：
 
 - 不在 import 时执行文件发现、load 或 device 初始化。
-- 不隐藏导入失败，除非明确是 optional dependency compatibility。
+- 不转发 `io` / `transform` / `store` 的底层 helper。
+- 不通过 `api.py` 暴露 legacy wrapper。
 
 ## 跨模块规则
 

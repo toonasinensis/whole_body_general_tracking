@@ -3,8 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..config import DiscoveryOptions, LoadOptions, SmplLoadConfig, UnifiedLoadConfig
-from ..io.discovery import discover_pkl_files
+from ..io import discover_pkl_files
 
+
+"""
+将传递的 cfg 转化为 config.py 中定义的标准 cfg
+"""
 
 def cfg_to_unified_load_config(
     cfg,
