@@ -196,8 +196,14 @@ class G1FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
     experiment_name = "g1_amp"
 
-    actor = FSQActorShellCfg()
+    # actor = FSQActorShellCfg()
+    actor = MLPActorShellCfg()
     critic = CriticCfg()
+    obs_groups = {
+        "actor": ["policy"],
+        "critic": ["critic"],
+    }
+
     algorithm = PpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
