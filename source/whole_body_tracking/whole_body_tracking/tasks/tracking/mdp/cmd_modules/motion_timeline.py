@@ -135,7 +135,7 @@ class MotionCommandTimeline:  # checked
             frame_end=end - start,
         )
 
-    def apply_selection(self, env_ids: Sequence[int], selection: MotionSelection) -> None:
+    def apply_selection(self, env_ids: Sequence[int] | torch.Tensor, selection: MotionSelection) -> None:
         """refresh MotionCommandTimeline using MotionSelection"""
         if len(env_ids) == 0:
             return

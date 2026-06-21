@@ -121,7 +121,7 @@ class MotionCommandResetter:  #checked
 
     def apply(
         self,
-        env_ids: Sequence[int],
+        env_ids: Sequence[int] | torch.Tensor,
         *,
         body_pos_w: torch.Tensor,
         body_quat_w: torch.Tensor,

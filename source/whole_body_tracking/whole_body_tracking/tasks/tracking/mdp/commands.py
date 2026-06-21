@@ -30,11 +30,12 @@ from isaaclab.utils.math import (
 from whole_body_tracking.utils.motionlib.feat_motion_lib.facade.unified_motion_lib import UnifiedMotionLib
 
 from .math_utils import quat_to_6d
-from .sub_modules.motion_cache import MotionReferenceCache
-from .sub_modules.motion_reset import MotionCommandResetter
-from .sub_modules.motion_selection import create_motion_selection_policy
-from .sub_modules.motion_timeline import MotionCommandTimeline
-from .sub_modules.motion_viser import MotionCommandDebugVisualizer
+
+from .cmd_modules.motion_cache import MotionReferenceCache
+from .cmd_modules.motion_reset import MotionCommandResetter
+from .cmd_modules.motion_selection import create_motion_selection_policy
+from .cmd_modules.motion_timeline import MotionCommandTimeline
+from .cmd_modules.motion_viser import MotionCommandDebugVisualizer
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
