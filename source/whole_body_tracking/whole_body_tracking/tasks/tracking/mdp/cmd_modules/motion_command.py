@@ -112,6 +112,8 @@ class MotionCommand(CommandTerm):
         self.timeline = MotionCommandTimeline(self.num_envs, self._future_step_offsets, self.device)
         self.reference_cache = MotionReferenceCache(self.num_envs, len(cfg.body_names), self.device)
         self.resetter = MotionCommandResetter(self.cfg, self.robot, self.device)
+        self.pose_range_env_mask = self.resetter.build_recovery_assist_env_mask(self.num_envs)
+        setattr(self.env, "_motion_pose_range_env_mask", self.pose_range_env_mask)
         self.debug_visualizer = MotionCommandDebugVisualizer(self.cfg, self, self.device)
 
         self.motion_ids = self.timeline.motion_ids

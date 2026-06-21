@@ -50,6 +50,15 @@ class MotionCommandResetter:  #checked
         self._pose_init_method_num_envs = num_envs
         return method_env_ids
 
+    def build_recovery_assist_env_mask(self, num_envs: int) -> torch.Tensor:
+        """Return envs that use non-range pose initialization and may need recovery assist."""
+        method_env_ids = self._get_pose_init_method_env_ids(num_envs)
+        mask = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        for method, env_ids in method_env_ids.items():
+            if method != "range":
+                mask[env_ids] = True
+        return mask
+
     def _apply_root_pose_randomization(
         self,
         root_pos: torch.Tensor,

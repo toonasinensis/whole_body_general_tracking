@@ -79,6 +79,7 @@ def randomize_rigid_body_com(
     asset.root_physx_view.set_coms(coms, env_ids)
 
 
+# 此函数依赖 CommandsTerm 中的
 def assist_fallen_robots_with_upward_force(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor | None,
