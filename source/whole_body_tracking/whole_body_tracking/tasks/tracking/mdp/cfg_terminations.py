@@ -5,7 +5,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 
-from .mdp import tmt_modules as tmt
+from . import tmt_modules as tmt
 
 
 @configclass

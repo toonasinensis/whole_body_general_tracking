@@ -28,24 +28,6 @@ class RslRlDistillAlgorithmCfg:
     max_grad_norm = (1.0,)
 
 
-# def __init__(
-#         self,
-#         student: MLPModel,
-#         teacher: MLPModel,
-#         storage: RolloutStorage,
-#         num_learning_epochs: int = 1,
-#         gradient_length: int = 15,
-#         learning_rate: float = 1e-3,
-#         max_grad_norm: float | None = None,
-#         loss_type: str = "mse",
-#         optimizer: str = "adam",
-#         device: str = "cpu",
-#         # Distributed training parameters
-#         multi_gpu_cfg: dict | None = None,
-#         **kwargs: dict,  # handle unused config parameters
-#     ) -> None:
-
-
 @configclass
 class RslRlDistillRunnerCfg:
     num_steps_per_env = 50

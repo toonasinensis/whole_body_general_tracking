@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from isaaclab.utils import configclass
 
-from .mdp.commands import MotionCommandCfg
+from .cmd_modules import MotionCommandCfg
 
 
 VELOCITY_RANGE = {

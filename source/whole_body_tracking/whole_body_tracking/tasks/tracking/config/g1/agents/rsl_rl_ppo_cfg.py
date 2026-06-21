@@ -1,36 +1,19 @@
 import os
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg  # noqa: F401
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg  # noqa: F401
+# TODO use customed rsl_rl cfg
 
-from whole_body_tracking.tasks.tracking.config.g1.flat_env_cfg import G1_AMP_ANCHOR_BODY_NAME, G1_AMP_BODY_NAMES
 
-G1_AMP_MOTION_DIR = os.path.normpath(
-    "/home/lianwenkang/workspace/whole_body_general_tracking/dataset_txt/lafan/amp"
+from whole_body_tracking.tasks.tracking.config.g1.body_presets import (
+    G1_AMP_ANCHOR_BODY_NAME,
+    G1_AMP_BODY_NAMES,
 )
-G1_RLBC_TEACHER_CHECKPOINT_PATH = os.path.normpath(
-    os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "../../../../../../../../logs/rsl_rl/g1_amp/2026-05-30_16-31-18/model_100500.pt",
-        )
-    )
-)
-G1_RLBC_TEACHER_ACTOR_CFG = {
-    "class_name": "ActorModel",
-    "distribution_cfg": {
-        "class_name": "GaussianDistribution",
-        "init_std": 1.0,
-        "std_type": "scalar",
-    },
-    "backbone": {
-        "class_name": "MyMLPModel",
-        "hidden_dims": [1024, 512, 256],
-        "activation": "swish",
-        "obs_normalization": True,
-    },
-}
 
+
+###
+# actor critic cfg
+###
 
 @configclass
 class ActorCfg:
@@ -38,7 +21,11 @@ class ActorCfg:
     hidden_dims: list = [4096, 2048, 1024, 512, 256]
     activation: str = "swish"
     obs_normalization: bool = True
-    distribution_cfg: dict = {"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar"}
+    distribution_cfg: dict = {
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar"
+    }
 
 
 @configclass
@@ -50,24 +37,24 @@ class CriticCfg:
     distribution_cfg: dict = None
 
 
-# @configclass
-# class ActorShellCfg:
-#     class_name: str = "ActorModel"
-#     distribution_cfg: dict = {
-#         "class_name": "GaussianDistribution",
-#         "init_std": 1.0,
-#         "std_type": "scalar",
-#     }
-#     backbone: dict = {
-#         "class_name": "MyMLPModel",
-#         "hidden_dims": [4096, 2048, 1024, 512, 256],
-#         "activation": "swish",
-#         "obs_normalization": True,
-#     }
+@configclass
+class MLPActorShellCfg:
+    class_name: str = "ActorModel"
+    distribution_cfg: dict = {
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar",
+    }
+    backbone: dict = {
+        "class_name": "MLPModel",
+        "hidden_dims": [4096, 2048, 1024, 512, 256],
+        "activation": "swish",
+        "obs_normalization": True,
+    }
 
 
 @configclass
-class ActorShellCfg:
+class FSQActorShellCfg:
     class_name: str = "ActorModel"
     distribution_cfg: dict = {
         "class_name": "GaussianDistribution",
@@ -91,9 +78,9 @@ class ActorShellCfg:
         },
         "loss": {
             # "token": 1.0,  # token loss 权重: MSE(encoder(token), token_target) * weight，0.0 = 关闭
-            # # "re_encode": (
-            # #     1.0
-            # # ),  # 循环 loss 权重: MSE(encoder(smpl_recon.detach()), encoder(token).detach()) * weight，0.0 = 关闭
+            # "re_encode": (
+            #     1.0
+            # ),  # 循环 loss 权重: MSE(encoder(smpl_recon.detach()), encoder(token).detach()) * weight，0.0 = 关闭
             "recon": (
                 0.010
             ),  # 重建 loss 权重: MSE(encoder(smpl_recon.detach()), encoder(token).detach()) * weight，0.0 = 关闭
@@ -128,8 +115,12 @@ class ActorShellCfg:
     }
 
 
+###
+# PPO cfg
+###
+
 @configclass
-class MyPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+class PpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     value_loss_coef: float = 1.0
     use_clipped_value_loss: bool = True
     clip_param: float = 0.2
@@ -144,6 +135,10 @@ class MyPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     max_grad_norm: float = 1.0
     plugins: list = []
 
+
+###
+# runner cfg
+###
 
 @configclass
 class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
@@ -185,9 +180,9 @@ class G1FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = "g1_flat"
     empirical_normalization = True
 
-    algorithm = MyPpoAlgorithmCfg()
+    algorithm = PpoAlgorithmCfg()
 
-    actor = ActorShellCfg()
+    actor = FSQActorShellCfg()
 
     critic = CriticCfg()
 
@@ -198,37 +193,12 @@ class G1FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 
 @configclass
-class xwlActorShellCfg:
-    class_name: str = "ActorModel"
-    distribution_cfg: dict = {
-        "class_name": "GaussianDistribution",
-        "init_std": 1.0,
-        "std_type": "scalar",
-    }
-    backbone: dict = {
-        "class_name": "MyMLPModel",
-        "hidden_dims": [1024, 512, 256],
-        "activation": "swish",
-        "obs_normalization": True,
-    }
-
-
-@configclass
-class xwlCriticCfg:
-    class_name: str = "MLPModel"
-    hidden_dims: list = [1024, 512, 256]
-    activation: str = "swish"
-    obs_normalization: bool = True
-    distribution_cfg: dict = None
-
-
-@configclass
 class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
     experiment_name = "g1_amp"
 
-    actor = ActorShellCfg()
+    actor = FSQActorShellCfg()
     critic = CriticCfg()
-    algorithm = MyPpoAlgorithmCfg(
+    algorithm = PpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
@@ -245,7 +215,7 @@ class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
             {
                 "class_name": "AMPPlugin",
                 "amp_reward_coef": 0.1,
-                "amp_motion_files": G1_AMP_MOTION_DIR,
+                "amp_motion_files": "/home/lianwenkang/workspace/whole_body_general_tracking/dataset_txt/lafan/amp",
                 "amp_task_reward_lerp": 0.75,
                 "amp_discr_hidden_dims": [1024, 1024, 512, 256],
                 "amp_replay_buffer_size": 200000,
@@ -256,12 +226,11 @@ class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
         ],
     )
 
-
 @configclass
 class G1FlatRLBCDRunnerCfg(G1FlatAMPRunnerCfg):
     experiment_name = "g1_rlbc"
 
-    algorithm = MyPpoAlgorithmCfg(
+    algorithm = PpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
@@ -275,21 +244,24 @@ class G1FlatRLBCDRunnerCfg(G1FlatAMPRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
         plugins=[
-            # {
-            #     "class_name": "AMPPlugin",
-            #     "amp_reward_coef": 0.1,
-            #     "amp_motion_files": G1_AMP_MOTION_DIR,
-            #     "amp_task_reward_lerp": 0.75,
-            #     "amp_discr_hidden_dims": [1024, 1024, 512, 256],
-            #     "amp_replay_buffer_size": 200000,
-            #     "amp_body_names": G1_AMP_BODY_NAMES,
-            #     "amp_anchor_name": G1_AMP_ANCHOR_BODY_NAME,
-            #     "min_normalized_std": [0.05] * 29,
-            # },
             {
                 "class_name": "TeacherKLPlugin",
-                "teacher_checkpoint_path": G1_RLBC_TEACHER_CHECKPOINT_PATH,
-                "teacher_actor": G1_RLBC_TEACHER_ACTOR_CFG,
+                "teacher_checkpoint_path": "G1_RLBC_TEACHER_CHECKPOINT_PATH",
+                "teacher_actor":
+                    {
+                        "class_name": "ActorModel",
+                        "distribution_cfg": {
+                            "class_name": "GaussianDistribution",
+                            "init_std": 1.0,
+                            "std_type": "scalar",
+                        },
+                        "backbone": {
+                            "class_name": "MyMLPModel",
+                            "hidden_dims": [1024, 512, 256],
+                            "activation": "swish",
+                            "obs_normalization": True,
+                        },
+                    },
                 "teacher_obs_groups": {"actor": ["prop", "rbt_cmd_mf", "smpl_cmd_mf"]},
                 "teacher_obs_aliases": {"rbt_cmd_mf": "zrbt_cmd_mf"},
                 "start_loss_coef": 0.5,

@@ -6,7 +6,7 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from .mdp import obs_modules as obs
+from . import obs_modules as obs
 
 
 @configclass

@@ -5,7 +5,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
-from .mdp import rwd_modules as rwd
+from . import rwd_modules as rwd
 
 
 @configclass

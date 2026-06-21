@@ -1,6 +1,8 @@
 import gymnasium as gym
 
-from . import agents, flat_env_cfg
+from .environments import flat_env_cfg
+
+from . import agents
 
 ##
 # Register Gym environments.

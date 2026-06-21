@@ -5,6 +5,8 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
+from . import evt_modules as evt
+
 
 @configclass
 class EventCfg:
@@ -23,7 +25,7 @@ class EventCfg:
     )
 
     add_joint_default_pos = EventTerm(
-        func=mdp.randomize_joint_default_pos,
+        func=evt.randomize_joint_default_pos,
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
@@ -33,7 +35,7 @@ class EventCfg:
     )
 
     base_com = EventTerm(
-        func=mdp.randomize_rigid_body_com,
+        func=evt.randomize_rigid_body_com,
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),

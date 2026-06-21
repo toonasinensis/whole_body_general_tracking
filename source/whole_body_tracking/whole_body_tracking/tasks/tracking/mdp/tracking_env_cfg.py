@@ -3,14 +3,14 @@ from __future__ import annotations
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils import configclass
 
-from .actions_cfg import ActionsCfg
-from .commands_cfg import CommandsCfg
-from .curriculum_cfg import CurriculumCfg
-from .event_cfg import EventCfg
-from .observations_cfg import ObservationsCfg
-from .rewards_cfg import RewardsCfg
-from .scene_cfg import MySceneCfg
-from .terminations_cfg import TerminationsCfg
+from .cfg_actions import ActionsCfg
+from .cfg_commands import CommandsCfg
+from .cfg_curriculum import CurriculumCfg
+from .cfg_events import EventCfg
+from .cfg_observations import ObservationsCfg
+from .cfg_rewards import RewardsCfg
+from .cfg_scene import MySceneCfg
+from .cfg_terminations import TerminationsCfg
 
 
 @configclass
