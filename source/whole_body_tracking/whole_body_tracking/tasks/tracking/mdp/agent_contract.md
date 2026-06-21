@@ -1,23 +1,71 @@
+# MDP Package Agent Contract
 
-## CommandTerm
+This package is the public MDP facade for the tracking task. Task configs should import
+runtime functions and config-facing classes through `whole_body_tracking.tasks.tracking.mdp`
+unless they intentionally need a submodule-internal type.
 
-CommandTerm 对外暴露的接口为
+## Public Facade
 
-1. Robot State 和 Reference Motion 的状态信息
+`mdp/__init__.py` re-exports:
 
-行为上 CommandTerm 会在每个 env step 的最后
+- IsaacLab built-in MDP functions from `isaaclab.envs.mdp`.
+- Motion command APIs from `cmd_modules`.
+- Event APIs from `evt_modules`.
+- Observation APIs from `obs_modules`.
+- Reward APIs from `rwd_modules`.
+- Termination APIs from `tmt_modules`.
 
-1.1. 根据 rewards 和 termination 的信息， 更新 CommandTerm 的状态
+The facade is intentionally broad for IsaacLab config ergonomics. The real ownership
+boundaries are defined by each `*_modules/agent_contract.md` file.
 
-1.2. 根据 CommandTerm 的状态确定 Reference Motion
+## Module Ownership
 
-1.3. 重置 Robot State 
+- `cmd_modules`: owns reference motion loading, timeline state, motion selection,
+  robot reset from reference poses, aligned reference cache, motion command features,
+  and debug visualization.
+- `obs_modules`: owns observation term functions. It reads env, assets, and command
+  state, and returns tensors. It does not mutate simulator or command state.
+- `rwd_modules`: owns reward term functions and delayed-termination reward masking.
+  Configs should use the wrapped exports from `rwd_modules`, not raw functions.
+- `tmt_modules`: owns termination term functions, delayed termination installation,
+  and `DelayedTerminationManager`.
+- `evt_modules`: owns startup/interval event functions that intentionally mutate env,
+  robot defaults, PhysX properties, or external force buffers.
 
-1.4. 更新相关的状态供其他模块消费
+## Cross-Module Rules
 
-同时记录
+- Config files may import `mdp` facade symbols.
+- Submodules should prefer explicit relative imports from their owning package.
+- Observation, reward, termination, and event functions may read `MotionCommand`
+  through `env.command_manager.get_term(command_name)`.
+- Only `cmd_modules.motion_reset` should write robot root/joint state during command
+  resets.
+- Only event functions should perform event-manager side effects such as randomization
+  or assist force application.
+- Reward and termination configs should import from `rwd_modules` and `tmt_modules`
+  wrappers so delayed-termination flags remain available.
 
-1.5. metrics
+## Shared Runtime State
 
-1.6. motiom sampling
+The following env attributes are intentionally shared across modules:
 
+- `env._motion_pose_range_env_mask`: written by `MotionCommand`, read by delayed
+  termination and fallen upward assist to select recovery envs.
+- `env.termination_manager.delayed_termination_env_mask`: written by
+  `DelayedTerminationManager`, read by termination wrappers.
+- `env.termination_manager.delayed_termination_active_mask`: written by
+  `DelayedTerminationManager.compute()`, read by reward wrappers.
+- `env._fallen_upward_assist_timeout_stats`: owned by the fallen upward assist event.
+
+Any new shared env attribute must be documented here and in the owning module
+contract.
+
+## Compatibility Notes
+
+- Quaternion tensors use IsaacLab `wxyz` order.
+- Env-indexed tensors should live on the simulation device unless an Isaac/PhysX API
+  specifically requires CPU tensors.
+- Per-env outputs from observation, reward, and termination terms must have first
+  dimension `env.num_envs`.
+- Public functions exported through `__all__` are config-facing API. Renaming or
+  changing signatures can break Hydra/IsaacLab configs and checkpoints.
