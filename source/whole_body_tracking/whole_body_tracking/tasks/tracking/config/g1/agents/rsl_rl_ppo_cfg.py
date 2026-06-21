@@ -10,6 +10,7 @@ from whole_body_tracking.tasks.tracking.config.g1.body_presets import (
     G1_AMP_BODY_NAMES,
 )
 
+LOW_FREQ_SCALE = 0.5
 
 ###
 # actor critic cfg

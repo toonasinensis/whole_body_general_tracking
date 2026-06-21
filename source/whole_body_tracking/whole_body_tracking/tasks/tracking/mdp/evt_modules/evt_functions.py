@@ -180,34 +180,60 @@ def assist_fallen_robots_with_upward_force(
         active_lookup = torch.searchsorted(active_env_ids, assist_env_ids)
         forces[active_lookup, 0, 2] = float(force) * force_scale
 
+    composer = None
     if force_mode == "instantaneous":
-        composer = asset.instantaneous_wrench_composer
+        composer = getattr(asset, "instantaneous_wrench_composer", None)
         duty_cycle = 1.0 / max(1, int(getattr(env.cfg, "decimation", 1)))
     elif force_mode == "permanent":
-        composer = asset.permanent_wrench_composer
-        composer.reset(active_env_ids)
+        composer = getattr(asset, "permanent_wrench_composer", None)
+        if composer is not None:
+            composer.reset(active_env_ids)
         duty_cycle = 1.0
     else:
         raise ValueError(f"Unsupported force_mode={force_mode!r}. Expected 'instantaneous' or 'permanent'.")
 
-    composer.set_forces_and_torques(
-        forces=forces,
-        torques=torques,
-        body_ids=[force_body_id],
-        env_ids=active_env_ids,
-        is_global=True,
-    )
+    if composer is not None:
+        composer.set_forces_and_torques(
+            forces=forces,
+            torques=torques,
+            body_ids=[force_body_id],
+            env_ids=active_env_ids,
+            is_global=True,
+        )
+    else:
+        try:
+            asset.set_external_force_and_torque(
+                forces=forces,
+                torques=torques,
+                body_ids=[force_body_id],
+                env_ids=active_env_ids,
+                is_global=True,
+            )
+        except TypeError:
+            asset.set_external_force_and_torque(
+                forces=forces,
+                torques=torques,
+                body_ids=[force_body_id],
+                env_ids=active_env_ids,
+            )
+
     if debug_steps > 0 and current_step <= debug_steps and current_step % max(1, debug_interval_steps) == 0:
         dbg_env = int(max(0, min(debug_env_id, env.num_envs - 1)))
         if active_mask[dbg_env]:
-            force_local = composer.composed_force_as_torch[dbg_env, force_body_id].detach()
-            link_quat = asset.data.body_link_quat_w[dbg_env, force_body_id]
-            force_world = math_utils.quat_apply(link_quat, force_local)
             max_force = float((float(force) * force_scale).item())
             dbg_force_matches = torch.where(active_env_ids == dbg_env)[0]
             applied_force = 0.0
             if dbg_force_matches.numel() > 0:
                 applied_force = float(forces[dbg_force_matches[0], 0, 2].item())
+            if composer is not None and hasattr(composer, "composed_force_as_torch"):
+                force_local = composer.composed_force_as_torch[dbg_env, force_body_id].detach()
+                link_quat = asset.data.body_link_quat_w[dbg_env, force_body_id]
+                force_world = math_utils.quat_apply(link_quat, force_local)
+                force_local_log = force_local.detach().cpu().tolist()
+                force_world_log = force_world.detach().cpu().tolist()
+            else:
+                force_local_log = None
+                force_world_log = [0.0, 0.0, applied_force]
             print(
                 "[fallen_upward_assist] "
                 f"step={current_step} env={dbg_env} mode={force_mode} duty={duty_cycle:.3f} "
@@ -221,8 +247,8 @@ def assist_fallen_robots_with_upward_force(
                 f"force_max_w={[0.0, 0.0, max_force]} "
                 f"force_set_w={[0.0, 0.0, applied_force]} "
                 f"force_avg_w={[0.0, 0.0, applied_force * duty_cycle]} "
-                f"force_local={force_local.detach().cpu().tolist()} "
-                f"force_world_from_local={force_world.detach().cpu().tolist()} "
+                f"force_local={force_local_log} "
+                f"force_world_from_local={force_world_log} "
                 f"ref_z={float(command.anchor_pos_w[dbg_env, 2].item()):.4f} "
                 f"pelvis_z={float(robot_anchor_pos[dbg_env, 2].item()):.4f} "
                 f"z_error={float(z_error[dbg_env].item()):.4f} "
