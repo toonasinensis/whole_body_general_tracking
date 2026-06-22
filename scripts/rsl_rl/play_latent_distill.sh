@@ -1,0 +1,12 @@
+python whole_body_tracking/scripts/rsl_rl/play.py \
+  --task=LatentDistill-Flat-G1-v0 \
+  --num_envs=1 \
+  --resume_path=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_latent_distill/2026-06-09_16-47-56_latent_vib_student/model_1000.pt \
+  --motion_file=/home/thl/Documents/g1-mimic-npz \
+  --dataset_txt=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/lafan.txt \
+  --headless \
+  --export_onnx \
+  --export_only \
+  --vib_export_mode=task_posterior \
+  --onnx_dir=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/exported_onnx/g1_latent_vib_model_1000 \
+  --onnx_filename=vib_task_posterior.onnx

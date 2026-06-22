@@ -195,9 +195,9 @@ class ObservationsCfg:
         motion_anchor_ori_b_multi_future = ObsTerm(
             func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
-        # motion_anchor_z_multi_future = ObsTerm(
-        #     func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        # )
+        motion_anchor_z_multi_future = ObsTerm(
+            func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
 
         def __post_init__(self):
             self.enable_corruption = True

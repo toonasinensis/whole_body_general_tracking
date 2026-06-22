@@ -159,6 +159,20 @@ def amp_robot_body_ang_vel_b(
     return body_ang_vel_b.reshape(env.num_envs, -1)
 
 
+def heading_phase(
+    env: ManagerBasedEnv, period: float, command_name: str, command_threshold: float = 0.05
+) -> torch.Tensor:
+    """Sin/cos gait phase used by the standalone heading walk task."""
+    phase_t = (env.episode_length_buf * env.step_dt) % period / period
+    phase = torch.stack((torch.sin(phase_t * torch.pi * 2.0), torch.cos(phase_t * torch.pi * 2.0)), dim=-1)
+    command = env.command_manager.get_term(command_name)
+    target_speed = getattr(command, "target_speed", None)
+    if target_speed is None:
+        return phase
+    active = target_speed[:, 0] > float(command_threshold)
+    return torch.where(active.unsqueeze(-1), phase, torch.zeros_like(phase))
+
+
 def motion_anchor_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
 

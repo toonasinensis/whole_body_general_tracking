@@ -70,12 +70,127 @@ def resolve_policy_observation_groups(actor: torch.nn.Module, obs) -> list[str]:
 
     groups = list(groups)
     obs_keys = set(obs.keys())
-    missing = [name for name in groups if name not in obs_keys]
+    extra_input_shapes = resolve_policy_extra_input_shapes(actor)
+    missing = [name for name in groups if name not in obs_keys and name not in extra_input_shapes]
     if missing:
         raise KeyError(
             f"Policy expects observation groups {missing}, but env observations only have {list(obs.keys())}."
         )
     return groups
+
+
+def resolve_policy_extra_input_shapes(actor: torch.nn.Module) -> dict[str, tuple[int, ...]]:
+    """Return non-environment ONNX input shapes declared by export wrappers."""
+    module = getattr(actor, "backbone", actor)
+    extra = getattr(module, "extra_input_shapes", None)
+    if extra is None:
+        extra = getattr(actor, "extra_input_shapes", {})
+    return {str(name): tuple(int(dim) for dim in shape) for name, shape in dict(extra).items()}
+
+
+def resolve_policy_input_shapes(actor: torch.nn.Module, obs) -> dict[str, tuple[int, ...]]:
+    """Return ONNX input shapes for env obs groups plus wrapper-declared extra inputs."""
+    groups = resolve_policy_observation_groups(actor, obs)
+    extra_input_shapes = resolve_policy_extra_input_shapes(actor)
+    shapes: dict[str, tuple[int, ...]] = {}
+    for name in groups:
+        if name in obs.keys():
+            shapes[name] = tuple(int(dim) for dim in obs[name].shape[1:])
+        elif name in extra_input_shapes:
+            shapes[name] = extra_input_shapes[name]
+        else:
+            raise KeyError(f"Policy input {name!r} is neither an env observation nor an extra input.")
+    return shapes
+
+
+class _LatentVIBPriorActionPolicy(torch.nn.Module):
+    """Export wrapper for ``action = decoder(prop, prior_mu(prop))``."""
+
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+        self.obs_groups = list(getattr(model, "state_groups", ["prop"]))
+
+    @property
+    def is_recurrent(self) -> bool:
+        return bool(getattr(self.model, "is_recurrent", False))
+
+    def forward(self, obs):
+        prior = self.model.encode_prior(obs)
+        actions = self.model.decode(obs, prior["prior_mu"])
+        return {"actions": actions}
+
+
+class _LatentVIBPosteriorActionPolicy(torch.nn.Module):
+    """Export wrapper for deterministic VIB posterior tracking actions."""
+
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+        self.obs_groups = list(getattr(model, "obs_groups", ["prop", "rbt_cmd_mf"]))
+
+    @property
+    def is_recurrent(self) -> bool:
+        return bool(getattr(self.model, "is_recurrent", False))
+
+    def forward(self, obs):
+        output = self.model(obs, train_mode=False)
+        return {"actions": output["actions"]}
+
+
+class _LatentVIBLatentInputActionPolicy(torch.nn.Module):
+    """Export wrapper for ``action = decoder(prop, z)`` with z supplied by deployment."""
+
+    def __init__(self, model: torch.nn.Module, input_name: str = "z"):
+        super().__init__()
+        self.model = model
+        self.latent_input_name = input_name
+        self.obs_groups = list(getattr(model, "state_groups", ["prop"])) + [self.latent_input_name]
+        self.extra_input_shapes = {self.latent_input_name: (int(getattr(model, "latent_dim")),)}
+
+    @property
+    def is_recurrent(self) -> bool:
+        return bool(getattr(self.model, "is_recurrent", False))
+
+    def forward(self, obs):
+        return {"actions": self.model.decode(obs, obs[self.latent_input_name])}
+
+
+class _LatentVIBPriorSampleActionPolicy(torch.nn.Module):
+    """Export wrapper for ``action = decoder(prop, prior_mu(prop) + prior_std(prop) * eps)``."""
+
+    def __init__(self, model: torch.nn.Module, input_name: str = "z"):
+        super().__init__()
+        self.model = model
+        self.latent_input_name = input_name
+        self.obs_groups = list(getattr(model, "state_groups", ["prop"])) + [self.latent_input_name]
+        self.extra_input_shapes = {self.latent_input_name: (int(getattr(model, "latent_dim")),)}
+
+    @property
+    def is_recurrent(self) -> bool:
+        return bool(getattr(self.model, "is_recurrent", False))
+
+    def forward(self, obs):
+        prior = self.model.encode_prior(obs)
+        latent = prior["prior_mu"] + torch.exp(prior["prior_log_std"]) * obs[self.latent_input_name]
+        return {"actions": self.model.decode(obs, latent)}
+
+
+def wrap_latent_vib_export_policy(policy: torch.nn.Module, mode: str) -> torch.nn.Module:
+    """Return an export-only wrapper for a distilled LatentVIB student."""
+    if mode in (None, "policy"):
+        return policy
+    if not hasattr(policy, "encode_prior") or not hasattr(policy, "decode"):
+        raise TypeError(f"vib_export_mode={mode!r} requires a LatentVIBModel-like policy.")
+    if mode == "prior_prop":
+        return _LatentVIBPriorActionPolicy(policy)
+    if mode == "task_posterior":
+        return _LatentVIBPosteriorActionPolicy(policy)
+    if mode in ("prior_sample", "random_z"):
+        return _LatentVIBPriorSampleActionPolicy(policy)
+    if mode == "latent_input":
+        return _LatentVIBLatentInputActionPolicy(policy)
+    raise ValueError(f"Unknown vib_export_mode: {mode!r}")
 
 
 # class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
@@ -171,7 +286,7 @@ class _GroupedOnnxMotionPolicyExporter(torch.nn.Module):
         self.verbose = verbose
         obs = env.get_observations().detach().cpu()
         self.input_names = resolve_policy_observation_groups(actor, obs)
-        self.input_shapes = {name: tuple(obs[name].shape[1:]) for name in self.input_names}
+        self.input_shapes = resolve_policy_input_shapes(actor, obs)
 
     def forward(self, *inputs: torch.Tensor) -> torch.Tensor:
         from tensordict import TensorDict

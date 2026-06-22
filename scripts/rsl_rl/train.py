@@ -25,11 +25,23 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
-parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
+parser.add_argument("--registry_name", type=str, default="test1", help="The name of the wand registry.")
 parser.add_argument("--resume_path", type=str, default=None, help="Path to the model file.")
+parser.add_argument("--resume_primitive_path", type=str, default=None, help="Path to the frozen primitive model file.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
 parser.add_argument("--dataset_txt", type=str, default=None, help="Path to the motion dataset_txt.")
 parser.add_argument("--smpl_file_path", type=str, default=None, help="Path to the SMPL file.")
+parser.add_argument("--pairs_jsonl", type=str, default=None, help="Path to paired terrain-motion manifest.")
+parser.add_argument(
+    "--flat_dataset_txt", type=str, default=None, help="Path to flat motion dataset_txt for mixed tasks."
+)
+parser.add_argument("--flat_env_ratio", type=float, default=None, help="Flat-domain env ratio for mixed tasks.")
+parser.add_argument(
+    "--domain_separator_cell_count",
+    type=int,
+    default=None,
+    help="Ground-only terrain cells inserted between mixed domains.",
+)
 
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
@@ -90,16 +102,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    motion_cfg = getattr(getattr(env_cfg, "commands", None), "motion", None)
+    if args_cli.resume_primitive_path is not None:
+        if not hasattr(agent_cfg.algorithm, "primitive_checkpoint_path"):
+            raise ValueError("--resume_primitive_path is only supported by algorithms with primitive_checkpoint_path.")
+        print(f"[INFO]: Using primitive checkpoint from CLI: {args_cli.resume_primitive_path}")
+        agent_cfg.algorithm.primitive_checkpoint_path = args_cli.resume_primitive_path
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
     if args_cli.distributed:
         env_cfg.sim.device = args_cli.device
-
-        env_cfg.commands.motion.distributed = True
-        env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
-        env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
 
         agent_cfg.device = args_cli.device
         # set seed to have diversity in different threads
@@ -121,18 +135,52 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # import wandb
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
-    env_cfg.commands.motion.motion_file = args_cli.motion_file
-    if args_cli.dataset_txt is not None:
+    if args_cli.motion_file:
+        if motion_cfg is None:
+            raise ValueError("--motion_file is only supported by env configs with a motion command.")
+        motion_cfg.motion_file = args_cli.motion_file
+    if args_cli.dataset_txt:
+        if motion_cfg is None:
+            raise ValueError("--dataset_txt is only supported by env configs with a motion command.")
         print(f"[INFO]: Using motion file filter from CLI: {args_cli.dataset_txt}")
-        env_cfg.commands.motion.dataset_txt = args_cli.dataset_txt
-        print(
-            "[INFO]: Overriding motion file filter in the environment config with:"
-            f" {env_cfg.commands.motion.dataset_txt}"
-        )
+        motion_cfg.dataset_txt = args_cli.dataset_txt
+        print(f"[INFO]: Overriding motion file filter in the environment config with: {motion_cfg.dataset_txt}")
+    if args_cli.pairs_jsonl:
+        if not hasattr(env_cfg, "pairs_jsonl"):
+            raise ValueError("--pairs_jsonl is only supported by env configs with a pairs_jsonl field.")
+        print(f"[INFO]: Using paired terrain manifest from CLI: {args_cli.pairs_jsonl}")
+        env_cfg.pairs_jsonl = args_cli.pairs_jsonl
+        if hasattr(env_cfg, "configure_pairs"):
+            env_cfg.configure_pairs()
+        elif motion_cfg is not None and hasattr(motion_cfg, "pairs_jsonl"):
+            motion_cfg.pairs_jsonl = args_cli.pairs_jsonl
+    if args_cli.flat_dataset_txt:
+        if not hasattr(env_cfg, "flat_dataset_txt"):
+            raise ValueError("--flat_dataset_txt is only supported by mixed terrain env configs.")
+        print(f"[INFO]: Using flat dataset from CLI: {args_cli.flat_dataset_txt}")
+        env_cfg.flat_dataset_txt = args_cli.flat_dataset_txt
+    if args_cli.flat_env_ratio is not None:
+        if not hasattr(env_cfg, "flat_env_ratio"):
+            raise ValueError("--flat_env_ratio is only supported by mixed terrain env configs.")
+        print(f"[INFO]: Using flat env ratio from CLI: {args_cli.flat_env_ratio}")
+        env_cfg.flat_env_ratio = args_cli.flat_env_ratio
+    if args_cli.domain_separator_cell_count is not None:
+        if not hasattr(env_cfg, "domain_separator_cell_count"):
+            raise ValueError("--domain_separator_cell_count is only supported by mixed terrain env configs.")
+        print(f"[INFO]: Using mixed domain separator cells from CLI: {args_cli.domain_separator_cell_count}")
+        env_cfg.domain_separator_cell_count = args_cli.domain_separator_cell_count
+    if hasattr(env_cfg, "configure_domains"):
+        env_cfg.configure_domains()
+    if args_cli.distributed and motion_cfg is not None:
+        motion_cfg.distributed = True
+        motion_cfg.local_rank = int(os.getenv("LOCAL_RANK", "0"))
+        motion_cfg.total_rank = int(os.getenv("WORLD_SIZE", "1"))
     if args_cli.smpl_file_path is not None:
+        if motion_cfg is None:
+            raise ValueError("--smpl_file_path is only supported by env configs with a motion command.")
         print(f"[INFO]: Using SMPL file from CLI: {args_cli.smpl_file_path}")
-        env_cfg.commands.motion.smpl_file_path = args_cli.smpl_file_path
-        print(f"[INFO]: Overriding SMPL file in the environment config with: {env_cfg.commands.motion.smpl_file_path}")
+        motion_cfg.smpl_file_path = args_cli.smpl_file_path
+        print(f"[INFO]: Overriding SMPL file in the environment config with: {motion_cfg.smpl_file_path}")
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -142,7 +190,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
-    env_cfg.commands.motion.log_run_name = log_dir
+    if motion_cfg is not None:
+        motion_cfg.log_run_name = log_dir
     log_dir = os.path.join(log_root_path, log_dir)
 
     # create isaac environment
@@ -179,8 +228,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
-    # runner.load("/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_3500.pt")
-
     # dump the configuration into log-directory
     # dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     # dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)

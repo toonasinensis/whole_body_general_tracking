@@ -13,7 +13,7 @@ SMPL_FILE_PATH="${SMPL_FILE_PATH:-}"
 ENCODER_MODE="${ENCODER_MODE:-robot}"
 ONNX_DIR="${ONNX_DIR:-$(dirname "${RESUME_PATH}")/exported}"
 ONNX_FILENAME="${ONNX_FILENAME:-policy.onnx}"
-ONNX_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_rlbc/2026-06-04_12-09-05/exported/policy.onnx"
+ONNX_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/exported_onnx/model_10500distill/vib_prior_sample.onnx"
 EXPORT_ONNX="${EXPORT_ONNX:-0}"
 RENDER="${RENDER:-1}"
 SHOW_REFERENCE="${SHOW_REFERENCE:-1}"
@@ -103,3 +103,24 @@ ${SIM2SIM_PYTHON} whole_body_tracking/scripts/deploy/sim2sim_g1_mujoco.py \
   "${REFERENCE_ARGS[@]}" \
   "${METRICS_ARGS[@]}" \
   "$@"
+
+
+
+
+ cd /home/thl/wt_wbc/wbc_parkour
+
+source /home/thl/miniconda3/etc/profile.d/conda.sh
+conda activate my_env
+source /home/thl/isaacsim5.1/setup_conda.sh
+
+PYTHONPATH=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/scripts/deploy \
+python scripts/deploy/sim2sim_g1_mujoco.py \
+  --onnx_path /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/exported_onnx/model_10500distill/vib_prior_sample.onnx \
+  --motion_file /home/thl/Documents/g1-mimic-npz \
+  --dataset_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/lafan.txt \
+  --motion_index 0 \
+  --steps 20000 \
+  --render \
+  --latent_seed 34556 \
+  --latent_std 1.0 \
+  --latent_resample_interval 100

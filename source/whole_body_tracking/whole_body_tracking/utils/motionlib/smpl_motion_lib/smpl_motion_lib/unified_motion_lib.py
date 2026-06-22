@@ -145,19 +145,28 @@ class UnifiedMotionLib:
         Fields consumed from cfg:
             motion_file, max_motion_num, dataset_txt
             eval_mode, distributed, local_rank, total_rank
+            preserve_dataset_order (optional)
             smpl_file_path  (optional — omit or set to None/empty for robot-only)
         """
         target_fps = 50.0
+        preserve_dataset_order = bool(getattr(cfg, "preserve_dataset_order", False))
 
-        npz_files = self._find_npz_files(
-            cfg.motion_file,
-            cfg.max_motion_num,
-            cfg.dataset_txt,
-            cfg.eval_mode,
-            cfg.distributed,
-            cfg.local_rank,
-            cfg.total_rank,
-        )
+        motion_files = getattr(cfg, "motion_files", None)
+        if motion_files is not None:
+            npz_files = [str(Path(path).expanduser().resolve()) for path in motion_files]
+            if not npz_files:
+                raise FileNotFoundError("cfg.motion_files is empty")
+        else:
+            npz_files = self._find_npz_files(
+                cfg.motion_file,
+                cfg.max_motion_num,
+                cfg.dataset_txt,
+                cfg.eval_mode,
+                cfg.distributed,
+                cfg.local_rank,
+                cfg.total_rank,
+                preserve_dataset_order,
+            )
 
         smpl_dir = getattr(cfg, "smpl_file_path", None)
         if smpl_dir and Path(smpl_dir).is_dir():
@@ -180,6 +189,7 @@ class UnifiedMotionLib:
         distributed: bool,
         local_rank: int,
         total_rank: int,
+        preserve_dataset_order: bool = False,
     ) -> list[str]:
         """Discover and subset NPZ files according to sampling strategy.
 
@@ -213,8 +223,9 @@ class UnifiedMotionLib:
                 raise FileNotFoundError(
                     f"No valid .npz files found from dataset_txt={dataset_txt}. Skipped entries: {skipped}"
                 )
-            random.seed(42)
-            random.shuffle(npz_files)
+            if not preserve_dataset_order:
+                random.seed(42)
+                random.shuffle(npz_files)
         else:
             npz_files = sorted(str(p) for p in Path(dir_path).rglob("*.npz"))
             if not npz_files:

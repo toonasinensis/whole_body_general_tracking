@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import torch
 from typing import TYPE_CHECKING, Literal
 
@@ -7,6 +8,8 @@ import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs.mdp.events import _randomize_prop_by_op
 from isaaclab.managers import SceneEntityCfg
+
+from whole_body_tracking.terrains.paired_manifest import resolve_repo_path
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -52,6 +55,40 @@ def randomize_joint_default_pos(
         env.action_manager.get_term("joint_pos")._offset[env_ids, joint_ids] = pos
 
 
+def reset_default_joint_position_targets(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg,
+    action_name: str = "joint_pos",
+    update_offset: bool = False,
+) -> None:
+    """Keep position-action targets aligned with the current reset joint state."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    if env_ids is None:
+        env_ids = torch.arange(env.scene.num_envs, device=asset.device)
+    else:
+        env_ids = env_ids.to(device=asset.device, dtype=torch.long)
+    if env_ids.numel() == 0:
+        return
+
+    action_term = env.action_manager.get_term(action_name)
+    action_joint_names = getattr(action_term, "_joint_names", asset.joint_names)
+    action_joint_ids = torch.as_tensor(
+        [asset.joint_names.index(name) for name in action_joint_names],
+        device=asset.device,
+        dtype=torch.long,
+    )
+    joint_pos = asset.data.joint_pos[env_ids][:, action_joint_ids].clone()
+
+    if update_offset and hasattr(action_term, "_offset") and isinstance(action_term._offset, torch.Tensor):
+        action_term._offset[env_ids] = joint_pos
+    if hasattr(action_term, "_raw_actions"):
+        action_term._raw_actions[env_ids] = 0.0
+    if hasattr(action_term, "_processed_actions"):
+        action_term._processed_actions[env_ids] = joint_pos
+    asset.set_joint_position_target(joint_pos, joint_ids=action_joint_ids, env_ids=env_ids)
+
+
 def randomize_rigid_body_com(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor | None,
@@ -91,6 +128,215 @@ def randomize_rigid_body_com(
 
     # Set the new coms
     asset.root_physx_view.set_coms(coms, env_ids)
+
+
+class MotionStateResetManager:
+    """Load named npz motions and reset the robot from random motion frames."""
+
+    _instance: MotionStateResetManager | None = None
+
+    def __init__(self) -> None:
+        self._frames: dict[tuple[str, str, tuple[str, ...], str], dict[str, torch.Tensor]] = {}
+
+    @classmethod
+    def get(cls) -> MotionStateResetManager:
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def init(
+        self,
+        env: ManagerBasedEnv,
+        motion_dir: str,
+        asset_cfg: SceneEntityCfg,
+        root_body_name: str = "pelvis",
+        root_min_height: float | None = None,
+    ) -> None:
+        asset: Articulation = env.scene[asset_cfg.name]
+        self._load_frames(env, motion_dir, asset, root_body_name, root_min_height)
+
+    def reset(
+        self,
+        env: ManagerBasedEnv,
+        env_ids: torch.Tensor | None,
+        motion_dir: str,
+        asset_cfg: SceneEntityCfg,
+        root_body_name: str = "pelvis",
+        root_min_height: float | None = None,
+    ) -> None:
+        asset: Articulation = env.scene[asset_cfg.name]
+        frames = self._load_frames(env, motion_dir, asset, root_body_name, root_min_height)
+
+        if env_ids is None:
+            env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+        else:
+            env_ids = env_ids.to(device=env.device, dtype=torch.long)
+        if env_ids.numel() == 0:
+            return
+
+        frame_ids = torch.randint(0, frames["root_pos"].shape[0], (env_ids.numel(),), device=env.device)
+        root_pos = frames["root_pos"][frame_ids].clone()
+        root_quat = frames["root_quat"][frame_ids]
+        root_lin_vel = frames["root_lin_vel"][frame_ids]
+        root_ang_vel = frames["root_ang_vel"][frame_ids]
+        joint_pos = frames["joint_pos"][frame_ids]
+        joint_vel = frames["joint_vel"][frame_ids]
+
+        env_origins = env.scene.env_origins[env_ids]
+        root_pos[:, 0:2] = env_origins[:, 0:2]
+        root_pos[:, 2] = env_origins[:, 2] + root_pos[:, 2]
+
+        soft_joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids]
+        joint_pos = torch.clamp(joint_pos, soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1])
+        joint_vel_limits = asset.data.joint_vel_limits[env_ids]
+        joint_vel = torch.clamp(joint_vel, -joint_vel_limits, joint_vel_limits)
+
+        root_state = torch.cat((root_pos, root_quat, root_lin_vel, root_ang_vel), dim=-1)
+        asset.write_root_link_state_to_sim(root_state, env_ids=env_ids)
+        asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        self._record_last_reset_motion(env, env_ids, root_lin_vel, root_quat)
+
+        action_term = env.action_manager.get_term("joint_pos")
+        if hasattr(action_term, "_processed_actions"):
+            action_joint_ids = getattr(action_term, "_joint_ids", slice(None))
+            if action_joint_ids == slice(None):
+                action_joint_ids = torch.arange(asset.num_joints, device=env.device, dtype=torch.long)
+            else:
+                action_joint_ids = torch.as_tensor(action_joint_ids, device=env.device, dtype=torch.long)
+            motion_joint_ids = torch.as_tensor(
+                [asset.joint_names.index(action_term._joint_names[i]) for i in range(len(action_term._joint_names))],
+                device=env.device,
+                dtype=torch.long,
+            )
+            selected_joint_pos = joint_pos[:, motion_joint_ids]
+            if hasattr(action_term, "_raw_actions"):
+                action_term._raw_actions[env_ids] = 0.0
+            action_term._processed_actions[env_ids] = selected_joint_pos
+            asset.set_joint_position_target(selected_joint_pos, joint_ids=action_joint_ids, env_ids=env_ids)
+
+    def _load_frames(
+        self,
+        env: ManagerBasedEnv,
+        motion_dir: str,
+        asset: Articulation,
+        root_body_name: str,
+        root_min_height: float | None,
+    ) -> dict[str, torch.Tensor]:
+        motion_path = resolve_repo_path(motion_dir)
+        key = (str(motion_path), str(env.device), tuple(asset.joint_names), root_body_name, str(root_min_height))
+        if key in self._frames:
+            return self._frames[key]
+        if not motion_path.is_dir():
+            raise FileNotFoundError(f"Motion reset directory does not exist: {motion_path}")
+
+        npz_files = sorted(motion_path.glob("*.npz"))
+        if not npz_files:
+            raise FileNotFoundError(f"No npz motion files found in {motion_path}")
+
+        root_pos_list = []
+        root_quat_list = []
+        root_lin_vel_list = []
+        root_ang_vel_list = []
+        joint_pos_list = []
+        joint_vel_list = []
+
+        for npz_file in npz_files:
+            data = np.load(npz_file, allow_pickle=True)
+            joint_names = [str(name) for name in data["joint_names"]]
+            body_names = [str(name) for name in data["body_names"]]
+            missing_joints = [name for name in asset.joint_names if name not in joint_names]
+            if missing_joints:
+                raise ValueError(f"{npz_file} is missing robot joints required for motion reset: {missing_joints[:8]}")
+            if root_body_name not in body_names:
+                raise ValueError(f"{npz_file} is missing root body {root_body_name!r}")
+
+            root_body_id = body_names.index(root_body_name)
+            frame_mask = np.ones(data["body_pos_w"].shape[0], dtype=bool)
+            if root_min_height is not None:
+                frame_mask &= data["body_pos_w"][:, root_body_id, 2] >= float(root_min_height)
+            if not np.any(frame_mask):
+                raise ValueError(f"{npz_file} has no reset frames after root_min_height={root_min_height} filtering.")
+
+            joint_ids = [joint_names.index(name) for name in asset.joint_names]
+            root_pos_list.append(torch.as_tensor(data["body_pos_w"][frame_mask, root_body_id], device=env.device))
+            root_quat_list.append(torch.as_tensor(data["body_quat_w"][frame_mask, root_body_id], device=env.device))
+            root_lin_vel_list.append(
+                torch.as_tensor(data["body_lin_vel_w"][frame_mask, root_body_id], device=env.device)
+            )
+            root_ang_vel_list.append(
+                torch.as_tensor(data["body_ang_vel_w"][frame_mask, root_body_id], device=env.device)
+            )
+            joint_pos_list.append(torch.as_tensor(data["joint_pos"][frame_mask][:, joint_ids], device=env.device))
+            joint_vel_list.append(torch.as_tensor(data["joint_vel"][frame_mask][:, joint_ids], device=env.device))
+
+        frames = {
+            "root_pos": torch.cat(root_pos_list, dim=0).float(),
+            "root_quat": torch.cat(root_quat_list, dim=0).float(),
+            "root_lin_vel": torch.cat(root_lin_vel_list, dim=0).float(),
+            "root_ang_vel": torch.cat(root_ang_vel_list, dim=0).float(),
+            "joint_pos": torch.cat(joint_pos_list, dim=0).float(),
+            "joint_vel": torch.cat(joint_vel_list, dim=0).float(),
+        }
+        self._frames[key] = frames
+        print(
+            "[MotionStateResetManager] Loaded "
+            f"{len(npz_files)} clips, {frames['root_pos'].shape[0]} frames from {motion_path}"
+            f" (root_min_height={root_min_height})"
+        )
+        return frames
+
+    @staticmethod
+    def _record_last_reset_motion(
+        env: ManagerBasedEnv,
+        env_ids: torch.Tensor,
+        root_lin_vel: torch.Tensor,
+        root_quat: torch.Tensor,
+    ) -> None:
+        if not hasattr(env, "_last_motion_reset_root_lin_vel_w"):
+            env._last_motion_reset_root_lin_vel_w = torch.zeros(env.num_envs, 3, device=env.device)
+        if not hasattr(env, "_last_motion_reset_root_quat_w"):
+            env._last_motion_reset_root_quat_w = torch.zeros(env.num_envs, 4, device=env.device)
+
+        env._last_motion_reset_root_lin_vel_w[env_ids] = root_lin_vel
+        env._last_motion_reset_root_quat_w[env_ids] = root_quat
+
+
+def init_motion_state_reset(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    motion_dir: str,
+    asset_cfg: SceneEntityCfg,
+    root_body_name: str = "pelvis",
+    root_min_height: float | None = None,
+) -> None:
+    """Startup event that loads npz motion frames for reset-time state initialization."""
+    del env_ids
+    MotionStateResetManager.get().init(
+        env=env,
+        motion_dir=motion_dir,
+        asset_cfg=asset_cfg,
+        root_body_name=root_body_name,
+        root_min_height=root_min_height,
+    )
+
+
+def reset_from_motion_state(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    motion_dir: str,
+    asset_cfg: SceneEntityCfg,
+    root_body_name: str = "pelvis",
+    root_min_height: float | None = None,
+) -> None:
+    """Reset the robot root and joints from a random named-npz motion frame."""
+    MotionStateResetManager.get().reset(
+        env=env,
+        env_ids=env_ids,
+        motion_dir=motion_dir,
+        asset_cfg=asset_cfg,
+        root_body_name=root_body_name,
+        root_min_height=root_min_height,
+    )
 
 
 def assist_fallen_robots_with_upward_force(

@@ -58,12 +58,12 @@ class CriticCfg:
 #         "init_std": 1.0,
 #         "std_type": "scalar",
 #     }
-#     backbone: dict = {
-#         "class_name": "MyMLPModel",
-#         "hidden_dims": [4096, 2048, 1024, 512, 256],
-#         "activation": "swish",
-#         "obs_normalization": True,
-#     }
+# backbone: dict = {
+#     "class_name": "MyMLPModel",
+#     "hidden_dims": [4096, 2048, 1024, 512, 256],
+#     "activation": "swish",
+#     "obs_normalization": True,
+# }
 
 
 @configclass
@@ -142,6 +142,7 @@ class MyPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     lam: float = 0.95
     desired_kl: float = 0.01
     max_grad_norm: float = 1.0
+    min_policy_std: list[float] | float | None = None
     plugins: list = []
 
 
@@ -198,6 +199,16 @@ class G1FlatFMPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 
 @configclass
+class G1PairedTerrainRunnerCfg(G1FlatFMPPORunnerCfg):
+    experiment_name = "g1_paired_terrain"
+
+
+@configclass
+class G1MixedFlatMeshRunnerCfg(G1FlatFMPPORunnerCfg):
+    experiment_name = "g1_mixed_flat_mesh"
+
+
+@configclass
 class xwlActorShellCfg:
     class_name: str = "ActorModel"
     distribution_cfg: dict = {
@@ -241,6 +252,7 @@ class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
+        min_policy_std=[0.05] * 29,
         plugins=[
             {
                 "class_name": "AMPPlugin",
@@ -251,7 +263,6 @@ class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
                 "amp_replay_buffer_size": 200000,
                 "amp_body_names": G1_AMP_BODY_NAMES,
                 "amp_anchor_name": G1_AMP_ANCHOR_BODY_NAME,
-                "min_normalized_std": [0.05] * 29,
             }
         ],
     )
@@ -284,7 +295,6 @@ class G1FlatRLBCDRunnerCfg(G1FlatAMPRunnerCfg):
             #     "amp_replay_buffer_size": 200000,
             #     "amp_body_names": G1_AMP_BODY_NAMES,
             #     "amp_anchor_name": G1_AMP_ANCHOR_BODY_NAME,
-            #     "min_normalized_std": [0.05] * 29,
             # },
             {
                 "class_name": "TeacherKLPlugin",

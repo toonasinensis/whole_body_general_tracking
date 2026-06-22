@@ -31,3 +31,50 @@ def test_grouped_onnx_contract_accepts_required_inputs() -> None:
     }
 
     validate_grouped_onnx_contract(["prop", "rbt_cmd_mf", "smpl_cmd_mf"], meta)
+
+
+def test_grouped_onnx_contract_accepts_prop_only_policy() -> None:
+    meta = {
+        "input_names": ["prop"],
+        "observation_shapes": {"prop": [10]},
+    }
+
+    validate_grouped_onnx_contract(["prop"], meta)
+
+
+def test_grouped_onnx_contract_accepts_task_policy_without_smpl() -> None:
+    meta = {
+        "input_names": ["prop", "rbt_cmd_mf"],
+        "observation_shapes": {"prop": [10], "rbt_cmd_mf": [20]},
+    }
+
+    validate_grouped_onnx_contract(["prop", "rbt_cmd_mf"], meta)
+
+
+def test_grouped_onnx_contract_accepts_random_latent_input() -> None:
+    meta = {
+        "input_names": ["prop", "z"],
+        "observation_shapes": {"prop": [10], "z": [64]},
+    }
+
+    validate_grouped_onnx_contract(["prop", "z"], meta)
+
+
+def test_grouped_onnx_contract_rejects_missing_prop() -> None:
+    meta = {
+        "input_names": ["rbt_cmd_mf"],
+        "observation_shapes": {"rbt_cmd_mf": [20]},
+    }
+
+    with pytest.raises(ValueError, match="requires ONNX input 'prop'"):
+        validate_grouped_onnx_contract(["rbt_cmd_mf"], meta)
+
+
+def test_grouped_onnx_contract_rejects_unsupported_input() -> None:
+    meta = {
+        "input_names": ["prop", "latent"],
+        "observation_shapes": {"prop": [10], "latent": [4]},
+    }
+
+    with pytest.raises(ValueError, match="unsupported"):
+        validate_grouped_onnx_contract(["prop", "latent"], meta)

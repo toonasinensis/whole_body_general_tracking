@@ -107,6 +107,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no_print_joint_map", action="store_false", dest="print_joint_map")
     parser.add_argument("--dry_run", action="store_true", help="Build and validate one observation, then exit.")
     parser.add_argument(
+        "--latent_sample_mode",
+        choices=["normal", "zero"],
+        default="normal",
+        help="How to fill ONNX input 'z' when the policy exposes a latent input.",
+    )
+    parser.add_argument("--latent_mean", type=float, default=0.0, help="Mean for normal latent z sampling.")
+    parser.add_argument(
+        "--latent_std", type=float, default=1.0, help="Standard deviation for normal latent z sampling."
+    )
+    parser.add_argument(
+        "--latent_seed",
+        type=int,
+        default=None,
+        help="Random seed for latent z sampling. Omit for non-deterministic samples.",
+    )
+    parser.add_argument(
+        "--latent_resample_interval",
+        type=int,
+        default=1,
+        help="Resample latent z every N policy steps. Values >1 hold z longer for smoother motion.",
+    )
+    parser.add_argument(
         "--log_interval",
         type=int,
         default=100,
@@ -126,9 +148,65 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.no_render:
         args.render = False
+    if args.latent_std < 0.0:
+        raise ValueError("--latent_std must be non-negative.")
+    if args.latent_resample_interval < 1:
+        raise ValueError("--latent_resample_interval must be >= 1.")
     if args.dataset_txt is not None and not args.dataset_txt.strip():
         args.dataset_txt = None
     return args
+
+
+class LatentInputSampler:
+    """Adds a sampled latent/noise input for ONNX policies exported with input 'z'."""
+
+    def __init__(
+        self,
+        input_names: list[str],
+        meta: dict,
+        *,
+        mean: float,
+        std: float,
+        seed: int | None,
+        resample_interval: int,
+        sample_mode: str,
+    ) -> None:
+        self.enabled = "z" in input_names
+        self.mean = float(mean)
+        self.std = float(std)
+        self.resample_interval = max(1, int(resample_interval))
+        self.sample_mode = sample_mode
+        self.rng = np.random.default_rng(seed)
+        self.current: np.ndarray | None = None
+        self.shape: tuple[int, ...] | None = None
+        if self.enabled:
+            shapes = meta.get("observation_shapes", {})
+            if "z" not in shapes:
+                raise ValueError("ONNX input 'z' requires metadata observation_shapes['z']. Re-export the ONNX.")
+            self.shape = (1, *tuple(int(dim) for dim in shapes["z"]))
+
+    def print_config(self) -> None:
+        if not self.enabled:
+            return
+        print(
+            "[INFO] Latent/noise z sampler: "
+            f"mode={self.sample_mode}, shape={self.shape}, mean={self.mean}, std={self.std}, "
+            f"resample_interval={self.resample_interval}"
+        )
+
+    def reset(self) -> None:
+        self.current = None
+
+    def add_to_obs(self, obs: dict[str, np.ndarray], step: int) -> dict[str, np.ndarray]:
+        if not self.enabled:
+            return obs
+        assert self.shape is not None
+        if self.sample_mode == "zero":
+            self.current = np.zeros(self.shape, dtype=np.float32)
+        elif self.current is None or step % self.resample_interval == 0:
+            self.current = self.rng.normal(self.mean, self.std, size=self.shape).astype(np.float32)
+        obs["z"] = self.current
+        return obs
 
 
 def print_motion_alignment_debug(
@@ -344,7 +422,7 @@ def main() -> None:
     meta = load_metadata(args.onnx_path)
     input_names = onnx_input_names(args.onnx_path)
     validate_grouped_onnx_contract(input_names, meta)
-    if meta.get("encoder_mode") not in (None, "robot", "encoder_g1", "g1"):
+    if "smpl_cmd_mf" in input_names and meta.get("encoder_mode") not in (None, "robot", "encoder_g1", "g1"):
         print(
             f"[WARN] ONNX encoder_mode={meta.get('encoder_mode')} needs non-zero smpl_cmd_mf. "
             "This script currently feeds zero SMPL observations."
@@ -413,6 +491,16 @@ def main() -> None:
 
     decimation = args.decimation or int(meta.get("decimation", 1))
     reference_update_interval = max(1, int(args.reference_update_interval))
+    latent_sampler = LatentInputSampler(
+        input_names,
+        meta,
+        mean=args.latent_mean,
+        std=args.latent_std,
+        seed=args.latent_seed,
+        resample_interval=args.latent_resample_interval,
+        sample_mode=args.latent_sample_mode,
+    )
+    latent_sampler.print_config()
     # print_obs_layout(meta, prop_history, input_names)
     if args.dry_run:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
@@ -420,6 +508,7 @@ def main() -> None:
         obs = build_obs(
             data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
         )
+        latent_sampler.add_to_obs(obs, step=0)
         validate_inputs(obs, input_names, meta)
         if args.debug_motion_alignment:
             print_motion_alignment_debug(
@@ -444,6 +533,7 @@ def main() -> None:
         debug_obs = build_obs(
             data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history
         )
+        latent_sampler.add_to_obs(debug_obs, step=0)
         validate_inputs(debug_obs, input_names, meta)
         debug_action = policy.run(debug_obs)
         debug_target = action_to_target(debug_action, action_scale, action_offset)
@@ -511,6 +601,7 @@ def main() -> None:
 
             last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
             prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+            latent_sampler.reset()
             # start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
             rollout_steps = min(max(int(args.steps), 0), int(motion.num_frames) - start_frame)
             accumulator = MotionMetricAccumulator(
@@ -532,6 +623,7 @@ def main() -> None:
                 obs = build_obs(
                     data, motion, t, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
                 )
+                latent_sampler.add_to_obs(obs, step=step)
                 validate_inputs(obs, input_names, meta)
                 raw_action = policy.run(obs)
                 target = action_to_target(raw_action, action_scale, action_offset)

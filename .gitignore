@@ -8,6 +8,8 @@ utilities/*
 # Omniverse
 **/*.dmp
 **/.thumbs
+**/*.kit
+**/*.tmp.usd
 
 # Python
 .DS_Store
@@ -37,6 +39,8 @@ docker/artifacts/
 *.tmp
 
 train_logs/*
+scripts/omniretarget/pydeps/
+scripts/omniretarget/kit_app/
 # Isaac-Sim packman
 _isaac_sim*
 _repo

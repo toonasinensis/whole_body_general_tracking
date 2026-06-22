@@ -5,6 +5,7 @@ import numpy as np
 import sys
 import torch
 from pathlib import Path
+from tensordict import TensorDict
 
 import onnx
 from onnx import TensorProto, helper
@@ -12,11 +13,14 @@ from sim2sim_g1.mujoco_robot import action_to_target
 from sim2sim_g1.observations import ImuReader, TermMajorHistory, prop_terms_from_metadata
 from sim2sim_g1.onnx_policy import onnx_input_names, validate_grouped_onnx_contract
 from sim2sim_g1.viewer import ReferenceMotionPlayer
+from sim2sim_g1_mujoco import LatentInputSampler
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 RSL_RL_DIR = REPO_ROOT.parent / "rsl_rl"
 if str(RSL_RL_DIR) not in sys.path:
     sys.path.insert(0, str(RSL_RL_DIR))
+from rsl_rl.models import LatentVIBModel  # noqa: E402
+
 EXPORTER_PATH = REPO_ROOT / "source" / "whole_body_tracking" / "whole_body_tracking" / "utils" / "exporter.py"
 SPEC = importlib.util.spec_from_file_location("wbt_exporter", EXPORTER_PATH)
 exporter = importlib.util.module_from_spec(SPEC)
@@ -24,6 +28,8 @@ assert SPEC is not None and SPEC.loader is not None
 SPEC.loader.exec_module(exporter)
 append_onnx_metadata = exporter.append_onnx_metadata
 collect_observation_terms_metadata = exporter.collect_observation_terms_metadata
+resolve_policy_input_shapes = exporter.resolve_policy_input_shapes
+wrap_latent_vib_export_policy = exporter.wrap_latent_vib_export_policy
 
 
 def test_legacy_import_surface_smoke() -> None:
@@ -153,3 +159,94 @@ def test_collect_observation_terms_metadata_records_term_order_and_shapes() -> N
     assert meta["prop"]["terms"][0]["shape"] == [290]
     assert meta["prop"]["terms"][0]["base_shape"] == [29]
     assert meta["prop"]["terms"][0]["history_length"] == 10
+
+
+def test_latent_vib_export_wrappers_expose_dynamic_input_groups() -> None:
+    obs = TensorDict(
+        {
+            "prop": torch.randn(2, 5),
+            "rbt_cmd_mf": torch.randn(2, 7),
+        },
+        batch_size=[2],
+    )
+    model = LatentVIBModel(
+        obs,
+        {"student": ["prop", "rbt_cmd_mf"]},
+        "student",
+        output_dim=4,
+        latent_dim=3,
+        posterior_hidden_dims=[8],
+        prior_hidden_dims=[8],
+        decoder_hidden_dims=[8],
+        activation="elu",
+        obs_normalization=True,
+    ).eval()
+
+    prior_policy = wrap_latent_vib_export_policy(model, "prior_prop")
+    prior_obs = TensorDict({"prop": obs["prop"]}, batch_size=[2])
+    prior_out = prior_policy(prior_obs)
+
+    task_policy = wrap_latent_vib_export_policy(model, "task_posterior")
+    task_out = task_policy(obs)
+
+    prior_sample_policy = wrap_latent_vib_export_policy(model, "prior_sample")
+    prior_sample_obs = TensorDict({"prop": obs["prop"], "z": torch.randn(2, 3)}, batch_size=[2])
+    prior_sample_out = prior_sample_policy(prior_sample_obs)
+    prior_sample_shapes = resolve_policy_input_shapes(
+        prior_sample_policy, TensorDict({"prop": obs["prop"]}, batch_size=[2])
+    )
+
+    latent_input_policy = wrap_latent_vib_export_policy(model, "latent_input")
+    latent_input_out = latent_input_policy(prior_sample_obs)
+
+    assert prior_policy.obs_groups == ["prop"]
+    assert task_policy.obs_groups == ["prop", "rbt_cmd_mf"]
+    assert prior_sample_policy.obs_groups == ["prop", "z"]
+    assert prior_sample_policy.extra_input_shapes == {"z": (3,)}
+    assert prior_sample_shapes == {"prop": (5,), "z": (3,)}
+    assert latent_input_policy.obs_groups == ["prop", "z"]
+    assert prior_out["actions"].shape == (2, 4)
+    assert task_out["actions"].shape == (2, 4)
+    assert prior_sample_out["actions"].shape == (2, 4)
+    assert latent_input_out["actions"].shape == (2, 4)
+
+
+def test_latent_input_sampler_resamples_and_holds() -> None:
+    sampler = LatentInputSampler(
+        ["prop", "z"],
+        {"observation_shapes": {"z": [3]}},
+        mean=0.0,
+        std=1.0,
+        seed=123,
+        resample_interval=2,
+        sample_mode="normal",
+    )
+    obs = {"prop": np.zeros((1, 5), dtype=np.float32)}
+
+    sampler.add_to_obs(obs, step=0)
+    z0 = obs["z"].copy()
+    sampler.add_to_obs(obs, step=1)
+    z1 = obs["z"].copy()
+    sampler.add_to_obs(obs, step=2)
+    z2 = obs["z"].copy()
+
+    assert z0.shape == (1, 3)
+    assert np.array_equal(z0, z1)
+    assert not np.array_equal(z1, z2)
+
+
+def test_latent_input_sampler_zero_mode() -> None:
+    sampler = LatentInputSampler(
+        ["prop", "z"],
+        {"observation_shapes": {"z": [3]}},
+        mean=1.0,
+        std=1.0,
+        seed=123,
+        resample_interval=1,
+        sample_mode="zero",
+    )
+    obs = {"prop": np.zeros((1, 5), dtype=np.float32)}
+
+    sampler.add_to_obs(obs, step=0)
+
+    assert np.array_equal(obs["z"], np.zeros((1, 3), dtype=np.float32))

@@ -11,8 +11,10 @@ if TYPE_CHECKING:
 
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import ContactSensor
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
+from whole_body_tracking.tasks.tracking.mdp.heading_math import compute_height_filtered_contact_mask
 from whole_body_tracking.tasks.tracking.mdp.rewards import _get_body_indexes
 
 
@@ -179,3 +181,19 @@ def bad_motion_body_pos_z_only(
     error = torch.abs(command.body_pos_relative_w[:, body_indexes, -1] - command.robot_body_pos_w[:, body_indexes, -1])
     terminated = torch.any(error > threshold, dim=-1)
     return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
+
+
+def height_filtered_illegal_contact(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    threshold: float,
+    max_body_height: float,
+) -> torch.Tensor:
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    asset = env.scene[asset_cfg.name]
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    force_norm = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0]
+    body_z = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
+    is_contact = compute_height_filtered_contact_mask(force_norm, body_z, threshold, max_body_height)
+    return torch.any(is_contact, dim=1)

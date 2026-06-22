@@ -157,6 +157,24 @@ class STLTerrainGenerator(TerrainGenerator):
         self.terrain_origins[row, col] = origin + transform[:3, -1]
 
     def _get_terrain_mesh(self, cfg: TrimeshPlatformCfg) -> tuple[trimesh.Trimesh, np.ndarray]:
-        mesh = trimesh.load(cfg.stl_file_path).copy()
+        if cfg.stl_file_path is None:
+            mesh = trimesh.Trimesh()
+        else:
+            mesh = trimesh.load(cfg.stl_file_path, force="mesh").copy()
+        if cfg.add_ground_plane:
+            mesh = self._with_ground_plane(mesh, cfg)
         origin = np.array([0.0, 0.0, 0.0])  # 这个origin是复活点不是mesh位置
         return mesh, origin
+
+    def _with_ground_plane(self, mesh: trimesh.Trimesh, cfg: TrimeshPlatformCfg) -> trimesh.Trimesh:
+        ground_size = cfg.ground_size if cfg.ground_size is not None else self.cfg.size
+        ground_size = (float(ground_size[0]), float(ground_size[1]))
+        ground_thickness = float(cfg.ground_thickness)
+        if ground_size[0] <= 0.0 or ground_size[1] <= 0.0:
+            raise ValueError(f"ground_size must be positive, got {ground_size}")
+        if ground_thickness <= 0.0:
+            raise ValueError(f"ground_thickness must be positive, got {ground_thickness}")
+
+        ground = trimesh.creation.box(extents=(ground_size[0], ground_size[1], ground_thickness))
+        ground.apply_translation((0.0, 0.0, float(cfg.ground_z) - ground_thickness * 0.5))
+        return trimesh.util.concatenate([ground, mesh])

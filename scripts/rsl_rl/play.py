@@ -67,6 +67,13 @@ parser.add_argument(
 )
 parser.add_argument("--export_onnx", action="store_true", default=False, help="Export the loaded policy to ONNX.")
 parser.add_argument(
+    "--vib_export_mode",
+    type=str,
+    default="policy",
+    choices=["policy", "prior_prop", "task_posterior", "prior_sample", "random_z", "latent_input"],
+    help="Export mode for distilled LatentVIB policies.",
+)
+parser.add_argument(
     "--onnx_dir",
     type=str,
     default=None,
@@ -153,7 +160,9 @@ import whole_body_tracking.tasks  # noqa: F401
 from whole_body_tracking.utils.exporter import (  # noqa: F401
     collect_observation_terms_metadata,
     export_grouped_motion_policy_as_onnx,
+    resolve_policy_input_shapes,
     resolve_policy_observation_groups,
+    wrap_latent_vib_export_policy,
 )
 
 
@@ -271,6 +280,7 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
     robot = base_env.scene["robot"]
     obs = vec_env.get_observations()
     observation_groups = resolve_policy_observation_groups(policy, obs)
+    observation_shapes = resolve_policy_input_shapes(policy, obs)
     scale = _first_env_value(getattr(action_term, "_scale", 1.0))
     offset = _first_env_value(getattr(action_term, "_offset", 0.0))
     default_joint_pos = robot.data.default_joint_pos[0]
@@ -283,7 +293,7 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
         "input_names": observation_groups,
         "input_groups": observation_groups,
         "observation_groups": observation_groups,
-        "observation_shapes": {name: list(obs[name].shape[1:]) for name in observation_groups},
+        "observation_shapes": {name: list(shape) for name, shape in observation_shapes.items()},
         "observation_terms": collect_observation_terms_metadata(base_env, observation_groups),
         "action_joint_names": list(getattr(action_term, "_joint_names", robot.data.joint_names)),
         "robot_joint_names": list(robot.data.joint_names),
@@ -403,7 +413,8 @@ def main(  # noqa: C901
     env = RslRlVecEnvWrapper(env)
 
     # load previously trained model
-    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    runner_device = getattr(agent_cfg, "device", None) or getattr(args_cli, "device", None) or env.unwrapped.device
+    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=runner_device)
     ppo_runner.load(resume_path)
 
     # obtain the trained policy for inference
@@ -445,14 +456,17 @@ def main(  # noqa: C901
     onnx_policy_path = args_cli.onnx_path or os.path.join(export_model_dir, args_cli.onnx_filename)
     if args_cli.export_onnx:
         print(f"[INFO]: Exporting ONNX policy to: {onnx_policy_path}")
+        export_policy = wrap_latent_vib_export_policy(policy, args_cli.vib_export_mode)
+        export_metadata = _collect_onnx_metadata(
+            env, env.unwrapped, export_policy, effective_encoder_mode, effective_fsq_sample_mode
+        )
+        export_metadata["vib_export_mode"] = args_cli.vib_export_mode
         onnx_policy_path = export_grouped_motion_policy_as_onnx(
             env,
-            policy,
+            export_policy,
             path=export_model_dir,
             filename=args_cli.onnx_filename,
-            metadata=_collect_onnx_metadata(
-                env, env.unwrapped, policy, effective_encoder_mode, effective_fsq_sample_mode
-            ),
+            metadata=export_metadata,
         )
         print(f"[INFO]: Exported ONNX policy: {onnx_policy_path}")
         if args_cli.export_only:

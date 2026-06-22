@@ -12,7 +12,7 @@ set -euo pipefail
 # Override when needed, e.g. NPROC_PER_NODE=2 ./scripts/rsl_rl/train.sh
 #/home/xiechunyang/wt_ws/wt_wbc/dataset/smpl/smpl_filtered
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
-NUM_ENVS="${NUM_ENVS:-800}"
+NUM_ENVS="${NUM_ENVS:-8000}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29520}"
 
@@ -23,12 +23,12 @@ python -m torch.distributed.run \
   --master_port="${MASTER_PORT}" \
   scripts/rsl_rl/train.py \
   --registry_name=test1 \
-  --task=RLBC-G1 \
+  --task=AMP-G1 \
   --headless \
   --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file="/home/thl/Documents/g1-mimic-npz" \
-  --dataset_txt="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/lafan.txt"  \
-  --resume=True \
-  --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt" \
+  --dataset_txt="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/hard.txt"  \
+#   --resume=True \
+#   --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt" \
   # --encoder_mode=robot \

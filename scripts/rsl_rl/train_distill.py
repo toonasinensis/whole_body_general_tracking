@@ -28,6 +28,9 @@ parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy 
 parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
 parser.add_argument("--resume_teacher_path", type=str, default=None, help="Path to the teacher model file.")
 parser.add_argument("--resume_student_path", type=str, default=None, help="Path to the student model file.")
+parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument("--dataset_txt", type=str, default=None, help="Path to the motion dataset_txt.")
+parser.add_argument("--smpl_file_path", type=str, default=None, help="Path to the SMPL file.")
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
@@ -94,9 +97,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.distributed:
         env_cfg.sim.device = args_cli.device
 
-        # env_cfg.commands.motion.distributed = True
-        # env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
-        # env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
+        env_cfg.commands.motion.distributed = True
+        env_cfg.commands.motion.local_rank = int(os.getenv("LOCAL_RANK", "0"))
+        env_cfg.commands.motion.total_rank = int(os.getenv("WORLD_SIZE", "1"))
 
         agent_cfg.device = args_cli.device
         # set seed to have diversity in different threads
@@ -119,6 +122,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # api = wandb.Api()
     # artifact = api.artifact(registry_name)
     # env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+    if args_cli.motion_file is not None:
+        print(f"[INFO]: Using motion file from CLI: {args_cli.motion_file}")
+        env_cfg.commands.motion.motion_file = args_cli.motion_file
+        print(f"[INFO]: Overriding motion file in the environment config with: {env_cfg.commands.motion.motion_file}")
+    if args_cli.dataset_txt is not None:
+        print(f"[INFO]: Using motion file filter from CLI: {args_cli.dataset_txt}")
+        env_cfg.commands.motion.dataset_txt = args_cli.dataset_txt
+        print(
+            "[INFO]: Overriding motion file filter in the environment config with:"
+            f" {env_cfg.commands.motion.dataset_txt}"
+        )
+    if args_cli.smpl_file_path is not None:
+        print(f"[INFO]: Using SMPL file from CLI: {args_cli.smpl_file_path}")
+        env_cfg.commands.motion.smpl_file_path = args_cli.smpl_file_path
+        print(f"[INFO]: Overriding SMPL file in the environment config with: {env_cfg.commands.motion.smpl_file_path}")
+
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
