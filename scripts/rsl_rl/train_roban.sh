@@ -11,12 +11,26 @@ set -euo pipefail
 # Isaac-based training commonly runs one simulation process per GPU.
 # Override when needed, e.g. NPROC_PER_NODE=4 ./scripts/rsl_rl/train.sh
 #/home/xiechunyang/wt_ws/wt_wbc/dataset/smpl/smpl_filtered
-NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${PROJECT_ROOT}"
+
+NPROC_PER_NODE="${NPROC_PER_NODE:-7}"
 NUM_ENVS="${NUM_ENVS:-8192}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29520}"
 
-python -m torch.distributed.run \
+LOG_DIR="${PROJECT_ROOT}/logs/nohup"
+mkdir -p "${LOG_DIR}"
+TIMESTAMP="$(date +%Y-%m-%d_%H-%M-%S)"
+LOG_FILE="${LOG_DIR}/train_roban_${TIMESTAMP}.log"
+
+# --resume=True
+# --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt"
+# --encoder_mode=robot
+
+nohup python -m torch.distributed.run \
   --nnodes=1 \
   --nproc_per_node="${NPROC_PER_NODE}" \
   --master_addr="${MASTER_ADDR}" \
@@ -28,11 +42,13 @@ python -m torch.distributed.run \
   --distributed \
   --num_envs="${NUM_ENVS}" \
   --motion_file="data/omini_passed_npz_train" \
-  --dataset_txt="dataset_txt/omini_train.txt"  \
+  --dataset_txt="dataset_txt/omini_train.txt" \
   --logger wandb \
   --log_project_name=roban_amp \
-  # --resume=True \
-  # --resume_path="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_81000.pt" \
-  # --encoder_mode=robot \
+  > "${LOG_FILE}" 2>&1 &
 
-
+TRAIN_PID=$!
+echo "Training started in background."
+echo "  PID:      ${TRAIN_PID}"
+echo "  Log file: ${LOG_FILE}"
+echo "  Tail log: tail -f ${LOG_FILE}"
