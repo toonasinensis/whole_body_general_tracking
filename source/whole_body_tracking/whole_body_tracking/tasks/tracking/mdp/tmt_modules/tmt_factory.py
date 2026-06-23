@@ -29,23 +29,17 @@ def install_delayed_termination(
         return
 
     if use_motion_pose_range_mask:
-        command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
-        ratios = getattr(command_cfg, "pose_init_method_ratios", None)
-        if not ratios:
-            return
-        total_ratio = sum(max(0.0, float(ratio)) for ratio in ratios.values())
-        if total_ratio <= 0.0:
-            return
-
-        delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-        start = 0
-        items = list(ratios.items())
-        for index, (method, ratio) in enumerate(items):
-            ratio = max(0.0, float(ratio)) / total_ratio
-            end = env.num_envs if index == len(items) - 1 else start + int(env.num_envs * ratio)
-            if str(method) != "range":
-                delay_mask[start:end] = True
-            start = end
+        delay_mask = getattr(env, "_motion_pose_range_env_mask", None)
+        if delay_mask is None:
+            command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
+            pose_range_env_ratio = getattr(command_cfg, "pose_range_env_ratio", None)
+            if pose_range_env_ratio is None:
+                return
+            num_delay = int(env.num_envs * min(float(delay_reset_env_ratio), float(pose_range_env_ratio)))
+            delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+            delay_mask[:num_delay] = True
+        else:
+            delay_mask = delay_mask.to(device=env.device, dtype=torch.bool).clone()
     else:
         num_delay = int(env.num_envs * delay_reset_env_ratio)
         delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)

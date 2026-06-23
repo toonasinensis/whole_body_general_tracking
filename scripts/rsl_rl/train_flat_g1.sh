@@ -26,12 +26,12 @@ python -m torch.distributed.run \
   --master_port="${MASTER_PORT}" \
   scripts/rsl_rl/train.py \
   --registry_name=test1 \
-  --task=AMP-G1 \
+  --task=TR-G1 \
   --headless \
   --num_envs="${NUM_ENVS}" \
-  --motion_file="/home/kiki/workspace/motion_data/mimic_data/g1/lafan" \
-  --dataset_txt="dataset_txt/fall.txt"  \
+  --motion_file="/home/kiki/workspace/motion_data/mimic_data/g1/bones_seed" \
+  --dataset_txt="dataset_txt/quick.txt"  \
   --distributed \
   --resume=True \
-  --resume_path="logs/rsl_rl/g1_amp/mlp/model_15500.pt" \
+  --resume_path="logs/rsl_rl/g1_flat/2026-06-22_17-17-23/model_21000.pt" \
   # --encoder_mode=robot \

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}/rsl_rl${PYTHONPATH:+:${PYTHONPATH}}"
 
 python scripts/rsl_rl/play.py \
---task=Tracking-Flat-G1-v0 \
+--task=TR-G1 \
 --num_envs=40 \
---resume_path=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/model_4500.pt \
---motion_file=/home/thl/Documents/g1-mimic-npz \
---dataset_txt=/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/dataset_txt/fall.txt
+--resume_path=logs/rsl_rl/g1_flat/2026-06-22_17-17-23/model_21000.pt \
+--motion_file=/home/kiki/workspace/motion_data/mimic_data/g1/bones_seed \
+--dataset_txt=dataset_txt/quick.txt

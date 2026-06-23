@@ -710,8 +710,9 @@ class MotionCommandCfg(CommandTermCfg):
 
     # env classification
     pose_range: dict[str, tuple[float, float]] = {}
+    pose_range_env_ratio: float = 0.3
+    pose_range_init_mode: str = "range"
     pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
-    pose_init_method_ratios: dict[str, float] = {"lying": 0.3, "range": 0.7}
 
     # randomization configs
     velocity_range: dict[str, tuple[float, float]] = {}
@@ -724,8 +725,8 @@ class MotionCommandCfg(CommandTermCfg):
     adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
     motion_sampling_start_frame: int = 5
-    adaptive_sample_rewind_min_bins: int = 1
-    adaptive_sample_rewind_bins: int = 4
+    adaptive_sample_rewind_min_bins: int = 0
+    adaptive_sample_rewind_bins: int = 1
 
     failure_cap: bool = True
     failure_cap_beta: float = 200.0

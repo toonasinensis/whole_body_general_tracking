@@ -145,7 +145,7 @@ class PpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
 class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000000000000000
-    save_interval = 500
+    save_interval = 1000
     experiment_name = "g1_flat"
     empirical_normalization = True
 
@@ -222,7 +222,7 @@ class G1FlatAMPRunnerCfg(G1FlatFMPPORunnerCfg):
             {
                 "class_name": "AMPPlugin",
                 "amp_reward_coef": 0.1,
-                "amp_motion_files": "/home/lianwenkang/workspace/whole_body_general_tracking/dataset_txt/lafan/amp",
+                "amp_motion_files": "/home/kiki/workspace/verl_gwt/whole_body_general_tracking/data/g1/recovery",
                 "amp_task_reward_lerp": 0.75,
                 "amp_discr_hidden_dims": [1024, 1024, 512, 256],
                 "amp_replay_buffer_size": 200000,

@@ -21,43 +21,26 @@ class MotionCommandResetter:  #checked
         self.cfg = cfg
         self.robot = robot
         self.device = device
-        self._pose_init_method_env_ids: dict[str, torch.Tensor] = {}
-        self._pose_init_method_num_envs = -1
+        self._pose_range_env_mask: torch.Tensor | None = None
+        self._pose_range_env_mask_num_envs = -1
 
-    def _get_pose_init_method_env_ids(self, num_envs: int) -> dict[str, torch.Tensor]:
-        if self._pose_init_method_num_envs == num_envs:
-            return self._pose_init_method_env_ids
+    def _build_pose_range_env_mask(self, num_envs: int) -> torch.Tensor:
+        if self._pose_range_env_mask_num_envs == num_envs and self._pose_range_env_mask is not None:
+            return self._pose_range_env_mask
 
-        ratios = getattr(self.cfg, "pose_init_method_ratios", {"range": 1.0})
-        if not ratios:
-            ratios = {"range": 1.0}
+        ratio = float(max(0.0, min(1.0, self.cfg.pose_range_env_ratio)))
+        count = int(num_envs * ratio)
+        mask = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        if count > 0:
+            mask[:count] = True
 
-        total_ratio = sum(max(0.0, float(ratio)) for ratio in ratios.values())
-        if total_ratio <= 0.0:
-            ratios = {"range": 1.0}
-            total_ratio = 1.0
-
-        start = 0
-        method_env_ids: dict[str, torch.Tensor] = {}
-        items = list(ratios.items())
-        for index, (method, ratio) in enumerate(items):
-            ratio = max(0.0, float(ratio)) / total_ratio
-            end = num_envs if index == len(items) - 1 else start + int(num_envs * ratio)
-            method_env_ids[str(method)] = torch.arange(start, end, dtype=torch.long, device=self.device)
-            start = end
-
-        self._pose_init_method_env_ids = method_env_ids
-        self._pose_init_method_num_envs = num_envs
-        return method_env_ids
+        self._pose_range_env_mask = mask
+        self._pose_range_env_mask_num_envs = num_envs
+        return mask
 
     def build_recovery_assist_env_mask(self, num_envs: int) -> torch.Tensor:
-        """Return envs that use non-range pose initialization and may need recovery assist."""
-        method_env_ids = self._get_pose_init_method_env_ids(num_envs)
-        mask = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
-        for method, env_ids in method_env_ids.items():
-            if method != "range":
-                mask[env_ids] = True
-        return mask
+        """Return envs that receive pose-range reset randomization."""
+        return self._build_pose_range_env_mask(num_envs)
 
     def _apply_root_pose_randomization(
         self,
@@ -70,26 +53,22 @@ class MotionCommandResetter:  #checked
             [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]],
             device=self.device,
         )
-        method_env_ids = self._get_pose_init_method_env_ids(root_pos.shape[0])
-        for mode, all_method_env_ids in method_env_ids.items():
-            if all_method_env_ids.numel() == 0:
-                continue
-            method_mask = torch.isin(env_ids, all_method_env_ids)
-            pose_env_ids = env_ids[method_mask]
-            if pose_env_ids.numel() == 0:
-                continue
+        pose_range_env_mask = self._build_pose_range_env_mask(root_pos.shape[0])
+        pose_env_ids = env_ids[pose_range_env_mask[env_ids]]
+        if pose_env_ids.numel() == 0:
+            return
 
-            pose_noise = sample_uniform(
-                pose_ranges[:, 0], pose_ranges[:, 1], (pose_env_ids.numel(), 6), device=self.device
-            )
-            self._apply_root_pose_randomization_mode(
-                mode,
-                root_pos,
-                root_ori,
-                pose_env_ids,
-                pose_noise,
-                env_origins,
-            )
+        pose_noise = sample_uniform(
+            pose_ranges[:, 0], pose_ranges[:, 1], (pose_env_ids.numel(), 6), device=self.device
+        )
+        self._apply_root_pose_randomization_mode(
+            self.cfg.pose_range_init_mode,
+            root_pos,
+            root_ori,
+            pose_env_ids,
+            pose_noise,
+            env_origins,
+        )
 
     def _apply_root_pose_randomization_mode(
         self,
@@ -121,7 +100,7 @@ class MotionCommandResetter:  #checked
             pitch[lie_ids == 2] = math.pi / 2.0
             pitch[lie_ids == 3] = -math.pi / 2.0
         else:
-            raise ValueError(f"Unsupported pose init method={mode!r}. Expected 'range' or 'lying'.")
+            raise ValueError(f"Unsupported pose_range_init_mode={mode!r}. Expected 'range' or 'lying'.")
 
         root_ori[pose_env_ids] = quat_mul(
             quat_from_euler_xyz(roll, pitch, pose_noise[:, 5]),

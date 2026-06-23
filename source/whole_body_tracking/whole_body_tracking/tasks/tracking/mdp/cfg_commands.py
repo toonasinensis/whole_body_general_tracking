@@ -33,7 +33,7 @@ class CommandsCfg:
             "pitch": (-1.0, 1.0),
             "yaw": (-0.0, 0.0),
         },
-        pose_init_method_ratios={"lying": 0.3, "range": 0.7},
+        pose_range_env_ratio=0.3,
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
