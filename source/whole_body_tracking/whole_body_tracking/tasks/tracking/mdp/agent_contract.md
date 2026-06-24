@@ -49,8 +49,8 @@ boundaries are defined by each `*_modules/agent_contract.md` file.
 
 The following env attributes are intentionally shared across modules:
 
-- `env._motion_pose_range_env_mask`: written by `MotionCommand`, read by delayed
-  termination and fallen upward assist to select recovery envs.
+- `env.envs_classes_mask`: written by `MotionCommand`, read by delayed termination
+  and fallen upward assist. `envs_classes_mask["lying"]` selects recovery/lying envs.
 - `env.termination_manager.delayed_termination_env_mask`: written by
   `DelayedTerminationManager`, read by termination wrappers.
 - `env.termination_manager.delayed_termination_active_mask`: written by

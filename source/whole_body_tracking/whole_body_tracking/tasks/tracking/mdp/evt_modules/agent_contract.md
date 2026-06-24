@@ -57,9 +57,9 @@ Asset dependencies:
 
 Shared env attributes:
 
-- Reads `env._motion_pose_range_env_mask` when `use_motion_pose_range_mask=True`.
+- Reads `env.envs_classes_mask["lying"]` when `use_motion_pose_range_mask=True`.
   This mask is owned by `MotionCommand`/`MotionCommandResetter` and should select the
-  same non-`range` recovery envs as delayed termination.
+  same recovery env class as delayed termination.
 - Owns `env._fallen_upward_assist_timeout_stats`.
 
 Performance contract:

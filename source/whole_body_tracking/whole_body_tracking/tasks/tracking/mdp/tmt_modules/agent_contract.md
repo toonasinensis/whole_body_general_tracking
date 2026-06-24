@@ -53,9 +53,8 @@ eligible envs until `_max_delay_steps`, and returns truncated-or-terminated done
 use_motion_pose_range_mask=True)` is an event function intended for startup mode.
 
 When `use_motion_pose_range_mask=True`, it derives delayed envs from
-`env.cfg.commands.motion.pose_init_method_ratios`, selecting methods whose name is
-not `"range"`. This must stay aligned with `MotionCommandResetter` and
-`env._motion_pose_range_env_mask`.
+`env.envs_classes_mask["lying"]`. This must stay aligned with
+`MotionCommandResetter` and `cfg.envs_classes_ratio`.
 
 When `use_motion_pose_range_mask=False`, it selects the first
 `int(env.num_envs * delay_reset_env_ratio)` envs.

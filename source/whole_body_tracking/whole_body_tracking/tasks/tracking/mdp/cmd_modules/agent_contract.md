@@ -61,7 +61,7 @@ Allowed side effects:
 - Resamples command timelines.
 - Calls `MotionCommandResetter.apply()` during command resets/resamples.
 - Refreshes `MotionReferenceCache`.
-- Sets `env._motion_pose_range_env_mask` for recovery assist and delayed termination.
+- Sets `env.envs_classes_mask` for recovery assist and delayed termination.
 - Creates and drives debug visualizer when `cfg.debug_vis` is enabled.
 
 Do not move simulator state writes outside `MotionCommandResetter`. Do not let
@@ -94,7 +94,6 @@ Owns per-env cursor state:
 - `local_time_steps`
 - `motion_steps_len`
 - `future_step_offsets`
-- `eval_cycle_count`
 
 Public methods:
 
@@ -108,7 +107,7 @@ Public methods:
 - `global_timestamps_from_sampled_bins(...)`
 - `build_selection_from_motion_ids(motion_source, motion_ids)`
 - `apply_selection(env_ids, selection)`
-- `invalidate(env_ids=None)`
+- `clear_timeline()`
 - `step()`
 - `expired_env_ids(max_future_step)`
 
@@ -123,7 +122,18 @@ Public methods:
 
 - `apply(env_ids, body_pos_w, body_quat_w, body_lin_vel_w, body_ang_vel_w, joint_pos,
   joint_vel, env_origins)`
-- `build_recovery_assist_env_mask(num_envs)`
+
+Shared state:
+
+- `envs_classes_mask`: dict of class-name to bool mask, built from
+  `cfg.envs_classes_ratio`.
+
+Reset behavior:
+
+- `add_root_pose_randomization()` dispatches root pose randomization by env class.
+- `range` envs receive xyz/rpy noise from `cfg.pose_range`.
+- `lying` envs receive xy/yaw noise, sampled lying height, and randomized lying
+  roll/pitch orientation.
 
 Allowed side effects:
 

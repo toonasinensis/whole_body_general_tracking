@@ -105,9 +105,9 @@
 
 | Tensor | 形状 | 写入方 | 读取方 | 语义 |
 |---|---:|---|---|---|
-| `motion_ids` | `[num_envs]` | `apply_selection()`, `invalidate()` | `MotionCommand`, timeline methods, sampler | 每个 env 当前 motion |
-| `local_time_steps` | `[num_envs]` | `apply_selection()`, `step()`, `invalidate()` | `MotionCommand`, timeline methods, sampler | 每个 env 当前 local frame |
-| `motion_steps_len` | `[num_envs]` | `apply_selection()`, `invalidate()` | `expired_env_ids()` | 每个 env 当前 motion 的 local end |
+| `motion_ids` | `[num_envs]` | `apply_selection()`, `clear_timeline()` | `MotionCommand`, timeline methods, sampler | 每个 env 当前 motion |
+| `local_time_steps` | `[num_envs]` | `apply_selection()`, `step()`, `clear_timeline()` | `MotionCommand`, timeline methods, sampler | 每个 env 当前 local frame |
+| `motion_steps_len` | `[num_envs]` | `apply_selection()`, `clear_timeline()` | `expired_env_ids()` | 每个 env 当前 motion 的 local end |
 | `future_step_offsets` | `[num_future_frames]` | init only | `global_future_steps()` | future reference offsets |
 
 ### 输入依赖
@@ -157,7 +157,7 @@
 | `cfg` | reset randomization 参数 |
 | `robot` | simulator state 写入对象 |
 | `device` | tensor device |
-| `_pose_range_env_mask` | pose-range reset env mask cache |
+| `envs_classes_mask` | env class bool masks built from `cfg.envs_classes_ratio` |
 
 ### `apply()` 输入张量
 
@@ -274,14 +274,14 @@
 `MotionCommand` 会设置：
 
 ```python
-env._motion_pose_range_env_mask = self.pose_range_env_mask
+env.envs_classes_mask = self.resetter.envs_classes_mask
 ```
 
 该字段跨出 `cmd_modules`，被 event / termination 相关模块读取，用于 recovery assist 和 delayed termination 等逻辑。
 
 | 字段 | 写入方 | 读取方 | 语义 |
 |---|---|---|---|
-| `env._motion_pose_range_env_mask` | `MotionCommand` / `MotionCommandResetter.build_recovery_assist_env_mask()` | `evt_modules`, `tmt_modules` | 哪些 env 使用 pose-range reset/randomization/recovery assist |
+| `env.envs_classes_mask` | `MotionCommand` / `MotionCommandResetter` | `evt_modules`, `tmt_modules` | env class masks；`["lying"]` 选择 recovery/lying envs |
 
 ## 主要边界风险
 
@@ -291,7 +291,7 @@ env._motion_pose_range_env_mask = self.pose_range_env_mask
 4. `AdaptiveMotionSampler` 的部分内部状态通过 legacy alias 暴露到 `MotionCommand`，如 `bin_failed_count`、`kernel`、`success_motion`。
 5. `MotionCommandResetter` 依赖 `body_names[0]` 是 anchor/root 的顺序假设。
 6. `MotionCommandDebugVisualizer` 读取完整 `MotionCommand`，依赖面较宽，但当前应保持只读。
-7. `env._motion_pose_range_env_mask` 是跨 package 的隐式共享状态，后续如果要收紧边界，可以考虑改为显式 provider 或 manager-owned state。
+7. `env.envs_classes_mask` 是跨 package 的隐式共享状态，后续如果要收紧边界，可以考虑改为显式 provider 或 manager-owned state。
 
 ## 建议的边界收敛方向
 
@@ -299,5 +299,5 @@ env._motion_pose_range_env_mask = self.pose_range_env_mask
 2. 把 reference motion 查询从 `MotionCommand` 中拆成 `ReferenceMotionAccessor`，专门负责 current/future frame indexing。
 3. 把 observation/reward/debug 面向的派生特征拆成 `ReferenceFeatureView` 或 `MotionCommandFeatures`。
 4. 给 `MotionCommandDebugVisualizer` 定义只读 provider protocol，替代持有完整 `MotionCommand`。
-5. 将 `env._motion_pose_range_env_mask` 收敛为显式接口，减少跨模块隐式依赖。
+5. 将 `env.envs_classes_mask` 收敛为显式接口，减少跨模块隐式依赖。
 6. 将 `MotionCommandResetter` 的 root/anchor index 作为显式参数传入，去掉对 `body_names[0]` 的隐式依赖。

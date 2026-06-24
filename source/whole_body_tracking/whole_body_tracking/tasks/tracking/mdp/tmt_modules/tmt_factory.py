@@ -29,7 +29,8 @@ def install_delayed_termination(
         return
 
     if use_motion_pose_range_mask:
-        delay_mask = getattr(env, "_motion_pose_range_env_mask", None)
+        envs_class_mask = getattr(env, "envs_classes_mask", None)
+        delay_mask = envs_class_mask["lying"]
         if delay_mask is None:
             command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
             pose_range_env_ratio = getattr(command_cfg, "pose_range_env_ratio", None)

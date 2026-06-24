@@ -111,7 +111,8 @@ def assist_fallen_robots_with_upward_force(
     command = env.command_manager.get_term(command_name)
     active_mask = torch.ones(env.num_envs, dtype=torch.bool, device=asset.device)
     if use_motion_pose_range_mask:
-        pose_mask = getattr(env, "_motion_pose_range_env_mask", None)
+        envs_class_mask = getattr(env, "envs_classes_mask", None)
+        pose_mask = envs_class_mask["lying"]
         if pose_mask is None:
             return
         active_mask = pose_mask.to(device=asset.device, dtype=torch.bool)

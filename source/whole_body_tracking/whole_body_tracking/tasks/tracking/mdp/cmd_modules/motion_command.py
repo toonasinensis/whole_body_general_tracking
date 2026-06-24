@@ -120,9 +120,11 @@ class MotionCommand(CommandTerm):
         #region functional modules from sub_modules
         self.timeline = MotionCommandTimeline(self.num_envs, self._future_step_offsets, self.device)
         self.reference_cache = MotionReferenceCache(self.num_envs, len(cfg.body_names), self.device)
-        self.resetter = MotionCommandResetter(self.cfg, self.robot, self.device)
-        self.pose_range_env_mask = self.resetter.build_recovery_assist_env_mask(self.num_envs)
-        setattr(self.env, "_motion_pose_range_env_mask", self.pose_range_env_mask)
+        
+        self.resetter = MotionCommandResetter(self.num_envs, self.cfg, self.robot, self.device)
+        self.envs_classes_mask = self.resetter.envs_classes_mask
+        setattr(self.env, "envs_classes_mask", self.resetter.envs_classes_mask)
+        
         self.debug_visualizer = MotionCommandDebugVisualizer(self.cfg, self, self.device)
 
         self.selection_policy = create_motion_selection_policy(self.cfg, num_envs=self.num_envs, device=self.device)
@@ -764,6 +766,7 @@ class MotionCommandCfg(CommandTermCfg):
     pose_range_env_ratio: float = 0.3
     pose_range_init_mode: str = "range"
     pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
+    envs_classes_ratio: dict = {"lying": 0.3, "range": 0.7}
 
     # randomization configs
     velocity_range: dict[str, tuple[float, float]] = {}
