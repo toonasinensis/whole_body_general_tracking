@@ -3,11 +3,11 @@ import torch
 from typing import Sequence, Protocol
 
 from .interface import MotionDataSource, MotionSelection
-from .motion_cache import MotionReferenceCache
 from .motion_timeline import MotionCommandTimeline
 from .motion_sampling import AdaptiveMotionSampler
 
 
+# TODO 此部分和 motion_command 放在一起修
 #region motion sampling policy interface
 class MotionSelectionPolicy(Protocol):
     fixed_eval_motion_ids: torch.Tensor | None
@@ -82,9 +82,8 @@ class FixedEvalMotionSelectionPolicy(MotionSelectionPolicy):
 
         self.fixed_eval_motion_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
         env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
-        selection = timeline.selection_from_motion_ids(motion_source, self.fixed_eval_motion_ids)
+        selection = timeline.build_selection_from_motion_ids(motion_source, self.fixed_eval_motion_ids)
         timeline.apply_selection(env_ids, selection)
-        timeline.eval_cycle_count.zero_()
 
     def select(
         self,
@@ -100,7 +99,7 @@ class FixedEvalMotionSelectionPolicy(MotionSelectionPolicy):
             raise RuntimeError("Fixed eval policy is not bound. Call bind_motion_source() first.")
         env_ids_t = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
         motion_ids = self.fixed_eval_motion_ids[env_ids_t]
-        return timeline.selection_from_motion_ids(motion_source, motion_ids)
+        return timeline.build_selection_from_motion_ids(motion_source, motion_ids)
 
     def step_post_update(
         self,

@@ -70,6 +70,15 @@ class MotionLoader(UnifiedMotionLib):
         return self.load_from_cfg(self.cfg)
 
 
+"""
+Motion Command 承担
+1 - 各个核心模块内部变量的暴露功能
+2 - 定义核心模块之间的工作流程
+3 - 各模块对其他模块的内部变量只有读的权力 没有写的权力
+4 - 各模块通过对 MotionCommand 声明的 property 来访问其他模块
+5 - MotionCommand 原生的变量作为共享变量 可供其他模块读写
+"""
+
 # TODO renaming the variables for clearity
 class MotionCommand(CommandTerm):
     cfg: MotionCommandCfg
@@ -116,24 +125,19 @@ class MotionCommand(CommandTerm):
         setattr(self.env, "_motion_pose_range_env_mask", self.pose_range_env_mask)
         self.debug_visualizer = MotionCommandDebugVisualizer(self.cfg, self, self.device)
 
-        self.motion_ids = self.timeline.motion_ids
-        self.local_time_steps = self.timeline.local_time_steps
-        self.eval_cycle_count = self.timeline.eval_cycle_count
-        self.frame_end_per_env = self.timeline.frame_end_per_env
-        self.body_pos_relative_w = self.reference_cache.body_pos_relative_w
-        self.body_quat_relative_w = self.reference_cache.body_quat_relative_w
-
         self.selection_policy = create_motion_selection_policy(self.cfg, num_envs=self.num_envs, device=self.device)
         self.adaptive_sampler = getattr(self.selection_policy, "sampler", None)
         #endregion functional modules from sub_modules
         
         #region for motion bins analyzing
-        self.bin_count = 0
-        self.kernel = torch.zeros(0, dtype=torch.float, device=self.device)
-        self.success_motion = torch.zeros(0, dtype=torch.float32, device=self.device)
-        self.bin_failed_count = torch.zeros(0, dtype=torch.float, device=self.device)
-        self._current_bin_failed = torch.zeros(0, dtype=torch.float, device=self.device)
+        self._bin_count_fallback = 0
+        self._kernel_fallback = torch.zeros(0, dtype=torch.float, device=self.device)
+        self._success_motion_fallback = torch.zeros(0, dtype=torch.float32, device=self.device)
+        self._bin_failed_count_fallback = torch.zeros(0, dtype=torch.float, device=self.device)
+        self.__current_bin_failed_fallback = torch.zeros(0, dtype=torch.float, device=self.device)
         self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Evaluation bookkeeping belongs to the command, not the timeline cursor.
+        self.eval_cycle_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.fixed_eval_motion_ids: torch.Tensor | None = None
         self.history_success_rate_dict = {}
         #endregion for motion bins analyzing
@@ -172,6 +176,58 @@ class MotionCommand(CommandTerm):
         if self.cfg.debug_vis: self.debug_visualizer.set_enabled(True)
         
         self._refresh_reference_cache() #align reference motion to current robots' xy_yaw coordination
+
+    #region propety alias
+    @property
+    def motion_ids(self) -> torch.Tensor:
+        return self.timeline.motion_ids
+
+    @property
+    def local_time_steps(self) -> torch.Tensor:
+        return self.timeline.local_time_steps
+
+    @property
+    def motion_steps_len(self) -> torch.Tensor:
+        return self.timeline.motion_steps_len
+
+    @property
+    def body_pos_relative_w(self) -> torch.Tensor:
+        return self.reference_cache.body_pos_relative_w
+
+    @property
+    def body_quat_relative_w(self) -> torch.Tensor:
+        return self.reference_cache.body_quat_relative_w
+
+    @property
+    def bin_count(self) -> int:
+        if self.adaptive_sampler is None:
+            return self._bin_count_fallback
+        return self.adaptive_sampler.bin_count
+
+    @property
+    def kernel(self) -> torch.Tensor:
+        if self.adaptive_sampler is None:
+            return self._kernel_fallback
+        return self.adaptive_sampler.kernel
+
+    @property
+    def success_motion(self) -> torch.Tensor:
+        if self.adaptive_sampler is None:
+            return self._success_motion_fallback
+        return self.adaptive_sampler.success_motion
+
+    @property
+    def bin_failed_count(self) -> torch.Tensor:
+        if self.adaptive_sampler is None:
+            return self._bin_failed_count_fallback
+        return self.adaptive_sampler.bin_failed_count
+
+    @property
+    def _current_bin_failed(self) -> torch.Tensor:
+        if self.adaptive_sampler is None:
+            return self.__current_bin_failed_fallback
+        return self.adaptive_sampler._current_bin_failed
+    #endregion 
 
     #region normal property
     @property
@@ -259,7 +315,7 @@ class MotionCommand(CommandTerm):
     def global_time_steps(self) -> torch.Tensor:
         """Global timestamps for indexing the concatenated motion buffers."""
         # TODO(refactor): Move timeline-driven reference indexing helpers such as
-        # global_time_steps/motion_num_steps/future_time_steps into ReferenceMotionAccessor.
+        # global_time_steps/motion_num_steps/global_future_steps into ReferenceMotionAccessor.
         return self.timeline.global_time_steps(self.motion)
 
     @property
@@ -267,9 +323,9 @@ class MotionCommand(CommandTerm):
         return self.timeline.num_future_frames
 
     @property
-    def motion_start_time_steps(self) -> torch.Tensor:
+    def global_start_steps(self) -> torch.Tensor:
         """Per-env global start index of the current motion."""
-        return self.timeline.motion_start_time_steps(self.motion)
+        return self.timeline.global_start_steps(self.motion)
 
     @property
     def motion_num_steps(self) -> torch.Tensor:
@@ -282,12 +338,12 @@ class MotionCommand(CommandTerm):
         return self._future_step_offsets
 
     @property
-    def future_motion_ids(self) -> torch.Tensor:
+    def expanded_future_motion_ids(self) -> torch.Tensor:
         """Motion ids for all future reference frames, flattened."""
-        return self.timeline.future_motion_ids()
+        return self.timeline.expanded_future_motion_ids()
 
     @property
-    def future_time_steps(self) -> torch.Tensor:
+    def global_future_steps(self) -> torch.Tensor:
         """Compute absolute (global) time-step indices for all future reference frames.
 
         Clamps to the last valid frame of each motion to avoid out-of-bounds access.
@@ -295,27 +351,27 @@ class MotionCommand(CommandTerm):
         Returns:
             Tensor of shape ``(num_envs, num_future_frames,)``.
         """
-        return self.timeline.future_time_steps(self.motion)
+        return self.timeline.global_future_steps(self.motion)
 
     @property
     def anchor_pos_w_future(self) -> torch.Tensor:
         """Future reference anchor position in world frame for each env."""
-        return self.motion.anchor_pos_w[self.future_time_steps] + self._env.scene.env_origins[:, None, :]
+        return self.motion.anchor_pos_w[self.global_future_steps] + self._env.scene.env_origins[:, None, :]
 
     @property
     def joint_pos_future(self) -> torch.Tensor:
         """Future reference joint positions for each env."""
-        return self.motion.joint_pos[self.future_time_steps]
+        return self.motion.joint_pos[self.global_future_steps]
 
     @property
     def joint_vel_future(self) -> torch.Tensor:
         """Future reference joint velocities for each env."""
-        return self.motion.joint_vel[self.future_time_steps]
+        return self.motion.joint_vel[self.global_future_steps]
 
     @property
     def anchor_quat_w_future(self) -> torch.Tensor:
         """Future reference anchor orientation in world frame for each env."""
-        return self.motion.anchor_quat_w[self.future_time_steps]
+        return self.motion.anchor_quat_w[self.global_future_steps]
 
     @property
     def joint_vel_multi_future(self) -> torch.Tensor:
@@ -324,7 +380,7 @@ class MotionCommand(CommandTerm):
         Returns:
             Tensor of shape ``(num_envs, num_future_frames * ...)``.
         """
-        return self.motion.joint_vel[self.future_time_steps].view(self.num_envs, -1)
+        return self.motion.joint_vel[self.global_future_steps].view(self.num_envs, -1)
 
     @property
     def has_smpl_data(self) -> bool:
@@ -348,15 +404,15 @@ class MotionCommand(CommandTerm):
 
     @property
     def smpl_poses_future(self) -> torch.Tensor:
-        return self.motion.smpl_poses[self.future_time_steps]
+        return self.motion.smpl_poses[self.global_future_steps]
 
     @property
     def smpl_joints_future(self) -> torch.Tensor:
-        return self.motion.smpl_joints[self.future_time_steps]
+        return self.motion.smpl_joints[self.global_future_steps]
 
     @property
     def smpl_transl_future(self) -> torch.Tensor:
-        return self.motion.smpl_transl[self.future_time_steps]
+        return self.motion.smpl_transl[self.global_future_steps]
 
     @property
     def smpl_global_position(self) -> torch.Tensor | None:
@@ -374,7 +430,7 @@ class MotionCommand(CommandTerm):
             self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
             max=local_max[:, None],
         )
-        smpl_global = self.motion.get_smpl_global_position(self.future_motion_ids, future_local.reshape(-1))
+        smpl_global = self.motion.get_smpl_global_position(self.expanded_future_motion_ids, future_local.reshape(-1))
         smpl_global = smpl_global.view(self.num_envs, self.num_future_frames, 24, 3)
         return smpl_global + self._env.scene.env_origins[:, None, None, :]
 
@@ -401,7 +457,7 @@ class MotionCommand(CommandTerm):
             self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
             max=local_max[:, None],
         ).reshape(-1)
-        return self.motion.get_smpl_root_quat_w(self.future_motion_ids, future_local).view(
+        return self.motion.get_smpl_root_quat_w(self.expanded_future_motion_ids, future_local).view(
             self.num_envs, self.num_future_frames, 4
         )
 
@@ -414,7 +470,7 @@ class MotionCommand(CommandTerm):
         ).reshape(-1)
         robot_anchor = self.robot_anchor_quat_w[:, None, :].expand(-1, self.num_future_frames, -1)
         return self.motion.get_smpl_root_quat_w_dif_l(
-            self.future_motion_ids,
+            self.expanded_future_motion_ids,
             future_local,
             robot_anchor.reshape(-1, 4),
         ).view(self.num_envs, -1)
@@ -426,7 +482,7 @@ class MotionCommand(CommandTerm):
             self.local_time_steps[:, None] + self.future_time_steps_init[None, :],
             max=local_max[:, None],
         ).reshape(-1)
-        return self.motion.get_smpl_joints_local(self.future_motion_ids, future_local).view(
+        return self.motion.get_smpl_joints_local(self.expanded_future_motion_ids, future_local).view(
             self.num_envs, self.num_future_frames, 24, 3
         )
 
@@ -490,7 +546,7 @@ class MotionCommand(CommandTerm):
         """Set (motion_ids, local time_steps, local end) from global timestamps."""
         if len(env_ids) == 0:
             return
-        selection = self.timeline.selection_from_global_timestamps(self.motion, timestamps)
+        selection = self.timeline.build_selection_from_global_timestamps(self.motion, timestamps)
         self.timeline.apply_selection(env_ids, selection)
 
     def _setup_fixed_eval_motion_assignment(self) -> None:
@@ -519,7 +575,7 @@ class MotionCommand(CommandTerm):
         self.motion.resample_motionloader(device=self.device)
         self.use_new_motion_pre_env[:] = False
         self.resample_time = 0
-        self.timeline.invalidate()
+        self.timeline.clear_timeline()
         self.selection_policy.bind_motion_source(
             self.motion,
             timeline=self.timeline,
@@ -527,13 +583,8 @@ class MotionCommand(CommandTerm):
             sim_dt=env.cfg.sim.dt,
         )
         self.fixed_eval_motion_ids = getattr(self.selection_policy, "fixed_eval_motion_ids", None)
-        if self.adaptive_sampler is not None:
-            # Keep legacy attribute names accessible while the sampler owns the state.
-            self.bin_count = self.adaptive_sampler.bin_count
-            self.bin_failed_count = self.adaptive_sampler.bin_failed_count
-            self._current_bin_failed = self.adaptive_sampler._current_bin_failed
-            self.kernel = self.adaptive_sampler.kernel
-            self.success_motion = self.adaptive_sampler.success_motion
+        if self.selection_policy.counts_eval_cycles:
+            self.eval_cycle_count.zero_()
 
     def _resample_command(self, env_ids: Sequence[int], *, allow_failure_accounting: bool = True):
         """_resample_command will be called multiple times in each step

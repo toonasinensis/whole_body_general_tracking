@@ -35,10 +35,10 @@ events:
   `body_lin_vel_w`, `body_ang_vel_w`, `anchor_pos_w`, `anchor_quat_w`,
   `anchor_lin_vel_w`, `anchor_ang_vel_w`, `anchor_pos_z`,
   `anchor_project_gravity`, `anchor_6d_rotation`.
-- Future reference: `num_future_frames`, `future_motion_ids`, `future_time_steps`,
+- Future reference: `num_future_frames`, `expanded_future_motion_ids`, `global_future_steps`,
   `future_time_steps_init`, `anchor_pos_w_future`, `anchor_quat_w_future`,
   `joint_pos_future`, `joint_vel_future`, `joint_vel_multi_future`.
-- Timeline metadata: `global_time_steps`, `motion_start_time_steps`,
+- Timeline metadata: `global_time_steps`, `global_start_steps`,
   `motion_num_steps`, `motion_ids_from_timestamps()`.
 - SMPL reference: `has_smpl_data`, `smpl_joints`, `smpl_transl`, `smpl_poses`,
   `smpl_poses_future`, `smpl_joints_future`, `smpl_transl_future`,
@@ -92,7 +92,7 @@ Owns per-env cursor state:
 
 - `motion_ids`
 - `local_time_steps`
-- `frame_end_per_env`
+- `motion_steps_len`
 - `future_step_offsets`
 - `eval_cycle_count`
 
@@ -100,13 +100,13 @@ Public methods:
 
 - `num_future_frames`
 - `global_time_steps(motion_source)`
-- `motion_start_time_steps(motion_source)`
+- `global_start_steps(motion_source)`
 - `motion_num_steps(motion_source)`
-- `future_motion_ids()`
-- `future_time_steps(motion_source)`
-- `selection_from_global_timestamps(motion_source, timestamps)`
+- `expanded_future_motion_ids()`
+- `global_future_steps(motion_source)`
+- `build_selection_from_global_timestamps(motion_source, timestamps)`
 - `global_timestamps_from_sampled_bins(...)`
-- `selection_from_motion_ids(motion_source, motion_ids)`
+- `build_selection_from_motion_ids(motion_source, motion_ids)`
 - `apply_selection(env_ids, selection)`
 - `invalidate(env_ids=None)`
 - `step()`

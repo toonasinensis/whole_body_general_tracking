@@ -19,6 +19,14 @@ class MotionCommandDebugVisualizer:
         self.current_body_visualizers: list[VisualizationMarkers] = []
         self.goal_body_visualizers: list[VisualizationMarkers] = []
 
+        """
+        负责训练和验证过程中的可视化
+        不改变任何 command 中的变量
+        
+        TODO 
+        后续应加入 self.cfg 对应的Config类 而非直接复用 CommandCfg 
+        """
+
     def set_enabled(self, debug_vis: bool) -> None:
         if debug_vis:
             self._ensure_initialized()

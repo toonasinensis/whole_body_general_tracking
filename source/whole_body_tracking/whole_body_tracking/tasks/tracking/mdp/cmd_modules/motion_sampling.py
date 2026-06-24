@@ -131,7 +131,7 @@ class AdaptiveMotionSampler:
             bin_frame_width=int(self.adaptive_bin_frame_width),
         )
 
-        selection = timeline.selection_from_motion_ids(
+        selection = timeline.build_selection_from_motion_ids(
             motion_source,
             sampled_motion_ids,
             local_time_steps=local_t,
