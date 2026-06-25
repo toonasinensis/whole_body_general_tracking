@@ -122,21 +122,18 @@ class MotionCommand(CommandTerm):
         self.reference_cache = MotionReferenceCache(self.num_envs, len(cfg.body_names), self.device)
         
         self.resetter = MotionCommandResetter(self.num_envs, self.cfg, self.robot, self.device)
+        # TODO env classes mask 应该转移为 env 的原生变量
         self.envs_classes_mask = self.resetter.envs_classes_mask
         setattr(self.env, "envs_classes_mask", self.resetter.envs_classes_mask)
         
         self.debug_visualizer = MotionCommandDebugVisualizer(self.cfg, self, self.device)
 
+        # TODO selection policy 这个类设计的不好，需要想办法改掉
         self.selection_policy = create_motion_selection_policy(self.cfg, num_envs=self.num_envs, device=self.device)
         self.adaptive_sampler = getattr(self.selection_policy, "sampler", None)
         #endregion functional modules from sub_modules
         
         #region for motion bins analyzing
-        self._bin_count_fallback = 0
-        self._kernel_fallback = torch.zeros(0, dtype=torch.float, device=self.device)
-        self._success_motion_fallback = torch.zeros(0, dtype=torch.float32, device=self.device)
-        self._bin_failed_count_fallback = torch.zeros(0, dtype=torch.float, device=self.device)
-        self.__current_bin_failed_fallback = torch.zeros(0, dtype=torch.float, device=self.device)
         self.use_new_motion_pre_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # Evaluation bookkeeping belongs to the command, not the timeline cursor.
         self.eval_cycle_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -179,57 +176,12 @@ class MotionCommand(CommandTerm):
         
         self._refresh_reference_cache() #align reference motion to current robots' xy_yaw coordination
 
-    #region propety alias
-    @property
-    def motion_ids(self) -> torch.Tensor:
-        return self.timeline.motion_ids
-
-    @property
-    def local_time_steps(self) -> torch.Tensor:
-        return self.timeline.local_time_steps
-
-    @property
-    def motion_steps_len(self) -> torch.Tensor:
-        return self.timeline.motion_steps_len
-
-    @property
-    def body_pos_relative_w(self) -> torch.Tensor:
-        return self.reference_cache.body_pos_relative_w
-
-    @property
-    def body_quat_relative_w(self) -> torch.Tensor:
-        return self.reference_cache.body_quat_relative_w
-
-    @property
-    def bin_count(self) -> int:
-        if self.adaptive_sampler is None:
-            return self._bin_count_fallback
-        return self.adaptive_sampler.bin_count
-
-    @property
-    def kernel(self) -> torch.Tensor:
-        if self.adaptive_sampler is None:
-            return self._kernel_fallback
-        return self.adaptive_sampler.kernel
-
-    @property
-    def success_motion(self) -> torch.Tensor:
-        if self.adaptive_sampler is None:
-            return self._success_motion_fallback
-        return self.adaptive_sampler.success_motion
-
-    @property
-    def bin_failed_count(self) -> torch.Tensor:
-        if self.adaptive_sampler is None:
-            return self._bin_failed_count_fallback
-        return self.adaptive_sampler.bin_failed_count
-
-    @property
-    def _current_bin_failed(self) -> torch.Tensor:
-        if self.adaptive_sampler is None:
-            return self.__current_bin_failed_fallback
-        return self.adaptive_sampler._current_bin_failed
-    #endregion 
+        """
+        TODO
+        将不必要的属性 alias 删除
+        将功能性的计算代码写入其他类
+        command 只作为接口和流程管理器使用
+        """
 
     #region normal property
     @property
@@ -255,6 +207,22 @@ class MotionCommand(CommandTerm):
     #    driven by timeline state.
     # 2. ReferenceFeatureView (or MotionCommandFeatures): observation/reward/debug
     #    facing derived features built on top of the accessor.
+    @property
+    def motion_ids(self) -> torch.Tensor:
+        return self.timeline.motion_ids
+
+    @property
+    def local_time_steps(self) -> torch.Tensor:
+        return self.timeline.local_time_steps
+    
+    @property
+    def body_pos_relative_w(self) -> torch.Tensor:
+        return self.reference_cache.body_pos_relative_w
+
+    @property
+    def body_quat_relative_w(self) -> torch.Tensor:
+        return self.reference_cache.body_quat_relative_w
+
     @property
     def anchor_pos_z(self):
         return self.anchor_pos_w[:, 2:3]
@@ -681,10 +649,7 @@ class MotionCommand(CommandTerm):
                 self._resample_command(env_ids, allow_failure_accounting=False)
                 # Keep aligned reference caches in sync for both stepped and reset envs.
                 self._refresh_reference_cache()
-                self.selection_policy.step_post_update(
-                    motion_source=self.motion,
-                    command_step_count=self.command_step_count,
-                )
+                self.selection_policy.step_post_update()
                 return
         
         # 这里只更新 future commands 溢出的 env_ids
@@ -698,10 +663,7 @@ class MotionCommand(CommandTerm):
         # Keep aligned reference caches in sync for both stepped and reset envs.
         self._refresh_reference_cache()
 
-        self.selection_policy.step_post_update(
-            motion_source=self.motion,
-            command_step_count=self.command_step_count,
-        )
+        self.selection_policy.step_post_update()
     #endregion core functions
 
     #region debug

@@ -30,6 +30,9 @@ class MotionCommandTimeline:  # checked
         外界可以引用变量
         每次 resample 后变量需要同步
         变量的更改只能通过 apply_selection() 实现
+
+        TODO 
+        Timeline 可以合并 MotionSource 中的公开变量 以统一项目的运算逻辑
         """
 
     @property

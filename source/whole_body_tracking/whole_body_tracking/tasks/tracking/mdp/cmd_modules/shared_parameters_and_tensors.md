@@ -212,15 +212,15 @@
 
 | Tensor / 参数 | 形状 | 写入方 | 语义 |
 |---|---:|---|---|
-| `adaptive_bin_frame_width` | scalar int | `reset_for_motion_source()` | 约 1 秒 motion frame 对应的 bin 宽度 |
-| `bin_count` | scalar int | `reset_for_motion_source()` | global failure bin 数 |
-| `bin_failed_count` | `[bin_count]` | `step_post_update()` | global failure EMA |
-| `_current_bin_failed` | `[bin_count]` | `sample_selection()` / `step_post_update()` | 当前累计 global failure |
-| `motion_sample_bin_counts` | `[motion_num]` | `reset_for_motion_source()` | 每个 motion 可采样 local bin 数 |
-| `max_motion_sample_bin_count` | scalar int | `reset_for_motion_source()` | motion-local bin matrix 的第二维 |
-| `motion_bin_failed_count` | `[motion_num, max_motion_sample_bin_count]` | `step_post_update()` | motion-local failure EMA |
-| `_current_motion_bin_failed` | `[motion_num, max_motion_sample_bin_count]` | `sample_selection()` / `step_post_update()` | 当前累计 motion-local failure |
-| `kernel` | `[adaptive_kernel_size]` | `reset_for_motion_source()` | failure smoothing kernel |
+| `bin_frame_width` (`adaptive_bin_frame_width`) | scalar int | `reset_for_motion_source()` | 约 1 秒 motion frame 对应的 bin 宽度 |
+| `global_bin_count` (`bin_count`) | scalar int | `reset_for_motion_source()` | global failure bin 数 |
+| `global_bin_failure_counts` (`bin_failed_count`) | `[bin_count]` | `step_post_update()` | global failure EMA |
+| `_current_global_bin_failures` (`_current_bin_failed`) | `[bin_count]` | `sample_selection()` / `step_post_update()` | 当前累计 global failure |
+| `motion_bin_count_per_motion` (`motion_sample_bin_counts`) | `[motion_num]` | `reset_for_motion_source()` | 每个 motion 的有效 local bin 数 |
+| `max_motion_bin_count` (`max_motion_sample_bin_count`) | scalar int | `reset_for_motion_source()` | motion-local bin matrix 的第二维 |
+| `motion_failure_bin_counts` (`motion_bin_failed_count`) | `[motion_num, max_motion_bin_count]` | `step_post_update()` | motion-local 真实失败 bin EMA；sampling 后固定回退 1 个 bin |
+| `pending_motion_failure_bin_counts` | `[motion_num, max_motion_bin_count]` | `sample_selection()` / `step_post_update()` | 当前 step 累计到的 motion-local 真实失败 bin |
+| `sampling_kernel` (`kernel`) | `[adaptive_kernel_size]` | `reset_for_motion_source()` | failure smoothing kernel |
 | `success_motion` | `[motion_num]` | `reset_for_motion_source()` | eval/statistics 用 |
 
 ### `sample_selection()` 输入依赖

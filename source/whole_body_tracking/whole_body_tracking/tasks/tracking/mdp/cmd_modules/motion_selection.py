@@ -39,12 +39,7 @@ class MotionSelectionPolicy(Protocol):
         failed bin.
         """
 
-    def step_post_update(
-        self,
-        *,
-        motion_source: MotionDataSource,
-        command_step_count: int,
-    ) -> None:
+    def step_post_update(self) -> None:
         """Update policy state after each command step."""
 
     @property
@@ -101,12 +96,7 @@ class FixedEvalMotionSelectionPolicy(MotionSelectionPolicy):
         motion_ids = self.fixed_eval_motion_ids[env_ids_t]
         return timeline.build_selection_from_motion_ids(motion_source, motion_ids)
 
-    def step_post_update(
-        self,
-        *,
-        motion_source: MotionDataSource,
-        command_step_count: int,
-    ) -> None:
+    def step_post_update(self) -> None:
         return
 
 
@@ -152,16 +142,8 @@ class AdaptiveMotionSelectionPolicy(MotionSelectionPolicy):
             allow_failure_accounting=allow_failure_accounting,
         )
 
-    def step_post_update(
-        self,
-        *,
-        motion_source: MotionDataSource,
-        command_step_count: int,
-    ) -> None:
-        self.sampler.step_post_update(
-            motion_source=motion_source,
-            command_step_count=command_step_count,
-        )
+    def step_post_update(self) -> None:
+        self.sampler.step_post_update()
 
 
 class UnsupportedMotionSelectionPolicy(MotionSelectionPolicy):
@@ -196,12 +178,7 @@ class UnsupportedMotionSelectionPolicy(MotionSelectionPolicy):
     ) -> MotionSelection:
         raise NotImplementedError("Only fixed-eval and adaptive motion selection policies are implemented.")
 
-    def step_post_update(
-        self,
-        *,
-        motion_source: MotionDataSource,
-        command_step_count: int,
-    ) -> None:
+    def step_post_update(self) -> None:
         return
 
 

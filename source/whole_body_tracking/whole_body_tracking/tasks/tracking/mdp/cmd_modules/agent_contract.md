@@ -15,9 +15,6 @@
 - `MotionSelectionPolicy`, `FixedEvalMotionSelectionPolicy`,
   `AdaptiveMotionSelectionPolicy`, `UnsupportedMotionSelectionPolicy`,
   `create_motion_selection_policy`
-- Sampling helpers: `validate_motion_local_frame_bounds`,
-  `compute_motion_sample_bin_counts`, `accumulate_rewinded_motion_sample_bin_counts`,
-  `sample_motion_local_times_from_bins`, `sample_rewinded_motion_local_times`
 
 These exports are available through both `mdp.cmd_modules` and the package facade
 `mdp`.
@@ -87,7 +84,9 @@ Boundary:
 - It must not know about simulator reset, reward, termination, or event logic.
 
 ## `MotionCommandTimeline`
-
+`AdaptiveMotionSampler` owns adaptive bin state and can update adaptive sampling
+metrics. It returns `MotionSelection`; it must not call `timeline.apply_selection()`
+or write simulator state.
 Owns per-env cursor state:
 
 - `motion_ids`
