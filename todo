@@ -1,6 +1,0 @@
-
- - 将默认的 RSL 库更换为本文件夹下的 rsl_rl 实现
- - 审阅 commands 中的计算流程，尝试优化运行时间 
- - [ ] The scripts/eval package remains to be checked
- - [ ] The wandb logger in train script remains to be adapted for sim4.5
- - [ ] The mdp files remains to be sorted

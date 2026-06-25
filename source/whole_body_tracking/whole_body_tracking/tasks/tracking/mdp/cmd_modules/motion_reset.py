@@ -18,7 +18,7 @@ class MotionCommandResetter:  #checked
 
         # tensordict
         self.envs_classes_mask = {}
-        self._init_envs_mask()
+        self._init_envs_mask(self.num_envs)
 
         """
         负责环境重置

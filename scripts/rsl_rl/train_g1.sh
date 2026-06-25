@@ -33,5 +33,5 @@ python -m torch.distributed.run \
   --dataset_txt="dataset_txt/fall.txt"  \
   --distributed \
   --resume=True \
-  --resume_path="logs/rsl_rl/g1_amp/mlp/model_15500.pt" \
+  --resume_path="logs/rsl_rl/g1_amp/2026-06-23_10-50-47/model_62500.pt" \
   # --encoder_mode=robot \
