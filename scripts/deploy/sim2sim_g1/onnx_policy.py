@@ -5,7 +5,7 @@ import numpy as np
 
 import onnx
 
-G1_REQUIRED_INPUTS = ("prop", "rbt_cmd_mf", "smpl_cmd_mf")
+SUPPORTED_INPUT_GROUPS = ("policy", "prop", "rbt_cmd_mf", "zrbt_cmd_mf", "smpl_cmd_mf")
 
 
 def load_metadata(path: str) -> dict:
@@ -28,17 +28,8 @@ def onnx_input_names(path: str) -> list[str]:
 def validate_grouped_onnx_contract(input_names: list[str], meta: dict) -> None:
     if input_names == ["obs"]:
         raise ValueError(
-            "This sim2sim script expects a grouped ONNX with inputs "
-            f"{list(G1_REQUIRED_INPUTS)}, but got old single-input ONNX ['obs']. "
-            "Re-export with: play.py --export_onnx --encoder_mode=robot --export_only"
-        )
-
-    missing = [name for name in G1_REQUIRED_INPUTS if name not in input_names]
-    if missing:
-        raise ValueError(
-            f"This sim2sim script expects G1 grouped ONNX inputs {list(G1_REQUIRED_INPUTS)}, "
-            f"but ONNX inputs are {input_names}; missing {missing}. "
-            "Re-export with: play.py --export_onnx --encoder_mode=robot --export_only"
+            "This sim2sim script expects a grouped ONNX, but got old single-input ONNX ['obs']. "
+            "Re-export with: play.py --export_onnx --export_only"
         )
 
     metadata_inputs = meta.get("input_names") or meta.get("input_groups") or meta.get("observation_groups")
@@ -47,8 +38,15 @@ def validate_grouped_onnx_contract(input_names: list[str], meta: dict) -> None:
         if metadata_inputs != input_names:
             raise ValueError(f"ONNX metadata input order {metadata_inputs} does not match graph inputs {input_names}.")
 
+    unsupported = [name for name in input_names if name not in SUPPORTED_INPUT_GROUPS]
+    if unsupported:
+        raise ValueError(
+            f"ONNX inputs {unsupported} are not supported by this sim2sim builder. "
+            f"Supported groups: {list(SUPPORTED_INPUT_GROUPS)}."
+        )
+
     shapes = meta.get("observation_shapes", {})
-    missing_shapes = [name for name in G1_REQUIRED_INPUTS if name not in shapes]
+    missing_shapes = [name for name in input_names if name not in shapes]
     if missing_shapes:
         raise ValueError(
             f"ONNX metadata is missing observation_shapes for {missing_shapes}. "

@@ -8,13 +8,21 @@ import json
 import numbers
 import os
 import torch
+from typing import TYPE_CHECKING
 
 import onnx
 
-from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+else:
+    ManagerBasedRLEnv = object
 
-from whole_body_tracking.tasks.tracking.mdp import MotionCommand
+try:
+    from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
+except ModuleNotFoundError as _ISAAC_IMPORT_ERROR:
+    class _OnnxPolicyExporter(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            raise ImportError("IsaacLab RSL-RL exporter is required for single-input ONNX export.") from _ISAAC_IMPORT_ERROR
 
 
 def export_motion_policy_as_onnx(
@@ -148,18 +156,27 @@ def collect_observation_terms_metadata(base_env, observation_groups: list[str]) 
     term_dims = obs_manager.group_obs_term_dim
     concatenate = obs_manager.group_obs_concatenate
     term_cfgs = getattr(obs_manager, "_group_obs_term_cfgs", {})
+    group_cfgs = getattr(obs_manager, "_group_obs_class_instances", {})
 
     out = {}
     for group_name in observation_groups:
         names = list(active_terms.get(group_name, []))
         dims = list(term_dims.get(group_name, []))
         cfgs = list(term_cfgs.get(group_name, []))
+        group_cfg = group_cfgs.get(group_name)
+        group_history_length = int(getattr(group_cfg, "history_length", 0) or 0) if group_cfg is not None else 0
+        group_flatten_history_dim = (
+            bool(getattr(group_cfg, "flatten_history_dim", True)) if group_cfg is not None else True
+        )
         terms = []
         for idx, name in enumerate(names):
             shape = list(dims[idx]) if idx < len(dims) else []
             cfg = cfgs[idx] if idx < len(cfgs) else None
-            history_length = int(getattr(cfg, "history_length", 0)) if cfg is not None else 0
+            history_length = int(getattr(cfg, "history_length", 0) or 0) if cfg is not None else 0
             flatten_history_dim = bool(getattr(cfg, "flatten_history_dim", True)) if cfg is not None else True
+            if history_length <= 0 and group_history_length > 0:
+                history_length = group_history_length
+                flatten_history_dim = group_flatten_history_dim
             base_shape = list(shape)
             if history_length > 0:
                 if flatten_history_dim and len(shape) == 1 and shape[0] % history_length == 0:

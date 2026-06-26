@@ -12,7 +12,7 @@ from sim2sim_g1.math_utils import as_vector
 from sim2sim_g1.metrics import METRIC_NAMES, MotionMetricAccumulator, motion_tracking_metrics
 from sim2sim_g1.motion import MotionData, motion_files, motion_frame_root_state, motion_local_step_summary
 from sim2sim_g1.mujoco_robot import G1_MJCF  # noqa: F401
-from sim2sim_g1.mujoco_robot import (  # print_joint_map,; name_to_joint_ids,
+from sim2sim_g1.mujoco_robot import (  # print_joint_map,
     action_to_target,
     apply_pd_control,
     gains_from_metadata,
@@ -20,14 +20,14 @@ from sim2sim_g1.mujoco_robot import (  # print_joint_map,; name_to_joint_ids,
     initialize_from_motion,
     name_to_actuator_ids,
     name_to_body_ids,
+    name_to_joint_ids,
     name_to_joint_qvel_addrs,
 )
 from sim2sim_g1.observations import (  # print_obs_layout,
     ImuReader,
-    TermMajorHistory,
     build_obs,
+    histories_from_metadata,
     print_imu_debug,
-    prop_terms_from_metadata,
     validate_inputs,
 )
 from sim2sim_g1.onnx_policy import OnnxPolicy, load_metadata, onnx_input_names, validate_grouped_onnx_contract
@@ -374,7 +374,7 @@ def main() -> None:
     data = mujoco.MjData(model)
     joint_names = list(meta["action_joint_names"])
     body_names = list(meta["motion_body_names"])
-    # joint_ids = name_to_joint_ids(model, joint_names)
+    joint_ids = name_to_joint_ids(model, joint_names)
     actuator_ids = name_to_actuator_ids(model, joint_names)
     joint_qpos, joint_qvel = name_to_joint_qvel_addrs(model, joint_names)
     body_ids = name_to_body_ids(model, body_names)
@@ -383,7 +383,11 @@ def main() -> None:
         quat_sensor_name=args.imu_quat_sensor,
         gyro_sensor_name=args.imu_gyro_sensor,
     )
-    torque_limits = np.asarray(model.actuator_ctrlrange[actuator_ids], dtype=np.float64)
+    if actuator_ids.size > 0:
+        torque_limits = np.asarray(model.actuator_ctrlrange[actuator_ids], dtype=np.float64)
+    else:
+        torque_limits = np.asarray(model.jnt_actfrcrange[joint_ids], dtype=np.float64)
+        print("[INFO] MuJoCo model has no actuators; applying PD torques through data.qfrc_applied.")
 
     motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
     _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
@@ -416,9 +420,18 @@ def main() -> None:
     # print_obs_layout(meta, prop_history, input_names)
     if args.dry_run:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
-        prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+        group_histories = histories_from_metadata(meta, input_names, len(joint_names))
         obs = build_obs(
-            data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
+            data,
+            motion,
+            start_frame,
+            motion_meta,
+            imu_reader,
+            joint_qpos,
+            joint_qvel,
+            last_action,
+            input_names=input_names,
+            group_histories=group_histories,
         )
         validate_inputs(obs, input_names, meta)
         if args.debug_motion_alignment:
@@ -440,9 +453,18 @@ def main() -> None:
     input_names = policy.input_names
     if args.debug_motion_alignment:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
-        debug_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+        debug_histories = histories_from_metadata(meta, input_names, len(joint_names))
         debug_obs = build_obs(
-            data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history
+            data,
+            motion,
+            start_frame,
+            motion_meta,
+            imu_reader,
+            joint_qpos,
+            joint_qvel,
+            last_action,
+            input_names=input_names,
+            group_histories=debug_histories,
         )
         validate_inputs(debug_obs, input_names, meta)
         debug_action = policy.run(debug_obs)
@@ -510,7 +532,7 @@ def main() -> None:
                 viewer.sync()
 
             last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
-            prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+            group_histories = histories_from_metadata(meta, input_names, len(joint_names))
             # start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
             rollout_steps = min(max(int(args.steps), 0), int(motion.num_frames) - start_frame)
             accumulator = MotionMetricAccumulator(
@@ -530,7 +552,16 @@ def main() -> None:
                 accumulator.update(metrics)
 
                 obs = build_obs(
-                    data, motion, t, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
+                    data,
+                    motion,
+                    t,
+                    motion_meta,
+                    imu_reader,
+                    joint_qpos,
+                    joint_qvel,
+                    last_action,
+                    input_names=input_names,
+                    group_histories=group_histories,
                 )
                 validate_inputs(obs, input_names, meta)
                 raw_action = policy.run(obs)

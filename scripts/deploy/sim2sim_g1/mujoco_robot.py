@@ -60,16 +60,39 @@ def validate_sensor(model, sensor_name: str, expected_dim: int | None = None) ->
         raise ValueError(f"Sensor '{sensor_name}' has dim {dim}, expected {expected_dim}.")
 
 
+def actuator_name_for_joint(joint_name: str) -> str:
+    if joint_name.endswith("_joint"):
+        return f"{joint_name[:-6]}_motor"
+    return f"{joint_name}_motor"
+
+
 def name_to_actuator_ids(model, joint_names: list[str]) -> np.ndarray:
     import mujoco
 
+    if model.nu == 0:
+        return np.asarray([], dtype=np.int32)
+
     ids = []
     for name in joint_names:
-        aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        candidates = (name, actuator_name_for_joint(name))
+        aid = -1
+        for candidate in candidates:
+            aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, candidate)
+            if aid >= 0:
+                break
+        if aid < 0:
+            for actuator_id in range(model.nu):
+                joint_id = model.actuator_trnid[actuator_id, 0]
+                if joint_id < 0:
+                    continue
+                joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+                if joint_name == name:
+                    aid = actuator_id
+                    break
         if aid < 0:
             raise ValueError(
-                f"Actuator '{name}' from ONNX action order not found in MuJoCo model. "
-                "Use actuator names that match action_joint_names."
+                f"Actuator for joint '{name}' not found in MuJoCo model. "
+                f"Tried actuator names {list(candidates)} and joint-attached actuators."
             )
         ids.append(aid)
     return np.asarray(ids, dtype=np.int32)
@@ -166,4 +189,9 @@ def apply_pd_control(
     q = data.qpos[joint_qpos]
     qd = data.qvel[joint_qvel]
     tau = kp * (target - q) - kd * qd
-    data.ctrl[actuator_ids] = np.clip(tau, torque_limits[:, 0], torque_limits[:, 1])
+    tau = np.clip(tau, torque_limits[:, 0], torque_limits[:, 1])
+    if actuator_ids.size > 0:
+        data.ctrl[actuator_ids] = tau
+    else:
+        data.qfrc_applied[:] = 0.0
+        data.qfrc_applied[joint_qvel] = tau
