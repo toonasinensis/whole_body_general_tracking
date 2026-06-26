@@ -724,11 +724,10 @@ class MotionCommandCfg(CommandTermCfg):
     max_future_step = max(future_step_num)
 
     # env classification
-    pose_range: dict[str, tuple[float, float]] = {}
-    pose_range_env_ratio: float = 0.3
-    pose_range_init_mode: str = "range"
-    pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
     envs_classes_ratio: dict = {"lying": 0.3, "range": 0.7}
+    # 初始化具体参数
+    pose_range: dict[str, tuple[float, float]] = {}
+    pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
 
     # randomization configs
     velocity_range: dict[str, tuple[float, float]] = {}
@@ -737,7 +736,7 @@ class MotionCommandCfg(CommandTermCfg):
     # adaptive sampling configs
     adaptive_kernel_size: int = 3
     adaptive_lambda: float = 0.8
-    motion_ratio = [0.2, 0.6, 0.2]  # 预留参数，暂时不使用 # 越来越难
+    motion_ratio = [0.2, 0.6, 0.2] # 不同难度的动作采样加权平均
     adaptive_uniform_ratio: float = 0.5
     adaptive_alpha: float = 0.001
     motion_sampling_start_frame: int = 5

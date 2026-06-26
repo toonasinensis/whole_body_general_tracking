@@ -30,13 +30,17 @@ def install_delayed_termination(
 
     if use_motion_pose_range_mask:
         envs_class_mask = getattr(env, "envs_classes_mask", None)
-        delay_mask = envs_class_mask["lying"]
+        delay_mask = envs_class_mask.get("lying") if envs_class_mask is not None else None
         if delay_mask is None:
             command_cfg = getattr(getattr(getattr(env, "cfg", None), "commands", None), "motion", None)
-            pose_range_env_ratio = getattr(command_cfg, "pose_range_env_ratio", None)
-            if pose_range_env_ratio is None:
+            envs_classes_ratio = getattr(command_cfg, "envs_classes_ratio", None)
+            if not envs_classes_ratio or "lying" not in envs_classes_ratio:
                 return
-            num_delay = int(env.num_envs * min(float(delay_reset_env_ratio), float(pose_range_env_ratio)))
+            ratio_sum = sum(float(ratio) for ratio in envs_classes_ratio.values())
+            if ratio_sum <= 0.0:
+                return
+            lying_ratio = float(envs_classes_ratio["lying"]) / ratio_sum
+            num_delay = int(env.num_envs * min(float(delay_reset_env_ratio), lying_ratio))
             delay_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
             delay_mask[:num_delay] = True
         else:

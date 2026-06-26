@@ -28,9 +28,8 @@ class G1FlatEnvCfg(TrackingEnvCfg):
         self.commands.motion.motion_sampling_start_frame = 5
         self.commands.motion.adaptive_sample_rewind_min_bins = 0
         self.commands.motion.adaptive_sample_rewind_bins = 1
-        self.commands.motion.pose_range_init_mode = "lying"
+        self.commands.motion.envs_classes_ratio = {"lying": 0.0, "range": 1.0}
         self.commands.motion.pose_range_lying_height_range = (0.25, 0.45)
-        self.commands.motion.pose_range_env_ratio = 0.0
         # replace Termination Manager
         self.events.delayed_termination = EventTerm(
             func=mdp.install_delayed_termination,
@@ -75,7 +74,7 @@ class G1FlatAMPEnvCfg(G1FlatEnvCfg):
             term.params["anchor_body_name"] = G1_AMP_ANCHOR_BODY_NAME
             term.params["body_names"] = tuple(G1_AMP_BODY_NAMES)
 
-        self.commands.motion.pose_range_env_ratio = 0.3
+        self.commands.motion.envs_classes_ratio = {"lying": 0.3, "range": 0.7}
 
         # replace Termination Manager
         self.events.delayed_termination = EventTerm(
