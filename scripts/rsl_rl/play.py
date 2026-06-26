@@ -134,7 +134,6 @@ import gymnasium as gym
 import numpy as np
 import os
 import torch
-from tensordict import TensorDict
 
 from rsl_rl.runners import OnPolicyRunner
 
@@ -146,7 +145,7 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
@@ -156,6 +155,7 @@ from whole_body_tracking.utils.exporter import (  # noqa: F401
     export_grouped_motion_policy_as_onnx,
     resolve_policy_observation_groups,
 )
+from whole_body_tracking.utils.isaac_vecenv_wrapper import IsaacLabVecEnvWrapper
 
 
 def _set_backbone_encoder_mode(policy, encoder_mode: str) -> None:
@@ -333,41 +333,6 @@ class OnnxPolicyRunner:
         return torch.from_numpy(actions).to(self.device)
 
 
-class _LocalRslRlVecEnvCompat:
-    """Adapter for isaaclab_rl wrapper outputs to local rsl_rl TensorDict API."""
-
-    def __init__(self, env):
-        self._env = env
-
-    def __getattr__(self, name):
-        return getattr(self._env, name)
-
-    def _to_tensordict(self, obs_or_tuple):
-        if isinstance(obs_or_tuple, TensorDict):
-            return obs_or_tuple
-        if isinstance(obs_or_tuple, tuple):
-            obs_tensor, extras = obs_or_tuple
-            obs_groups = extras.get("observations", {}) if isinstance(extras, dict) else {}
-            if isinstance(obs_groups, TensorDict):
-                return obs_groups
-            if isinstance(obs_groups, dict) and len(obs_groups) > 0:
-                return TensorDict(obs_groups, batch_size=[self.num_envs], device=self.device)
-            return TensorDict({"policy": obs_tensor}, batch_size=[self.num_envs], device=self.device)
-        if isinstance(obs_or_tuple, dict):
-            return TensorDict(obs_or_tuple, batch_size=[self.num_envs], device=self.device)
-        return TensorDict({"policy": obs_or_tuple}, batch_size=[self.num_envs], device=self.device)
-
-    def get_observations(self):
-        return self._to_tensordict(self._env.get_observations())
-
-    def step(self, actions: torch.Tensor):
-        obs, rewards, dones, extras = self._env.step(actions)
-        return self._to_tensordict((obs, extras)), rewards, dones, extras
-
-    def reset(self):
-        return self._to_tensordict(self._env.reset())
-
-
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(  # noqa: C901
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg
@@ -435,9 +400,8 @@ def main(  # noqa: C901
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env)
-    env = _LocalRslRlVecEnvCompat(env)
+    # wrap for project-local rsl_rl (TensorDict VecEnv API)
+    env = IsaacLabVecEnvWrapper(env)
 
     # load previously trained model
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
