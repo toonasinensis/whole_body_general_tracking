@@ -51,6 +51,8 @@ The following env attributes are intentionally shared across modules:
 
 - `env.envs_classes_mask`: written by `MotionCommand`, read by delayed termination
   and fallen upward assist. `envs_classes_mask["lying"]` selects recovery/lying envs.
+  The mask is derived from `MotionCommandResetter.envs_classes_mask`, which is built
+  from `cfg.commands.motion.envs_classes_ratio`.
 - `env.termination_manager.delayed_termination_env_mask`: written by
   `DelayedTerminationManager`, read by termination wrappers.
 - `env.termination_manager.delayed_termination_active_mask`: written by
@@ -59,6 +61,23 @@ The following env attributes are intentionally shared across modules:
 
 Any new shared env attribute must be documented here and in the owning module
 contract.
+
+## Command Runtime Expectations
+
+The command runtime is split into smaller modules:
+
+- `MotionCommand` orchestrates loading, selection, reset, cache refresh, metrics, and
+  visualization.
+- `MotionCommandTimeline` owns only per-env motion cursor state.
+- `MotionCommandResetter` is the only command module that writes robot root/joint
+  state to simulation.
+- `MotionReferenceCache` owns aligned reference body pose cache.
+- `MotionSelectionPolicy` chooses motion frames and returns `MotionSelection`.
+- `AdaptiveMotionSampler` owns adaptive failed-bin statistics and sampling metrics.
+
+Observation, reward, termination, and event modules may read `MotionCommand`
+properties, but they must not mutate timeline, sampler, resetter, motion source, or
+reference cache state.
 
 ## Compatibility Notes
 
@@ -69,3 +88,5 @@ contract.
   dimension `env.num_envs`.
 - Public functions exported through `__all__` are config-facing API. Renaming or
   changing signatures can break Hydra/IsaacLab configs and checkpoints.
+- `cfg.commands.motion.adaptive_uniform_ratio` still exists for compatibility, but
+  current adaptive sampling uses `motion_ratio[0]` as its uniform-probability weight.

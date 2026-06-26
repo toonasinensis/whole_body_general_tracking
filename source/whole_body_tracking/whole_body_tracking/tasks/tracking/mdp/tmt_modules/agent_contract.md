@@ -53,8 +53,10 @@ eligible envs until `_max_delay_steps`, and returns truncated-or-terminated done
 use_motion_pose_range_mask=True)` is an event function intended for startup mode.
 
 When `use_motion_pose_range_mask=True`, it derives delayed envs from
-`env.envs_classes_mask["lying"]`. This must stay aligned with
-`MotionCommandResetter` and `cfg.envs_classes_ratio`.
+`env.envs_classes_mask["lying"]`. If that runtime mask is not available yet, it may
+fall back to `env.cfg.commands.motion.envs_classes_ratio["lying"]` and build the
+same contiguous prefix mask that `MotionCommandResetter` would build. This must stay
+aligned with `MotionCommandResetter` and `cfg.envs_classes_ratio`.
 
 When `use_motion_pose_range_mask=False`, it selects the first
 `int(env.num_envs * delay_reset_env_ratio)` envs.
@@ -101,3 +103,10 @@ Termination terms depend on:
 - `cfg.body_names`
 
 Update this file when changing those command property shapes or semantics.
+
+## Follow-Ups
+
+- If env class ownership moves away from `MotionCommandResetter`, update
+  `install_delayed_termination()` and this contract together.
+- The fallback path duplicates contiguous-mask construction logic; prefer a shared
+  provider if more modules need env class masks.

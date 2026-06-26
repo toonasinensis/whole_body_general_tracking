@@ -62,6 +62,15 @@ Shared env attributes:
   same recovery env class as delayed termination.
 - Owns `env._fallen_upward_assist_timeout_stats`.
 
+Behavior expectations:
+
+- The assist force is only considered for envs selected by the active mask.
+- The function computes fallen state from command reference height/orientation,
+  current robot anchor pose/velocity, and projected gravity.
+- Timeout statistics are used to decay the assist force scale across assisted resets.
+- The function should remain a recovery aid; it must not change motion selection,
+  reset policy, reference cache, or termination masks.
+
 Performance contract:
 
 - The function may run every control step. Keep tensor allocations and external-force
@@ -74,3 +83,5 @@ Performance contract:
 - Export public event functions through `evt_modules/__init__.py`.
 - Document any new env attribute, simulator write, or cross-module dependency here
   and in `mdp/agent_contract.md`.
+- If env class masks move to a different owner, update this contract and
+  `tmt_modules/agent_contract.md` together.
