@@ -724,7 +724,7 @@ class MotionCommandCfg(CommandTermCfg):
     max_future_step = max(future_step_num)
 
     # env classification
-    envs_classes_ratio: dict = {"lying": 0.3, "range": 0.7}
+    envs_classes_ratio: dict = {"lying": 0.0, "range": 1.0}
     # 初始化具体参数
     pose_range: dict[str, tuple[float, float]] = {}
     pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
