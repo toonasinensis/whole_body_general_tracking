@@ -4,4 +4,6 @@ python scripts/rsl_rl/play.py \
 --task=AMP-RobanS22 \
 --num_envs=4 \
 --motion_file /home/leju/Documents/zjl/test-motion \
---resume_path /home/leju/Documents/zjl/whole_body_general_tracking/logs/rsl_rl/model_16000.pt
+--resume_path /home/leju/Documents/zjl/whole_body_general_tracking/logs/rsl_rl/model_60000.pt \
+--export_onnx \
+# --export_only \

@@ -24,21 +24,16 @@ from isaaclab.markers.config import (  # RED_ARROW_X_MARKER_CFG,
 from isaaclab.utils import configclass
 from isaaclab.utils.math import euler_xyz_from_quat  # noqa: F401
 from isaaclab.utils.math import quat_from_euler_xyz  # noqa: F401
+from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
 from isaaclab.utils.math import (
     quat_apply,
+    # quat_apply_inverse,
     quat_error_magnitude,
     quat_inv,
     quat_mul,
     sample_uniform,
     yaw_quat,
 )
-
-try:
-    # Newer IsaacLab
-    from isaaclab.utils.math import quat_apply_inverse
-except ImportError:
-    # IsaacLab 2.1.0 compatibility
-    from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
 
 from .math_utils import quat_to_6d
 from .motion_sampling import (
@@ -809,53 +804,52 @@ class MotionCommand(CommandTerm):
         self.metrics["error_joint_pos"] = torch.mean(torch.abs(self.joint_pos - self.robot_joint_pos), dim=-1)
         self.metrics["error_joint_vel"] = torch.mean(torch.abs(self.joint_vel - self.robot_joint_vel), dim=-1)
 
-    def _adaptive_sampling(self, env_ids: Sequence[int]):
-        """
-        1. update bin failed history
-        2. compute sampling probability and sample bins accordingly
-        3. compute metrics
-        """
-        # NOTE there shall be a logic to justify
-        # whether the env_ids are out of time, out of motion range, or failed (early termination)
-        # if early termination, add to self._current_bin_failed
-        # else no change
-        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+    def _prepare_adaptive_sampling(self, env_ids: torch.Tensor) -> None:
+        """Hook for subclasses to sync terrain/domain state before sampling."""
+
+    def _accumulate_motion_bin_failures(self, fail_motion_ids: torch.Tensor, fail_local_frames: torch.Tensor) -> None:
+        # fail bin 是“摔倒/失败发生点”；重生 bin 是同一个 motion 内往前回退后的恢复窗口。
+        # 这里直接按 motion-local 坐标统计 spawn bin，避免全局 frame 倒减时跨进另一个 motion。
+        self._current_motion_bin_failed[:] = accumulate_rewinded_motion_sample_bin_counts(
+            fail_motion_ids=fail_motion_ids,
+            fail_local_frames=fail_local_frames,
+            time_step_start_idx=self.motion.time_step_start_idx,
+            time_step_end_idx=self.motion.time_step_end_idx,
+            min_local_frame=int(self.cfg.motion_sampling_start_frame),
+            max_future_step=int(self.cfg.max_future_step),
+            bin_frame_width=int(self.adaptive_bin_frame_width),
+            rewind_bins=int(self.cfg.adaptive_sample_rewind_bins),
+            min_rewind_bins=int(self.cfg.adaptive_sample_rewind_min_bins),
+            max_sample_bin_count=int(self.max_motion_sample_bin_count),
+        )
+
+    def _record_adaptive_failures(self, env_ids: torch.Tensor) -> None:
+        """Record failure bins for true reset/termination-driven resampling only."""
         episode_failed = self._env.termination_manager.terminated[env_ids]
-        if torch.any(episode_failed):
-            # Use the last valid frame (exclusive end indices shouldn't be used as timestamps).
-            global_ts = torch.clamp(self.global_time_steps - 1, min=0, max=int(self.motion.time_step_total) - 1)
-            current_bin_index = torch.clamp(
-                (global_ts * self.bin_count) // max(self.motion.time_step_total, 1), 0, self.bin_count - 1
-            )
-            # NOTE terminated envs are early terminated or out of motion range ?
-            fail_bins = current_bin_index[env_ids][episode_failed]
-            self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
-            fail_global_ts = global_ts[env_ids][episode_failed]
-            fail_motion_ids = self.motion.motion_ids_from_timestamps(fail_global_ts)
-            fail_local_frames = fail_global_ts - self.motion.time_step_start_idx[fail_motion_ids]
-            # fail bin 是“摔倒/失败发生点”；重生 bin 是同一个 motion 内往前回退后的恢复窗口。
-            # 这里直接按 motion-local 坐标统计 spawn bin，避免全局 frame 倒减时跨进另一个 motion。
-            self._current_motion_bin_failed[:] = accumulate_rewinded_motion_sample_bin_counts(
-                fail_motion_ids=fail_motion_ids,
-                fail_local_frames=fail_local_frames,
-                time_step_start_idx=self.motion.time_step_start_idx,
-                time_step_end_idx=self.motion.time_step_end_idx,
-                min_local_frame=int(self.cfg.motion_sampling_start_frame),
-                max_future_step=int(self.cfg.max_future_step),
-                bin_frame_width=int(self.adaptive_bin_frame_width),
-                rewind_bins=int(self.cfg.adaptive_sample_rewind_bins),
-                min_rewind_bins=int(self.cfg.adaptive_sample_rewind_min_bins),
-                max_sample_bin_count=int(self.max_motion_sample_bin_count),
-            )
+        if not torch.any(episode_failed):
+            return
 
-        # Sample
+        # Use the last valid frame (exclusive end indices shouldn't be used as timestamps).
+        global_ts = torch.clamp(self.global_time_steps - 1, min=0, max=int(self.motion.time_step_total) - 1)
+        current_bin_index = torch.clamp(
+            (global_ts * self.bin_count) // max(self.motion.time_step_total, 1), 0, self.bin_count - 1
+        )
+        fail_bins = current_bin_index[env_ids][episode_failed]
+        self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
+        fail_global_ts = global_ts[env_ids][episode_failed]
+        fail_motion_ids = self.motion.motion_ids_from_timestamps(fail_global_ts)
+        fail_local_frames = fail_global_ts - self.motion.time_step_start_idx[fail_motion_ids]
+        self._accumulate_motion_bin_failures(fail_motion_ids, fail_local_frames)
 
+    def _sample_adaptive_motion_times(
+        self, env_ids: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         # Keep global-bin metrics/export as the "where did it fail" view.
         self._compute_sampling_probabilities()
         # Use motion-local spawn bins as the "where should it restart" distribution.
         sampling_probabilities, valid_motion_bin_mask = self._compute_motion_bin_sampling_probabilities()
 
-        sampled_flat_bins = torch.multinomial(sampling_probabilities, len(env_ids), replacement=True)
+        sampled_flat_bins = torch.multinomial(sampling_probabilities, int(env_ids.numel()), replacement=True)
         sampled_motion_ids = sampled_flat_bins // self.max_motion_sample_bin_count
         sampled_local_bins = sampled_flat_bins % self.max_motion_sample_bin_count
         sampled_motion_ids, local_t = sample_motion_local_times_from_bins(
@@ -876,7 +870,16 @@ class MotionCommand(CommandTerm):
         if self.cfg.eval_mode:
             # 评估模式下也不能从 local=0 开始，避免开头几帧脏数据影响初始化。
             self.local_time_steps[env_ids] = int(max(0, self.cfg.motion_sampling_start_frame))
-        # Metrics
+
+        return sampling_probabilities, valid_motion_bin_mask, sampled_motion_ids
+
+    def _update_adaptive_sampling_metrics(
+        self,
+        sampling_probabilities: torch.Tensor,
+        valid_motion_bin_mask: torch.Tensor,
+        sampled_motion_ids: torch.Tensor | None,
+    ) -> None:
+        del sampled_motion_ids
         H = -(sampling_probabilities * (sampling_probabilities + 1e-12).log()).sum()
         H_norm = H / math.log(max(int(valid_motion_bin_mask.sum().item()), 2))
         pmax, imax = sampling_probabilities.max(dim=0)
@@ -891,7 +894,23 @@ class MotionCommand(CommandTerm):
             sampling_probabilities > self.cfg.failure_most_hard_cap_beta * 0.5 * (sampling_probabilities.mean())
         ).sum()  # 计算超过平均值failure_most_hard_cap_beta的数目
 
-    def _resample_command(self, env_ids: Sequence[int]):
+    def _adaptive_sampling(self, env_ids: Sequence[int], record_failures: bool = True):
+        """
+        1. optionally record reset/termination failures
+        2. compute sampling probability and sample bins accordingly
+        3. compute metrics
+        """
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+        if env_ids.numel() == 0:
+            return
+
+        self._prepare_adaptive_sampling(env_ids)
+        if record_failures:
+            self._record_adaptive_failures(env_ids)
+        sampling_probabilities, valid_motion_bin_mask, sampled_motion_ids = self._sample_adaptive_motion_times(env_ids)
+        self._update_adaptive_sampling_metrics(sampling_probabilities, valid_motion_bin_mask, sampled_motion_ids)
+
+    def _resample_command(self, env_ids: Sequence[int], record_failures: bool = True):
         """_resample_command will be called multiple times in each step
         1. Called from _update_command
         2. Called directly in the IsaacLab simulator
@@ -901,7 +920,7 @@ class MotionCommand(CommandTerm):
         if len(env_ids) == 0:
             return
         if self.cfg.adaptive_sample:
-            self._adaptive_sampling(env_ids)
+            self._adaptive_sampling(env_ids, record_failures=record_failures)
         else:
             raise NotImplementedError
 
@@ -982,7 +1001,7 @@ class MotionCommand(CommandTerm):
             if self.resample_time >= self.cfg.resample_interval:
                 self.resample_motion_files(self.env)
                 env_ids = torch.arange(self.num_envs, device=self.device)
-        self._resample_command(env_ids)
+        self._resample_command(env_ids, record_failures=False)
 
         # compute the metrics
         anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)

@@ -21,6 +21,8 @@ source /home/thl/miniconda3/etc/profile.d/conda.sh
 conda activate my_env
 source /home/thl/isaacsim5.1/setup_conda.sh
 python -m pip install -e source/whole_body_tracking
+
+git clone https://github.com/toonasinensis/rsl_rl.git
 cd rsl_rl
 pip install -e .
 python -m pip install -U vector-quantize-pytorch

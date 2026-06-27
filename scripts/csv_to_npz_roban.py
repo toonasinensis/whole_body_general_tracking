@@ -12,12 +12,14 @@
 import argparse
 import numpy as np
 import os
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Replay motion from csv file and output to npz file.")
-parser.add_argument("--input_file", type=str, required=True, help="The path to the input motion csv file.")
+parser.add_argument("--input_file", type=str, default=None, help="The path to the input motion csv file.")
+parser.add_argument("--input_dir", type=str, default=None, help="Directory containing input motion csv files.")
 parser.add_argument("--input_fps", type=int, default=30, help="The fps of the input motion.")
 parser.add_argument(
     "--frame_range",
@@ -29,17 +31,24 @@ parser.add_argument(
         " loaded."
     ),
 )
-parser.add_argument("--output_name", type=str, required=True, help="The name of the motion npz file.")
+parser.add_argument("--output_name", type=str, default=None, help="The name of the motion npz file.")
+parser.add_argument("--output_dir", type=str, default=None, help="Directory to save npz files when using --input_dir.")
 parser.add_argument("--output_fps", type=int, default=50, help="The fps of the output motion.")
 # New: allow disabling wandb upload and choose save path
 parser.add_argument("--no_wandb", action="store_true", help="Disable WandB logging and registry upload.")
 parser.add_argument("--save_to", type=str, default="/tmp/motion.npz", help="Path to save the generated npz.")
+parser.add_argument("--recursive", action="store_true", help="Recursively process csv files under --input_dir.")
 parser.add_argument("--robot", type=str, help="robot name")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
+
+if (args_cli.input_file is None) == (args_cli.input_dir is None):
+    parser.error("Specify exactly one of --input_file or --input_dir.")
+if args_cli.input_dir is not None and args_cli.output_dir is None:
+    parser.error("--output_dir is required when using --input_dir.")
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -164,7 +173,7 @@ class MotionLoader:
         """Computes the frame blend for the motion."""
         phase = times / self.duration
         index_0 = (phase * (self.input_frames - 1)).floor().long()
-        index_1 = torch.minimum(index_0 + 1, torch.tensor(self.input_frames - 1))
+        index_1 = torch.clamp(index_0 + 1, max=self.input_frames - 1)
         blend = phase * (self.input_frames - 1) - index_0
         return index_0, index_1, blend
 
@@ -251,75 +260,123 @@ def reorder_joint_data(joint_data: torch.Tensor, robot: Articulation, target_joi
         return joint_data[:, reorder_indices]
 
 
+def collect_motion_jobs() -> list[tuple[str, str, str]]:
+    """Collect input csv files and their output npz paths."""
+    if args_cli.input_file is not None:
+        input_path = Path(args_cli.input_file)
+        output_name = args_cli.output_name or input_path.stem
+        return [(str(input_path), args_cli.save_to, output_name)]
+
+    input_dir = Path(args_cli.input_dir)
+    output_dir = Path(args_cli.output_dir)
+    pattern = "**/*.csv" if args_cli.recursive else "*.csv"
+    csv_files = sorted(path for path in input_dir.glob(pattern) if path.is_file())
+    if not csv_files:
+        raise FileNotFoundError(f"No csv files found in {input_dir} with pattern '{pattern}'.")
+
+    jobs = []
+    for input_path in csv_files:
+        rel_path = input_path.relative_to(input_dir)
+        output_path = (output_dir / rel_path).with_suffix(".npz")
+        output_name = str(rel_path.with_suffix("")).replace(os.sep, "_")
+        jobs.append((str(input_path), str(output_path), output_name))
+    return jobs
+
+
+def save_motion_log(log: dict, save_to: str, output_name: str):
+    """Save one motion locally and optionally upload it to WandB."""
+    save_path = Path(save_to)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(save_path, **log)
+    print(f"[INFO]: Motion saved to: {save_path}")
+
+    use_wandb = (not args_cli.no_wandb) and (
+        os.environ.get("WANDB_DISABLED", "").lower() not in ["1", "true", "yes"]
+    )
+    if use_wandb:
+        import wandb
+
+        run = wandb.init(project="csv_to_npz", name=output_name)
+        print(f"[INFO]: Logging motion to wandb: {output_name}")
+        registry = "motions"
+        logged_artifact = run.log_artifact(artifact_or_path=str(save_path), name=output_name, type=registry)
+        try:
+            run.link_artifact(artifact=logged_artifact, target_path=f"wandb-registry-{registry}/{output_name}")
+            print(f"[INFO]: Motion saved to wandb registry: {registry}/{output_name}")
+        except Exception as e:
+            print(f"[WARN]: Skipping registry link: {e}")
+        finally:
+            run.finish()
+
+
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joint_names: list[str]):
     """Runs the simulation loop."""
-    # Load motion
-    motion = MotionLoader(
-        motion_file=args_cli.input_file,
-        input_fps=args_cli.input_fps,
-        output_fps=args_cli.output_fps,
-        device=sim.device,
-        frame_range=args_cli.frame_range,
-    )
-
     # Extract scene entities
     robot = scene["robot"]
     robot_joint_indexes = robot.find_joints(joint_names, preserve_order=True)[0]
+    jobs = collect_motion_jobs()
+    print(f"[INFO]: Found {len(jobs)} motion file(s) to convert.")
 
-    # ------- data logger -------------------------------------------------------
-    log = {
-        "fps": [args_cli.output_fps],
-        "joint_pos": [],
-        "joint_vel": [],
-        "body_pos_w": [],
-        "body_quat_w": [],
-        "body_lin_vel_w": [],
-        "body_ang_vel_w": [],
-    }
-    file_saved = False
-    # --------------------------------------------------------------------------
+    for job_id, (input_file, save_to, output_name) in enumerate(jobs, start=1):
+        if not simulation_app.is_running():
+            print("[WARN]: Simulation app stopped before all motions were converted.")
+            break
 
-    # Simulation loop
-    while simulation_app.is_running():
-        (
+        print(f"[INFO]: [{job_id}/{len(jobs)}] Converting: {input_file}")
+        motion = MotionLoader(
+            motion_file=input_file,
+            input_fps=args_cli.input_fps,
+            output_fps=args_cli.output_fps,
+            device=sim.device,
+            frame_range=args_cli.frame_range,
+        )
+
+        log = {
+            "fps": [args_cli.output_fps],
+            "joint_pos": [],
+            "joint_vel": [],
+            "body_pos_w": [],
+            "body_quat_w": [],
+            "body_lin_vel_w": [],
+            "body_ang_vel_w": [],
+        }
+
+        while simulation_app.is_running():
             (
-                motion_base_pos,
-                motion_base_rot,
-                motion_base_lin_vel,
-                motion_base_ang_vel,
-                motion_dof_pos,
-                motion_dof_vel,
-            ),
-            reset_flag,
-        ) = motion.get_next_state()
+                (
+                    motion_base_pos,
+                    motion_base_rot,
+                    motion_base_lin_vel,
+                    motion_base_ang_vel,
+                    motion_dof_pos,
+                    motion_dof_vel,
+                ),
+                reset_flag,
+            ) = motion.get_next_state()
 
-        # set root state
-        root_states = robot.data.default_root_state.clone()
-        root_states[:, :3] = motion_base_pos
-        root_states[:, :2] += scene.env_origins[:, :2]
-        root_states[:, 3:7] = motion_base_rot
-        root_states[:, 7:10] = motion_base_lin_vel
-        root_states[:, 10:] = motion_base_ang_vel
-        robot.write_root_state_to_sim(root_states)
+            # set root state
+            root_states = robot.data.default_root_state.clone()
+            root_states[:, :3] = motion_base_pos
+            root_states[:, :2] += scene.env_origins[:, :2]
+            root_states[:, 3:7] = motion_base_rot
+            root_states[:, 7:10] = motion_base_lin_vel
+            root_states[:, 10:] = motion_base_ang_vel
+            robot.write_root_state_to_sim(root_states)
 
-        # set joint state
-        joint_pos = robot.data.default_joint_pos.clone()
-        joint_vel = robot.data.default_joint_vel.clone()
-        joint_pos[:, robot_joint_indexes] = motion_dof_pos
-        joint_vel[:, robot_joint_indexes] = motion_dof_vel
-        robot.write_joint_state_to_sim(joint_pos, joint_vel)
-        sim.render()  # We don't want physic (sim.step())
-        scene.update(sim.get_physics_dt())
+            # set joint state
+            joint_pos = robot.data.default_joint_pos.clone()
+            joint_vel = robot.data.default_joint_vel.clone()
+            joint_pos[:, robot_joint_indexes] = motion_dof_pos
+            joint_vel[:, robot_joint_indexes] = motion_dof_vel
+            robot.write_joint_state_to_sim(joint_pos, joint_vel)
+            sim.render()  # We don't want physic (sim.step())
+            scene.update(sim.get_physics_dt())
 
-        pos_lookat = root_states[0, :3].cpu().numpy()
-        sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
+            pos_lookat = root_states[0, :3].cpu().numpy()
+            sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
 
-        if not file_saved:
-            # 重排序关节数据为目标顺序
-            # log["joint_pos"].append(robot.data.joint_pos[0, :].cpu().numpy().copy())
-            # log["joint_vel"].append(robot.data.joint_vel[0, :].cpu().numpy().copy())
             reordered_joint_pos = reorder_joint_data(robot.data.joint_pos[0, :], robot, joint_names)
-            reordered_joint_vel = reorder_joint_data(robot.data.joint_vel[0, :], robot, joint_names)            
+            reordered_joint_vel = reorder_joint_data(robot.data.joint_vel[0, :], robot, joint_names)
             log["joint_pos"].append(reordered_joint_pos.cpu().numpy().copy())
             log["joint_vel"].append(reordered_joint_vel.cpu().numpy().copy())
             log["body_pos_w"].append(robot.data.body_pos_w[0, :].cpu().numpy().copy())
@@ -327,37 +384,18 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
             log["body_lin_vel_w"].append(robot.data.body_lin_vel_w[0, :].cpu().numpy().copy())
             log["body_ang_vel_w"].append(robot.data.body_ang_vel_w[0, :].cpu().numpy().copy())
 
-        if reset_flag and not file_saved:
-            file_saved = True
-            for k in (
-                "joint_pos",
-                "joint_vel",
-                "body_pos_w",
-                "body_quat_w",
-                "body_lin_vel_w",
-                "body_ang_vel_w",
-            ):
-                log[k] = np.stack(log[k], axis=0)
-
-            # Always save locally
-            np.savez(args_cli.save_to, **log)
-            print(f"[INFO]: Motion saved to: {args_cli.save_to}")
-
-            # Optionally upload to WandB registry (unless disabled)
-            use_wandb = (not args_cli.no_wandb) and (os.environ.get("WANDB_DISABLED", "").lower() not in ["1", "true", "yes"])
-            if use_wandb:
-                import wandb
-
-                COLLECTION = args_cli.output_name
-                run = wandb.init(project="csv_to_npz", name=COLLECTION)
-                print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
-                REGISTRY = "motions"
-                logged_artifact = run.log_artifact(artifact_or_path=args_cli.save_to, name=COLLECTION, type=REGISTRY)
-                try:
-                    run.link_artifact(artifact=logged_artifact, target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}")
-                    print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
-                except Exception as e:
-                    print(f"[WARN]: Skipping registry link: {e}")
+            if reset_flag:
+                for k in (
+                    "joint_pos",
+                    "joint_vel",
+                    "body_pos_w",
+                    "body_quat_w",
+                    "body_lin_vel_w",
+                    "body_ang_vel_w",
+                ):
+                    log[k] = np.stack(log[k], axis=0)
+                save_motion_log(log, save_to, output_name)
+                break
 
 
 def main():
