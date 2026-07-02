@@ -38,6 +38,38 @@ G1_ISAAC_JOINT_NAMES = [
     "right_wrist_yaw_joint",
 ]
 
+G1_MJCF_JOINT_NAMES = [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
 G1_MOTION_BODY_NAMES = [
     "pelvis",
     "left_hip_roll_link",
@@ -186,9 +218,12 @@ def _names_for_args(args: argparse.Namespace, joint_dim: int, body_dim: int) -> 
     body_names = _read_names_file(args.body_names_file)
 
     if joint_names is None:
-        if args.joint_order != "g1_isaac":
+        if args.joint_order == "g1_isaac":
+            joint_names = list(G1_ISAAC_JOINT_NAMES)
+        elif args.joint_order == "g1_mjcf":
+            joint_names = list(G1_MJCF_JOINT_NAMES)
+        else:
             raise ValueError(f"Unsupported --joint_order {args.joint_order!r}.")
-        joint_names = list(G1_ISAAC_JOINT_NAMES)
 
     if body_names is None:
         body_order = args.body_order
@@ -259,7 +294,7 @@ def parse_args() -> argparse.Namespace:
         help="Overwrite input npz files instead of writing sidecars.",
     )
     parser.add_argument("--force", action="store_true", help="Replace existing sidecar outputs.")
-    parser.add_argument("--joint_order", default="g1_isaac", choices=["g1_isaac"])
+    parser.add_argument("--joint_order", default="g1_isaac", choices=["g1_isaac", "g1_mjcf"])
     parser.add_argument(
         "--body_order",
         default="auto",

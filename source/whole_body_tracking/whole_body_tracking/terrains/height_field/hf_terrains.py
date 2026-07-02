@@ -210,6 +210,52 @@ def pyramid_stairs_terrain(difficulty: float, cfg: hf_terrains_cfg.HfPyramidStai
 
 
 @height_field_to_mesh
+def long_runway_terrain(difficulty: float, cfg: hf_terrains_cfg.HfLongRunwayTerrainCfg) -> np.ndarray:
+    """Generate a long flat runway for velocity locomotion."""
+
+    width_pixels = int(cfg.size[0] / cfg.horizontal_scale)
+    length_pixels = int(cfg.size[1] / cfg.horizontal_scale)
+    hf_raw = np.zeros((width_pixels, length_pixels))
+
+    shoulder_width = int(cfg.shoulder_width / cfg.horizontal_scale)
+    if shoulder_width > 0:
+        shoulder_height = cfg.shoulder_height_range[0] + difficulty * (
+            cfg.shoulder_height_range[1] - cfg.shoulder_height_range[0]
+        )
+        shoulder_height = int(shoulder_height / cfg.vertical_scale)
+        shoulder_width = min(shoulder_width, length_pixels // 2)
+        hf_raw[:, :shoulder_width] = shoulder_height
+        hf_raw[:, length_pixels - shoulder_width :] = shoulder_height
+
+    return np.rint(hf_raw).astype(np.int16)
+
+
+@height_field_to_mesh
+def large_step_platform_terrain(difficulty: float, cfg: hf_terrains_cfg.HfLargeStepPlatformTerrainCfg) -> np.ndarray:
+    """Generate a long x-direction platform with large step-ups."""
+
+    width_pixels = int(cfg.size[0] / cfg.horizontal_scale)
+    length_pixels = int(cfg.size[1] / cfg.horizontal_scale)
+    step_depth = max(1, int(cfg.step_depth / cfg.horizontal_scale))
+    start_platform = max(0, int(cfg.start_platform_length / cfg.horizontal_scale))
+    step_height = cfg.step_height_range[0] + difficulty * (cfg.step_height_range[1] - cfg.step_height_range[0])
+    step_height = int(step_height / cfg.vertical_scale)
+
+    hf_raw = np.zeros((width_pixels, length_pixels))
+    for step_index in range(1, int(cfg.max_steps) + 1):
+        x_start = start_platform + (step_index - 1) * step_depth
+        x_stop = min(width_pixels, start_platform + step_index * step_depth)
+        if x_start >= width_pixels:
+            break
+        hf_raw[x_start:x_stop, :] = step_index * step_height
+    final_start = start_platform + int(cfg.max_steps) * step_depth
+    if final_start < width_pixels:
+        hf_raw[final_start:, :] = int(cfg.max_steps) * step_height
+
+    return np.rint(hf_raw).astype(np.int16)
+
+
+@height_field_to_mesh
 def discrete_obstacles_terrain(difficulty: float, cfg: hf_terrains_cfg.HfDiscreteObstaclesTerrainCfg) -> np.ndarray:
     """Generate a terrain with randomly generated obstacles as pillars with positive and negative heights.
 

@@ -10,5 +10,6 @@ from .events import *  # noqa: F401, F403
 from .heading_commands import *  # noqa: F401, F403
 from .observations import *  # noqa: F401, F403
 from .paired_commands import *  # noqa: F401, F403
+from .parkour_rewards import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403

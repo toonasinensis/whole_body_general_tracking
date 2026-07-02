@@ -25,17 +25,17 @@ class PairedTerrainActorShellCfg:
     backbone: dict = {
         "class_name": "MyModel",
         "main_encoder": "encoder_g1",
-        "encoder_mask_group": "aux_mask",
+        # "encoder_mask_group": "aux_mask",
         # "aux_loss_mask_group": "aux_mask",
         "encoder": {
             "encoder_g1": {
-                "encoder_groups": ["wbc_cmd"],
-                "hidden_dims": [512, 256],
+                "encoder_groups": ["rbt_cmd_mf", "velcommand"],
+                "hidden_dims": [1024, 512, 512],
                 "activation": "swish",
             },
             "encoder_smpl": {
                 "encoder_groups": ["velcommand"],  # 输入的 encoder_groups
-                "hidden_dims": [512, 256],  # ecoder MLP 隐层
+                "hidden_dims": [1024, 512, 512],  # ecoder MLP 隐层
                 "activation": "swish",
             },
         },
@@ -51,31 +51,22 @@ class PairedTerrainActorShellCfg:
         "decoder": {
             "action_decoder": {
                 "decoder_groups": ["prop", "terrain"],
-                "hidden_dims": [1024, 512, 256],
+                "hidden_dims": [2048, 1024, 512, 512],
                 "activation": "swish",
                 "detach_latent": True,
                 "outputs": ["actions"],
             },
-            # "g1_kin_decoder": {
-            #     "decoder_groups": [],
-            #     "hidden_dims": [ 1024, 512, 256],
-            #     "activation": "swish",
-            #     "detach_latent": False,
-            #     "outputs": ["wbc_cmd"],
-            # },
+            "g1_kin_decoder": {
+                "decoder_groups": [],
+                "hidden_dims": [4096, 2048, 1024, 512, 256],
+                "activation": "swish",
+                "detach_latent": False,
+                "outputs": ["rbt_cmd_mf"],
+            },
         },
         "activation": "swish",
         "obs_normalization": True,
     }
-
-
-@configclass
-class CriticC2fg:
-    class_name: str = "MLPModel"
-    hidden_dims: list = [1024, 512, 256]
-    activation: str = "swish"
-    obs_normalization: bool = True
-    distribution_cfg: dict = None
 
 
 @configclass
@@ -88,23 +79,22 @@ class G1PairedTerrainHeightScanRunnerCfg(RslRlOnPolicyRunnerCfg):
 
     algorithm = MyPpoAlgorithmCfg()
     actor = PairedTerrainActorShellCfg()
-    critic = CriticC2fg()
+    critic = CriticCfg()
+
+    # obs_groups = {
+    #     "actor": ["prop", "velcommand", "terrain"],
+    #     "critic": ["critic", "terrain"],
+    # }
 
     obs_groups = {
-        "actor": ["prop", "velcommand", "wbc_cmd", "vel_task_mask", "aux_mask", "terrain"],
-        "critic": [
-            "critic",
-            "velcommand",
-            "wbc_cmd",
-            "vel_task_mask",
-            "terrain",
-        ],
+        "actor": ["prop", "rbt_cmd_mf", "smpl_cmd_mf", "terrain", "velcommand", "aux_mask"],
+        "critic": ["critic", "terrain"],
     }
 
 
 @configclass
 class G1MixedTerrainHeightScanAMPRunnerCfg(G1PairedTerrainHeightScanRunnerCfg):
-    experiment_name = "g1_new_walk"
+    experiment_name = "g1_mixed_terrain_height_scan_amp"
 
     algorithm = MyPpoAlgorithmCfg(
         value_loss_coef=1.0,
@@ -122,14 +112,14 @@ class G1MixedTerrainHeightScanAMPRunnerCfg(G1PairedTerrainHeightScanRunnerCfg):
         plugins=[
             {
                 "class_name": "AMPPlugin",
-                "amp_reward_coef": 0.2,
+                "amp_reward_coef": 0.3,
                 "amp_motion_files": G1_AMP_MOTION_DIR,
                 "amp_task_reward_lerp": 0.9,
                 "amp_discr_hidden_dims": [1024, 512, 512],
                 "amp_body_names": G1_AMP_BODY_NAMES,
                 "amp_anchor_name": G1_AMP_ANCHOR_BODY_NAME,
                 "amp_mask_group": "amp_mask",
-                "amp_use_height_scan": False,
+                "amp_use_height_scan": True,
             }
         ],
     )

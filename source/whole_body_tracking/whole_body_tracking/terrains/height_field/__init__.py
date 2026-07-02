@@ -29,6 +29,8 @@ from .hf_terrains_cfg import (
     HfDiscreteObstaclesTerrainCfg,
     HfInvertedPyramidSlopedTerrainCfg,
     HfInvertedPyramidStairsTerrainCfg,
+    HfLargeStepPlatformTerrainCfg,
+    HfLongRunwayTerrainCfg,
     HfObstacleCfg,
     HfPyramidSlopedTerrainCfg,
     HfPyramidStairsTerrainCfg,

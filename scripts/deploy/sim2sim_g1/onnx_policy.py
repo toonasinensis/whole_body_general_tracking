@@ -5,7 +5,18 @@ import numpy as np
 
 import onnx
 
-G1_SUPPORTED_INPUTS = ("prop", "rbt_cmd_mf", "smpl_cmd_mf", "z")
+G1_SUPPORTED_INPUTS = (
+    "prop",
+    "rbt_cmd_mf",
+    "smpl_cmd_mf",
+    "terrain",
+    "task",
+    "velcommand",
+    "wbc_cmd",
+    "vel_task_mask",
+    "aux_mask",
+    "z",
+)
 
 
 def load_metadata(path: str) -> dict:

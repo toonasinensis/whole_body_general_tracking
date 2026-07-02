@@ -8,7 +8,7 @@ from typing import Literal
 from whole_body_tracking.terrains.paired_manifest import TerrainMotionPairManifest, resolve_repo_path
 
 PairingMode = Literal["unpaired", "strict_pair"]
-TerrainKind = Literal["flat", "stl_grid"]
+TerrainKind = Literal["flat", "stl_grid", "hf_grid"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,7 @@ class MixedDomainSpec:
     env_ratio: float
     pairing: PairingMode
     terrain_kind: TerrainKind
+    task_profile: str
     motion_start: int
     motion_count: int
     terrain_start: int
@@ -135,6 +136,7 @@ def build_mixed_domain_layout(
         pairing = str(domain_cfg.pairing)
         terrain_kind = str(domain_cfg.terrain_kind)
         env_ratio = float(domain_cfg.env_ratio)
+        task_profile = str(getattr(domain_cfg, "task_profile", "wbc_tracking"))
         motion_start = len(motion_paths)
         terrain_start = len(terrain_names)
 
@@ -150,6 +152,23 @@ def build_mixed_domain_layout(
 
             motion_names = tuple(Path(path).stem for path in domain_motion_paths)
             domain_terrain_names = tuple(f"{name}_flat_{index:03d}" for index in range(cell_count))
+            motion_paths.extend(domain_motion_paths)
+            terrain_paths.extend([None] * cell_count)
+            terrain_names.extend(domain_terrain_names)
+
+        elif pairing == "unpaired" and terrain_kind == "hf_grid":
+            domain_motion_paths = read_motion_dataset(
+                domain_cfg.motion_file,
+                domain_cfg.dataset_txt,
+                max_motion_num=int(getattr(domain_cfg, "max_motion_num", -1)),
+            )
+            cell_count = int(getattr(domain_cfg, "terrain_cell_count", 1))
+            if cell_count <= 0:
+                raise ValueError(f"{name}: terrain_cell_count must be positive, got {cell_count}")
+
+            motion_names = tuple(Path(path).stem for path in domain_motion_paths)
+            terrain_profile = str(getattr(domain_cfg, "terrain_profile", "long_runway"))
+            domain_terrain_names = tuple(f"{name}_{terrain_profile}_{index:03d}" for index in range(cell_count))
             motion_paths.extend(domain_motion_paths)
             terrain_paths.extend([None] * cell_count)
             terrain_names.extend(domain_terrain_names)
@@ -174,6 +193,7 @@ def build_mixed_domain_layout(
                 env_ratio=env_ratio,
                 pairing=pairing,  # type: ignore[arg-type]
                 terrain_kind=terrain_kind,  # type: ignore[arg-type]
+                task_profile=task_profile,
                 motion_start=motion_start,
                 motion_count=len(motion_paths) - motion_start,
                 terrain_start=terrain_start,
@@ -253,7 +273,11 @@ def build_mixed_terrain_cfg(
     )
     proportion = 1.0 / float(layout.terrain_count)
     sub_terrains = {}
+    hf_names = _hf_terrain_name_map(domain_cfgs)
     for name, terrain_path in zip(layout.terrain_names, layout.terrain_paths, strict=True):
+        if name in hf_names:
+            sub_terrains[name] = _make_hf_terrain_cfg(hf_names[name], proportion)
+            continue
         sub_terrains[name] = TrimeshPlatformCfg(
             proportion=proportion,
             stl_file_path=terrain_path,
@@ -275,3 +299,48 @@ def build_mixed_terrain_cfg(
         sub_terrains=sub_terrains,
     )
     return terrain_cfg, layout
+
+
+def _hf_terrain_name_map(domain_cfgs) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for domain_cfg in domain_cfgs:
+        if str(getattr(domain_cfg, "pairing", "")) != "unpaired":
+            continue
+        if str(getattr(domain_cfg, "terrain_kind", "")) != "hf_grid":
+            continue
+        name = str(domain_cfg.name)
+        terrain_profile = str(getattr(domain_cfg, "terrain_profile", "long_runway"))
+        for index in range(int(getattr(domain_cfg, "terrain_cell_count", 1))):
+            out[f"{name}_{terrain_profile}_{index:03d}"] = terrain_profile
+    return out
+
+
+def _make_hf_terrain_cfg(terrain_profile: str, proportion: float):
+    from whole_body_tracking.terrains.height_field import HfLargeStepPlatformTerrainCfg, HfLongRunwayTerrainCfg
+
+    if terrain_profile == "long_runway":
+        return HfLongRunwayTerrainCfg(
+            proportion=proportion,
+            shoulder_width=0.0,
+            shoulder_height_range=(0.0, 0.0),
+        )
+    if terrain_profile == "large_step_platform":
+        return HfLargeStepPlatformTerrainCfg(
+            proportion=proportion,
+            step_height_range=(0.03, 0.25),
+            step_depth=1.0,
+            start_platform_length=2.0,
+            max_steps=4,
+        )
+    if terrain_profile == "velocity_runway_steps":
+        return HfLargeStepPlatformTerrainCfg(
+            proportion=proportion,
+            step_height_range=(0.03, 0.25),
+            step_depth=1.2,
+            start_platform_length=3.0,
+            max_steps=5,
+        )
+    raise ValueError(
+        f"Unsupported procedural terrain_profile={terrain_profile!r}. "
+        "Expected one of: long_runway, large_step_platform, velocity_runway_steps."
+    )

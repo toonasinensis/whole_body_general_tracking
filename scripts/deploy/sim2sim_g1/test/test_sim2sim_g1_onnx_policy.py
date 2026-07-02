@@ -60,6 +60,25 @@ def test_grouped_onnx_contract_accepts_random_latent_input() -> None:
     validate_grouped_onnx_contract(["prop", "z"], meta)
 
 
+def test_grouped_onnx_contract_accepts_wbc_and_velocity_task_mask_inputs() -> None:
+    meta = {
+        "input_names": ["prop", "velcommand", "wbc_cmd", "vel_task_mask", "aux_mask", "terrain"],
+        "observation_shapes": {
+            "prop": [10],
+            "velcommand": [3],
+            "wbc_cmd": [1],
+            "vel_task_mask": [1],
+            "aux_mask": [1],
+            "terrain": [187],
+        },
+    }
+
+    validate_grouped_onnx_contract(
+        ["prop", "velcommand", "wbc_cmd", "vel_task_mask", "aux_mask", "terrain"],
+        meta,
+    )
+
+
 def test_grouped_onnx_contract_rejects_missing_prop() -> None:
     meta = {
         "input_names": ["rbt_cmd_mf"],

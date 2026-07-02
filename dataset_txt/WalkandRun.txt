@@ -1,0 +1,17 @@
+arc_jog_left_loop_002__A029.npz
+arc_walk_left_loop_001__A029.npz
+idle_turn_270_001__A048.npz
+idle_turn_360_001__A047.npz
+jog_arc_cw_loop_004__A045.npz
+jog_backward_loop_002__A022.npz
+jog_backward_loop_003__A023.npz
+jog_forward_loop_003__A021.npz
+jog_forward_loop_003__A022.npz
+step_rotate_idle_000_002__A026.npz
+walk_arc_cw_loop_002__A046.npz
+walk_backward_loop_001__A022.npz
+walk_backward_loop_001__A024.npz
+walk_forward_loop_002__A022.npz
+walk_forward_loop_002__A024.npz
+walk_sideway_left_loop_002__A021.npz
+walk_sideway_right_loop_001__A022.npz

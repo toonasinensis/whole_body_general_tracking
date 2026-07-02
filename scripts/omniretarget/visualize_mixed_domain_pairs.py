@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser(description="Visualize mixed flat/mesh motion d
 parser.add_argument("--task", type=str, default="TerrainPairMixed-G1")
 parser.add_argument("--num_envs", type=int, default=16)
 parser.add_argument("--pair_limit", type=int, default=8)
-parser.add_argument("--pairs_jsonl", type=str, default="data/omniretarget/g1_terrain/pairs.jsonl")
+parser.add_argument("--pairs_jsonl", type=str, default="data/omniretarget/g1_terrain/pairs_z_scale_1.0.jsonl")
 parser.add_argument("--flat_dataset_txt", type=str, default="data/tracking_npz_data/lafan_named.txt")
 parser.add_argument("--flat_env_ratio", type=float, default=0.25)
 parser.add_argument("--domain_separator_cell_count", type=int, default=32)

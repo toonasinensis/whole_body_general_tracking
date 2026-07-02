@@ -20,23 +20,26 @@
 import argparse
 import numpy as np
 import os
+import pickle
 
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Replay motion from csv file and output to npz file.")
-parser.add_argument("--input_file", type=str, default=None, help="Path to a single input SOMA npz file.")
+parser = argparse.ArgumentParser(description="Replay motion from csv/npz/pkl file and output to mimic npz file.")
+parser.add_argument(
+    "--input_file", type=str, default=None, help="Path to a single input SOMA npz, CSV, or GMR pkl file."
+)
 parser.add_argument(
     "--input_dir",
     type=str,
     default=None,
-    help="Directory containing multiple SOMA npz files to convert in parallel.",
+    help="Directory containing multiple SOMA npz, CSV, or GMR pkl files to convert in parallel.",
 )
 parser.add_argument(
     "--pattern",
     type=str,
     default="*.npz",
-    help="Glob pattern within --input_dir (default: *.npz).",
+    help="Glob pattern within --input_dir (default: *.npz). Use '*.pkl' for GMR data.",
 )
 parser.add_argument("--input_fps", type=int, default=30, help="The fps of the input motion.")
 parser.add_argument(
@@ -54,12 +57,22 @@ parser.add_argument("--output_fps", type=int, default=50, help="The fps of the o
 # New: allow disabling wandb upload and choose save path
 parser.add_argument("--no_wandb", action="store_true", help="Disable WandB logging and registry upload.")
 parser.add_argument("--save_to", type=str, default=None, help="Path to save the generated npz (single-file mode).")
-parser.add_argument("--robot", type=str, help="robot name")
+parser.add_argument("--robot", type=str, choices=["g1", "roban"], default="roban", help="Robot preset.")
+parser.add_argument(
+    "--root_quat_order",
+    type=str,
+    choices=["xyzw", "wxyz"],
+    default="xyzw",
+    help="Root quaternion order in source files. CSV/SOMA/GMR exports normally use xyzw.",
+)
 parser.add_argument(
     "--output_dir",
     type=str,
     default=None,
-    help="Output directory for batch conversion (--input_dir). If omitted, uses <input_dir>_tracking_npz_fps<output_fps>.",
+    help=(
+        "Output directory for batch conversion (--input_dir). If omitted, uses"
+        " <input_dir>_tracking_npz_fps<output_fps>."
+    ),
 )
 parser.add_argument(
     "--num_envs",
@@ -78,6 +91,12 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Follow env[0] root each frame (interactive debug). Off by default for speed.",
+)
+parser.add_argument(
+    "--no_scene_assets",
+    action="store_true",
+    default=False,
+    help="Do not spawn the default ground plane or sky light. Useful for offline/headless conversion.",
 )
 
 # append AppLauncher cli args
@@ -106,24 +125,101 @@ from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul, 
 ##
 from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
 from whole_body_tracking.robots.roban_s22 import RobanS22_CYLINDER_CFG
+
+G1_SOURCE_JOINT_NAMES = [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
+ROBAN_SOURCE_JOINT_NAMES = [
+    "waist_yaw_joint",
+    "leg_l1_joint",
+    "leg_l2_joint",
+    "leg_l3_joint",
+    "leg_l4_joint",
+    "leg_l5_joint",
+    "leg_l6_joint",
+    "leg_r1_joint",
+    "leg_r2_joint",
+    "leg_r3_joint",
+    "leg_r4_joint",
+    "leg_r5_joint",
+    "leg_r6_joint",
+    "zarm_l1_joint",
+    "zarm_l2_joint",
+    "zarm_l3_joint",
+    "zarm_l4_joint",
+    "zarm_r1_joint",
+    "zarm_r2_joint",
+    "zarm_r3_joint",
+    "zarm_r4_joint",
+]
+
+
+def _source_joint_names_for_robot(robot_name: str) -> list[str]:
+    if robot_name == "g1":
+        return list(G1_SOURCE_JOINT_NAMES)
+    if robot_name == "roban":
+        return list(ROBAN_SOURCE_JOINT_NAMES)
+    raise ValueError(f"Unsupported robot preset: {robot_name}")
+
+
 @configclass
 class ReplayMotionsSceneCfg(InteractiveSceneCfg):
     """Configuration for a replay motions scene."""
 
     # ground plane
-    ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
-
-    # lights
-    sky_light = AssetBaseCfg(
-        prim_path="/World/skyLight",
-        spawn=sim_utils.DomeLightCfg(
-            intensity=750.0,
-            texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
-        ),
+    ground = (
+        None
+        if args_cli.no_scene_assets
+        else AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
     )
 
-    # robot: ArticulationCfg = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")    
-    robot: ArticulationCfg = RobanS22_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    # lights
+    sky_light = (
+        None
+        if args_cli.no_scene_assets
+        else AssetBaseCfg(
+            prim_path="/World/skyLight",
+            spawn=sim_utils.DomeLightCfg(
+                intensity=750.0,
+                texture_file=(
+                    f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr"
+                ),
+            ),
+        )
+    )
+
+    robot: ArticulationCfg = (G1_CYLINDER_CFG if args_cli.robot == "g1" else RobanS22_CYLINDER_CFG).replace(
+        prim_path="{ENV_REGEX_NS}/Robot"
+    )
 
 
 # load npz file and interpolate to the output fps
@@ -136,6 +232,7 @@ class MotionLoader:
         device: torch.device,
         frame_range: tuple[int, int] | None,
         expected_dof_dim: int | None = None,
+        root_quat_order: str = "xyzw",
     ):
         self.motion_file = motion_file
         self.input_fps = input_fps
@@ -146,18 +243,48 @@ class MotionLoader:
         self.device = device
         self.frame_range = frame_range
         self.expected_dof_dim = expected_dof_dim
+        self.root_quat_order = root_quat_order
         self._load_motion()
         self._interpolate_motion()
         self._compute_velocities()
 
     def _load_motion(self):
-        """Loads the motion from a CSV file or a SOMA-style NPZ file.
+        """Loads the motion from a CSV, SOMA-style NPZ, or GMR PKL file.
 
         Supported formats:
         - CSV: columns [base_pos(3), base_quat_xyzw(4), dof_pos(...)]
         - NPZ (SOMA): keys {'data','fps'} where data has same column layout as CSV.
+        - PKL (GMR): keys {'fps','root_pos','root_rot','dof_pos'}.
         """
-        if str(self.motion_file).lower().endswith(".npz"):
+        motion_file_lower = str(self.motion_file).lower()
+        if motion_file_lower.endswith(".pkl"):
+            with open(self.motion_file, "rb") as f:
+                data = pickle.load(f)
+            required_keys = ("root_pos", "root_rot", "dof_pos")
+            missing = [key for key in required_keys if key not in data]
+            if missing:
+                raise ValueError(f"GMR PKL input missing keys {missing}: {self.motion_file}")
+            if "fps" in data and data["fps"] is not None:
+                self.input_fps = float(data["fps"])
+                self.input_dt = 1.0 / float(self.input_fps)
+            root_pos = np.asarray(data["root_pos"])
+            root_rot = np.asarray(data["root_rot"])
+            dof_pos = np.asarray(data["dof_pos"])
+            if root_pos.ndim != 2 or root_pos.shape[1] != 3:
+                raise ValueError(f"root_pos must have shape (frames, 3): {self.motion_file}")
+            if root_rot.ndim != 2 or root_rot.shape[1] != 4:
+                raise ValueError(f"root_rot must have shape (frames, 4): {self.motion_file}")
+            if dof_pos.ndim != 2:
+                raise ValueError(f"dof_pos must have shape (frames, dof): {self.motion_file}")
+            if not (root_pos.shape[0] == root_rot.shape[0] == dof_pos.shape[0]):
+                raise ValueError(f"GMR PKL arrays have inconsistent frame counts: {self.motion_file}")
+            motion_np = np.concatenate([root_pos, root_rot, dof_pos], axis=1)
+            if self.frame_range is not None:
+                start = self.frame_range[0] - 1
+                end = self.frame_range[1]
+                motion_np = motion_np[start:end]
+            motion = torch.from_numpy(motion_np)
+        elif motion_file_lower.endswith(".npz"):
             data = np.load(self.motion_file, allow_pickle=True)
             if "data" not in data.files:
                 raise ValueError(f"NPZ input must contain key 'data': {self.motion_file}")
@@ -190,7 +317,10 @@ class MotionLoader:
         motion = motion.to(torch.float32).to(self.device)
         self.motion_base_poss_input = motion[:, :3]
         self.motion_base_rots_input = motion[:, 3:7]
-        self.motion_base_rots_input = self.motion_base_rots_input[:, [3, 0, 1, 2]]  # convert to wxyz
+        if self.root_quat_order == "xyzw":
+            self.motion_base_rots_input = self.motion_base_rots_input[:, [3, 0, 1, 2]]  # convert to wxyz
+        elif self.root_quat_order != "wxyz":
+            raise ValueError(f"Unsupported root_quat_order: {self.root_quat_order}")
         self.motion_dof_poss_input = motion[:, 7:]
 
         # Roban training format uses 21 controllable joints (no head joints).
@@ -243,7 +373,7 @@ class MotionLoader:
         """Computes the frame blend for the motion."""
         phase = times / self.duration
         index_0 = (phase * (self.input_frames - 1)).floor().long()
-        index_1 = torch.minimum(index_0 + 1, torch.tensor(self.input_frames - 1))
+        index_1 = torch.minimum(index_0 + 1, torch.full_like(index_0, self.input_frames - 1))
         blend = phase * (self.input_frames - 1) - index_0
         return index_0, index_1, blend
 
@@ -299,6 +429,20 @@ class MotionLoader:
         return state, reset_flag
 
 
+def _make_log(robot: Articulation, fps: float) -> dict:
+    return {
+        "fps": np.asarray([fps], dtype=np.float32),
+        "joint_names": np.asarray(list(robot.joint_names)),
+        "body_names": np.asarray(list(robot.body_names)),
+        "joint_pos": [],
+        "joint_vel": [],
+        "body_pos_w": [],
+        "body_quat_w": [],
+        "body_lin_vel_w": [],
+        "body_ang_vel_w": [],
+    }
+
+
 def _save_log_npz(path: str, log: dict):
     for k in (
         "joint_pos",
@@ -309,7 +453,7 @@ def _save_log_npz(path: str, log: dict):
         "body_ang_vel_w",
     ):
         log[k] = np.stack(log[k], axis=0)
-    np.savez(path, **log)
+    np.savez_compressed(path, **log)
 
 
 def run_simulator_batch(
@@ -336,6 +480,7 @@ def run_simulator_batch(
             device=sim.device,
             frame_range=args_cli.frame_range,
             expected_dof_dim=len(joint_names),
+            root_quat_order=args_cli.root_quat_order,
         )
 
     # work queue
@@ -345,18 +490,7 @@ def run_simulator_batch(
     # per-env state
     motions: list[MotionLoader | None] = [None] * num_envs
     cur_path: list[str | None] = [None] * num_envs
-    logs: list[dict] = [
-        {
-            "fps": [args_cli.output_fps],
-            "joint_pos": [],
-            "joint_vel": [],
-            "body_pos_w": [],
-            "body_quat_w": [],
-            "body_lin_vel_w": [],
-            "body_ang_vel_w": [],
-        }
-        for _ in range(num_envs)
-    ]
+    logs: list[dict] = [_make_log(robot, args_cli.output_fps) for _ in range(num_envs)]
 
     input_root_dir_abs = os.path.abspath(os.path.expanduser(input_root_dir))
 
@@ -368,6 +502,7 @@ def run_simulator_batch(
         if rel.startswith(".."):
             rel = os.path.basename(src_abs)
         out_path = os.path.join(output_dir, rel)
+        out_path = os.path.splitext(out_path)[0] + ".npz"
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         return out_path
 
@@ -386,15 +521,7 @@ def run_simulator_batch(
             motions[env_id] = make_motion(p)
             cur_path[env_id] = p
             # reset log buffers
-            logs[env_id] = {
-                "fps": [args_cli.output_fps],
-                "joint_pos": [],
-                "joint_vel": [],
-                "body_pos_w": [],
-                "body_quat_w": [],
-                "body_lin_vel_w": [],
-                "body_ang_vel_w": [],
-            }
+            logs[env_id] = _make_log(robot, args_cli.output_fps)
             return
 
     # initial fill
@@ -464,7 +591,9 @@ def run_simulator_batch(
                 continue
             logs[env_id]["joint_pos"].append(robot.data.joint_pos[env_id, :].cpu().numpy().copy())
             logs[env_id]["joint_vel"].append(robot.data.joint_vel[env_id, :].cpu().numpy().copy())
-            logs[env_id]["body_pos_w"].append(robot.data.body_pos_w[env_id, :].cpu().numpy().copy())
+            body_pos_w = robot.data.body_pos_w[env_id, :].clone()
+            body_pos_w[:, :2] -= scene.env_origins[env_id : env_id + 1, :2]
+            logs[env_id]["body_pos_w"].append(body_pos_w.cpu().numpy().copy())
             logs[env_id]["body_quat_w"].append(robot.data.body_quat_w[env_id, :].cpu().numpy().copy())
             logs[env_id]["body_lin_vel_w"].append(robot.data.body_lin_vel_w[env_id, :].cpu().numpy().copy())
             logs[env_id]["body_ang_vel_w"].append(robot.data.body_ang_vel_w[env_id, :].cpu().numpy().copy())
@@ -496,20 +625,13 @@ def run_simulator_single(sim: sim_utils.SimulationContext, scene: InteractiveSce
         device=sim.device,
         frame_range=args_cli.frame_range,
         expected_dof_dim=len(joint_names),
+        root_quat_order=args_cli.root_quat_order,
     )
 
     robot: Articulation = scene["robot"]
     robot_joint_indexes = robot.find_joints(joint_names, preserve_order=True)[0]
 
-    log = {
-        "fps": [args_cli.output_fps],
-        "joint_pos": [],
-        "joint_vel": [],
-        "body_pos_w": [],
-        "body_quat_w": [],
-        "body_lin_vel_w": [],
-        "body_ang_vel_w": [],
-    }
+    log = _make_log(robot, args_cli.output_fps)
 
     sim_dt = sim.get_physics_dt()
     while simulation_app.is_running():
@@ -558,7 +680,9 @@ def run_simulator_single(sim: sim_utils.SimulationContext, scene: InteractiveSce
         # rjv = robot.data.joint_vel[0, :]
         log["joint_pos"].append(robot.data.joint_pos[0, :].cpu().numpy().copy())
         log["joint_vel"].append(robot.data.joint_vel[0, :].cpu().numpy().copy())
-        log["body_pos_w"].append(robot.data.body_pos_w[0, :].cpu().numpy().copy())
+        body_pos_w = robot.data.body_pos_w[0, :].clone()
+        body_pos_w[:, :2] -= scene.env_origins[0:1, :2]
+        log["body_pos_w"].append(body_pos_w.cpu().numpy().copy())
         log["body_quat_w"].append(robot.data.body_quat_w[0, :].cpu().numpy().copy())
         log["body_lin_vel_w"].append(robot.data.body_lin_vel_w[0, :].cpu().numpy().copy())
         log["body_ang_vel_w"].append(robot.data.body_ang_vel_w[0, :].cpu().numpy().copy())
@@ -579,6 +703,7 @@ def main():
         if not os.path.isdir(in_dir):
             raise FileNotFoundError(f"--input_dir not found: {in_dir}")
         import glob
+
         # By default, search recursively since many SOMA exports are nested in subfolders.
         pattern = args_cli.pattern
         if "**" in pattern:
@@ -615,59 +740,8 @@ def main():
     sim.reset()
     # Now we are ready!
     print("[INFO]: Setup complete...")
-    joint_names = [ # The joints order in the src motion files (soma bones npz files to be converted)
-            # "left_hip_pitch_joint",
-            # "left_hip_roll_joint",
-            # "left_hip_yaw_joint",
-            # "left_knee_joint",
-            # "left_ankle_pitch_joint",
-            # "left_ankle_roll_joint",
-            # "right_hip_pitch_joint",
-            # "right_hip_roll_joint",
-            # "right_hip_yaw_joint",
-            # "right_knee_joint",
-            # "right_ankle_pitch_joint",
-            # "right_ankle_roll_joint",
-            # "waist_yaw_joint",
-            # "waist_roll_joint",
-            # "waist_pitch_joint",
-            # "left_shoulder_pitch_joint",
-            # "left_shoulder_roll_joint",
-            # "left_shoulder_yaw_joint",
-            # "left_elbow_joint",
-            # "left_wrist_roll_joint",
-            # "left_wrist_pitch_joint",
-            # "left_wrist_yaw_joint",
-            # "right_shoulder_pitch_joint",
-            # "right_shoulder_roll_joint",
-            # "right_shoulder_yaw_joint",
-            # "right_elbow_joint",
-            # "right_wrist_roll_joint",
-            # "right_wrist_pitch_joint",
-            # "right_wrist_yaw_joint",
-            
-            "waist_yaw_joint",
-            "leg_l1_joint",
-            "leg_l2_joint",
-            "leg_l3_joint",
-            "leg_l4_joint",
-            "leg_l5_joint",
-            "leg_l6_joint",
-            "leg_r1_joint",
-            "leg_r2_joint",
-            "leg_r3_joint",
-            "leg_r4_joint",
-            "leg_r5_joint",
-            "leg_r6_joint",
-            "zarm_l1_joint",
-            "zarm_l2_joint",
-            "zarm_l3_joint",
-            "zarm_l4_joint",
-            "zarm_r1_joint",
-            "zarm_r2_joint",
-            "zarm_r3_joint",
-            "zarm_r4_joint",
-    ]
+    joint_names = _source_joint_names_for_robot(args_cli.robot)
+    print(f"[INFO]: Source joint order preset: {args_cli.robot} ({len(joint_names)} joints)")
 
     # Run conversion
     if batch_files is None:

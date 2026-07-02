@@ -109,7 +109,7 @@ class G1VelocityFlatAMPCommandsCfg:
 
 
 @configclass
-class G1VelocityFlatAMPActionsCfg:
+class G1VelocityFlatAMPActionsCfg:  # 没有用
     joint_pos = velocity_mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*"],
@@ -161,6 +161,16 @@ class G1VelocityFlatAMPObservationsCfg:
     prop: PropCfg = PropCfg()
     base_velocity_cmd: BaseVelocityCommandCfg = BaseVelocityCommandCfg()
     amp: TrackingObservationsCfg.AmpCfg | None = None
+
+
+@configclass
+class VelocityAmpHeightScanCfg(TrackingObservationsCfg.AmpCfg):
+    height_scan = ObsTerm(
+        func=velocity_mdp.height_scan,
+        params={"sensor_cfg": SceneEntityCfg("height_scanner")},
+        noise=Unoise(n_min=-0.00, n_max=0.00),
+        clip=(-2.0, 2.0),
+    )
 
 
 @configclass
@@ -217,14 +227,7 @@ class G1VelocityFlatAMPEventCfg:
             },
         },
     )
-    reset_robot_joints = EventTerm(
-        func=velocity_mdp.reset_joints_by_scale,
-        mode="reset",
-        params={
-            "position_range": (0.5, 1.5),
-            "velocity_range": (0.0, 0.0),
-        },
-    )
+
     push_robot = EventTerm(
         func=velocity_mdp.push_by_setting_velocity,
         mode="interval",
@@ -384,6 +387,7 @@ class G1VelocityFlatAMPModalEnvCfg(ManagerBasedRLEnvCfg):
     terminations: G1VelocityFlatAMPTerminationsCfg = G1VelocityFlatAMPTerminationsCfg()
     events: G1VelocityFlatAMPEventCfg = G1VelocityFlatAMPEventCfg()
     curriculum: G1VelocityFlatAMPCurriculumCfg = G1VelocityFlatAMPCurriculumCfg()
+    amp_use_height_scan: bool = True
 
     def __post_init__(self):
         self._configure_common_velocity_env()
@@ -413,7 +417,7 @@ class G1VelocityFlatAMPModalEnvCfg(ManagerBasedRLEnvCfg):
         self.actions.joint_pos.scale = G1_ACTION_SCALE
         self.events.push_robot = None
         self.events.add_base_mass = None
-        self.events.reset_robot_joints.params["position_range"] = (1.0, 1.0)
+        self.events.reset_robot_joints.params["position_range"] = (0.30, 0.30)
         self.events.base_external_force_torque.params["asset_cfg"].body_names = ["torso_link"]
         self.events.reset_base.params = {
             "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
@@ -449,7 +453,6 @@ class G1VelocityFlatAMPModalEnvCfg(ManagerBasedRLEnvCfg):
     def _configure_flat_velocity_overrides(self):
         self.scene.terrain.terrain_type = "plane"
         self.scene.terrain.terrain_generator = None
-        self.scene.height_scanner = None
         self.observations.policy.height_scan = None
         self.curriculum.terrain_levels = None
 
@@ -469,7 +472,9 @@ class G1VelocityFlatAMPModalEnvCfg(ManagerBasedRLEnvCfg):
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
 
     def _configure_amp_observations(self):
-        self.observations.amp = TrackingObservationsCfg.AmpCfg()
+        self.observations.amp = (
+            VelocityAmpHeightScanCfg() if self.amp_use_height_scan else TrackingObservationsCfg.AmpCfg()
+        )
         for term in (
             self.observations.amp.body_pos_b,
             self.observations.amp.body_ori_b,

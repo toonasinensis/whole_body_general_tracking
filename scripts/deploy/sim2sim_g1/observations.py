@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from .math_utils import as_vector, quat_apply_inverse, shape_dim
-from .motion import MotionData, motion_groups
+from .math_utils import as_vector, matrix_from_quat, quat_apply_inverse, quat_inv, quat_mul, shape_dim
+from .motion import MotionData, motion_body_index, motion_groups
 from .mujoco_robot import validate_sensor
 
 G1_PROP_TERM_ORDER = ("projected_gravity", "base_ang_vel", "joint_pos", "joint_vel", "actions")
@@ -149,6 +149,9 @@ def build_obs(
     joint_qvel: np.ndarray,
     last_action: np.ndarray,
     prop_history: TermMajorHistory,
+    body_ids: np.ndarray | None = None,
+    terrain_scanner=None,
+    velcommand_override: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     root_quat, root_ang_vel_b, gravity_b = imu_reader.read(data)
     default_joint_pos = as_vector(meta, "default_joint_pos", len(joint_qpos), 0.0)
@@ -165,11 +168,172 @@ def build_obs(
 
     prop = prop_history.update(prop_terms)
     rbt_cmd_mf, smpl_cmd_mf = motion_groups(motion, t, meta, root_quat)
-    return {
+    obs = {
         "prop": prop.astype(np.float32),
         "rbt_cmd_mf": rbt_cmd_mf,
         "smpl_cmd_mf": smpl_cmd_mf,
     }
+    shapes = meta.get("observation_shapes", {})
+    if "terrain" in shapes:
+        terrain_dim = shape_dim(shapes["terrain"])
+        if terrain_scanner is None:
+            obs["terrain"] = np.zeros((1, terrain_dim), dtype=np.float32)
+        else:
+            terrain = terrain_scanner.scan(data)
+            if terrain.shape[1] != terrain_dim:
+                raise ValueError(f"Height scan dim {terrain.shape[1]} does not match ONNX terrain dim {terrain_dim}.")
+            obs["terrain"] = terrain
+    if "task" in shapes:
+        obs["task"] = build_task_obs(data, motion, t, meta, body_ids)
+    if "velcommand" in shapes:
+        velcommand_dim = shape_dim(shapes["velcommand"])
+        if velcommand_override is None:
+            velcommand = build_velcommand_obs(motion, t, meta)
+        else:
+            velcommand = np.asarray(velcommand_override, dtype=np.float32).reshape(1, -1)
+        if velcommand.shape[1] != velcommand_dim:
+            raise ValueError(f"velcommand dim {velcommand.shape[1]} does not match ONNX dim {velcommand_dim}.")
+        obs["velcommand"] = velcommand
+    if "wbc_cmd" in shapes:
+        obs["wbc_cmd"] = build_wbc_cmd_obs(data, motion, t, meta, body_ids)
+    if "vel_task_mask" in shapes:
+        vel_task_mask_dim = shape_dim(shapes["vel_task_mask"])
+        vel_task_value = 0.0 if velcommand_override is None else 1.0
+        obs["vel_task_mask"] = np.full((1, vel_task_mask_dim), vel_task_value, dtype=np.float32)
+    if "aux_mask" in shapes:
+        aux_mask_dim = shape_dim(shapes["aux_mask"])
+        obs["aux_mask"] = np.ones((1, aux_mask_dim), dtype=np.float32)
+    return obs
+
+
+def build_velcommand_obs(motion: MotionData, t: int, meta: dict) -> np.ndarray:
+    _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
+    frame = int(np.clip(t, 0, motion.num_frames - 1))
+    quat_w = np.asarray(motion["body_quat_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 4)
+    lin_vel_w = (
+        np.asarray(motion["body_lin_vel_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 3)
+        if "body_lin_vel_w" in motion
+        else np.zeros((1, 3), dtype=np.float64)
+    )
+    ang_vel_w = (
+        np.asarray(motion["body_ang_vel_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 3)
+        if "body_ang_vel_w" in motion
+        else np.zeros((1, 3), dtype=np.float64)
+    )
+    yaw_quat = _yaw_quat(quat_w)
+    lin_vel_yaw_b = quat_apply_inverse(yaw_quat, lin_vel_w)
+    ang_vel_yaw_b = quat_apply_inverse(yaw_quat, ang_vel_w)
+    return np.concatenate((lin_vel_yaw_b[:, :2], ang_vel_yaw_b[:, 2:3]), axis=-1).astype(np.float32)
+
+
+def build_wbc_cmd_obs(
+    data,
+    motion: MotionData,
+    t: int,
+    meta: dict,
+    body_ids: np.ndarray | None,
+) -> np.ndarray:
+    terms = meta.get("observation_terms", {}).get("wbc_cmd", {}).get("terms", [])
+    builders = {
+        "command": lambda: motion_generated_command(motion, t, meta),
+        "generated_commands": lambda: motion_generated_command(motion, t, meta),
+        "motion_anchor_pos_b": lambda: motion_anchor_pos_b(data, motion, t, meta, body_ids),
+        "motion_anchor_ori_b": lambda: motion_anchor_ori_b(data, motion, t, meta, body_ids),
+    }
+    if not terms:
+        terms = [{"name": "command"}, {"name": "motion_anchor_pos_b"}, {"name": "motion_anchor_ori_b"}]
+
+    pieces = []
+    for term in terms:
+        name = term.get("name")
+        if name not in builders:
+            raise KeyError(f"Unsupported wbc_cmd observation term in ONNX metadata: {name!r}")
+        pieces.append(builders[name]())
+    wbc_cmd = np.concatenate(pieces, axis=-1).astype(np.float32)
+
+    expected_dim = shape_dim(meta.get("observation_shapes", {}).get("wbc_cmd", []))
+    if expected_dim > 0 and wbc_cmd.shape[1] != expected_dim:
+        raise ValueError(f"wbc_cmd dim {wbc_cmd.shape[1]} does not match ONNX dim {expected_dim}.")
+    return wbc_cmd
+
+
+def motion_generated_command(motion: MotionData, t: int, meta: dict) -> np.ndarray:
+    _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
+    frame = int(np.clip(t, 0, motion.num_frames - 1))
+    anchor_quat_w = np.asarray(motion["body_quat_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 4)
+    anchor_lin_vel_w = (
+        np.asarray(motion["body_lin_vel_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 3)
+        if "body_lin_vel_w" in motion
+        else np.zeros((1, 3), dtype=np.float64)
+    )
+    anchor_ang_vel_w = (
+        np.asarray(motion["body_ang_vel_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 3)
+        if "body_ang_vel_w" in motion
+        else np.zeros((1, 3), dtype=np.float64)
+    )
+    anchor_lin_vel_b = quat_apply_inverse(anchor_quat_w, anchor_lin_vel_w)
+    anchor_ang_vel_b = quat_apply_inverse(anchor_quat_w, anchor_ang_vel_w)
+    anchor_project_gravity = quat_apply_inverse(anchor_quat_w, np.asarray([[0.0, 0.0, -1.0]], dtype=np.float64))
+    anchor_pos_z = np.asarray(motion["body_pos_w"][frame, anchor_idx, 2], dtype=np.float64).reshape(1, 1)
+    return np.concatenate(
+        (
+            np.asarray(motion["joint_pos"][frame], dtype=np.float64).reshape(1, -1),
+            np.asarray(motion["joint_vel"][frame], dtype=np.float64).reshape(1, -1),
+            anchor_lin_vel_b,
+            anchor_ang_vel_b,
+            anchor_project_gravity,
+            anchor_pos_z,
+        ),
+        axis=-1,
+    ).astype(np.float32)
+
+
+def motion_anchor_ori_b(data, motion: MotionData, t: int, meta: dict, body_ids: np.ndarray | None) -> np.ndarray:
+    _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
+    frame = int(np.clip(t, 0, motion.num_frames - 1))
+    target_quat_w = np.asarray(motion["body_quat_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 4)
+    robot_anchor_quat_w = robot_anchor_pose_w(data, meta, body_ids)[1]
+    rel_quat = quat_mul(quat_inv(robot_anchor_quat_w), target_quat_w)
+    return matrix_from_quat(rel_quat)[..., :2].reshape(1, -1).astype(np.float32)
+
+
+def robot_anchor_pose_w(data, meta: dict, body_ids: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+    anchor_local_idx = int(list(meta["motion_body_names"]).index(meta["anchor_body_name"]))
+    if body_ids is None:
+        raise ValueError("body_ids is required to build wbc_cmd anchor observations.")
+    body_id = int(np.asarray(body_ids, dtype=np.int64)[anchor_local_idx])
+    pos_w = np.asarray(data.xpos[body_id], dtype=np.float64).reshape(1, 3)
+    quat_w = np.asarray(data.xquat[body_id], dtype=np.float64).reshape(1, 4)
+    return pos_w, quat_w
+
+
+def _yaw_quat(quat_wxyz: np.ndarray) -> np.ndarray:
+    w, x, y, z = np.moveaxis(quat_wxyz, -1, 0)
+    yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    half = 0.5 * yaw
+    return np.stack((np.cos(half), np.zeros_like(half), np.zeros_like(half), np.sin(half)), axis=-1)
+
+
+def build_task_obs(data, motion: MotionData, t: int, meta: dict, body_ids: np.ndarray | None) -> np.ndarray:
+    terms = meta.get("observation_terms", {}).get("task", {}).get("terms", [])
+    if not terms:
+        return np.zeros((1, shape_dim(meta.get("observation_shapes", {}).get("task", []))), dtype=np.float32)
+    pieces = []
+    for term in terms:
+        name = term.get("name")
+        if name == "motion_anchor_pos_b":
+            pieces.append(motion_anchor_pos_b(data, motion, t, meta, body_ids))
+        else:
+            raise KeyError(f"Unsupported task observation term in ONNX metadata: {name!r}")
+    return np.concatenate(pieces, axis=-1).astype(np.float32)
+
+
+def motion_anchor_pos_b(data, motion: MotionData, t: int, meta: dict, body_ids: np.ndarray | None) -> np.ndarray:
+    _, anchor_idx = motion_body_index(meta, meta["anchor_body_name"])
+    frame = int(np.clip(t, 0, motion.num_frames - 1))
+    target_pos_w = np.asarray(motion["body_pos_w"][frame, anchor_idx], dtype=np.float64).reshape(1, 3)
+    robot_anchor_pos_w, robot_anchor_quat_w = robot_anchor_pose_w(data, meta, body_ids)
+    return quat_apply_inverse(robot_anchor_quat_w, target_pos_w - robot_anchor_pos_w).astype(np.float32)
 
 
 def validate_inputs(obs: dict[str, np.ndarray], input_names: list[str], meta: dict) -> None:

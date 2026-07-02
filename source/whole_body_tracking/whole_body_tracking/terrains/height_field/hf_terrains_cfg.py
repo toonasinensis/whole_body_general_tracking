@@ -144,6 +144,38 @@ class HfPyramidStairsTerrainCfg(HfTerrainBaseCfg):
 
 
 @configclass
+class HfLongRunwayTerrainCfg(HfTerrainBaseCfg):
+    """Configuration for a long velocity runway height-field terrain."""
+
+    function = hf_terrains.long_runway_terrain
+
+    shoulder_width: float = 0.0
+    """Width of raised side shoulders along the y edges. Zero disables shoulders."""
+
+    shoulder_height_range: tuple[float, float] = (0.0, 0.0)
+    """Minimum and maximum shoulder height in meters."""
+
+
+@configclass
+class HfLargeStepPlatformTerrainCfg(HfTerrainBaseCfg):
+    """Configuration for a long x-direction step platform terrain."""
+
+    function = hf_terrains.large_step_platform_terrain
+
+    step_height_range: tuple[float, float] = MISSING
+    """Minimum and maximum height of each step in meters."""
+
+    step_depth: float = 1.0
+    """Length of each step along x in meters."""
+
+    start_platform_length: float = 2.0
+    """Flat start platform length along x in meters."""
+
+    max_steps: int = 4
+    """Maximum number of raised steps."""
+
+
+@configclass
 class HfInvertedPyramidStairsTerrainCfg(HfPyramidStairsTerrainCfg):
     """Configuration for an inverted pyramid stairs height field terrain.
 

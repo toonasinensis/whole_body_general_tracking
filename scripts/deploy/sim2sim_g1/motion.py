@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import numpy as np
 from collections.abc import Sequence
 from pathlib import Path
@@ -197,6 +198,20 @@ def motion_files(motion_file: str, dataset_txt: str | None) -> list[str]:
             return files
         raise ValueError(f"No motion entries in dataset txt: {dataset_txt}")
     if root.is_file():
+        if root.suffix == ".jsonl":
+            files = []
+            for line_no, line in enumerate(root.read_text().splitlines(), start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                if "tracking_motion" not in record:
+                    raise KeyError(f"{root}:{line_no}: missing required 'tracking_motion' field.")
+                p = Path(str(record["tracking_motion"])).expanduser()
+                files.append(str(p if p.is_absolute() else root.parent / p))
+            if files:
+                return files
+            raise ValueError(f"No motion entries in manifest: {root}")
         return [str(root)]
     files = sorted(root.rglob("*.npz"))
     if not files:

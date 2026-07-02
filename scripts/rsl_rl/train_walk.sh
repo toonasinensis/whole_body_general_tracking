@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WBT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${WBT_ROOT}"
+export WBT_ROOT
 
 export CUDA_VISIBLE_DEVICES="${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
 export PYTHONPATH="${WBT_ROOT}/../rsl_rl${PYTHONPATH:+:${PYTHONPATH}}"
@@ -15,9 +16,9 @@ NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 NUM_ENVS="${NUM_ENVS:-4000}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
-MASTER_PORT="${MASTER_PORT:-29530}"
+MASTER_PORT="${MASTER_PORT:-29330}"
 REGISTRY_NAME="${REGISTRY_NAME:-test1}"
-RUN_NAME="${RUN_NAME:-heading_walk_amp_modal}"
+RUN_NAME="${RUN_NAME:-heading_walk_amp_mlp}"
 HEADLESS="${HEADLESS:-1}"
 
 COMMON_ARGS=(
@@ -37,7 +38,7 @@ if [[ "${HEADLESS}" != "0" ]]; then
 fi
 
 if [[ "${NPROC_PER_NODE}" -gt 1 ]]; then
-  "${PYTHON_BIN}" -m torch.distributed.run \
+  python -m torch.distributed.run \
     --nnodes=1 \
     --nproc_per_node="${NPROC_PER_NODE}" \
     --master_addr="${MASTER_ADDR}" \
@@ -47,5 +48,5 @@ if [[ "${NPROC_PER_NODE}" -gt 1 ]]; then
     --distributed \
     "$@"
 else
-  "${PYTHON_BIN}" "${COMMON_ARGS[@]}" "$@"
+  python "${COMMON_ARGS[@]}" "$@"
 fi

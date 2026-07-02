@@ -129,7 +129,8 @@ class STLTerrainGenerator(TerrainGenerator):
             # coordinate index of the sub-terrain
             (sub_row, sub_col) = np.unravel_index(index, (self.cfg.num_rows, self.cfg.num_cols))
             sub_index = index % len(sub_terrains_cfgs)
-            mesh, origin = self._get_terrain_mesh(sub_terrains_cfgs[sub_index])
+            difficulty = 0.0 if len(sub_terrains_cfgs) <= 1 else sub_index / (len(sub_terrains_cfgs) - 1)
+            mesh, origin = self._get_terrain_mesh(sub_terrains_cfgs[sub_index], difficulty=difficulty)
             # add to sub-terrains
             self._add_sub_terrain_stl(mesh, origin, sub_row, sub_col, sub_terrains_cfgs[sub_index])
 
@@ -156,7 +157,30 @@ class STLTerrainGenerator(TerrainGenerator):
         # add origin to the list
         self.terrain_origins[row, col] = origin + transform[:3, -1]
 
-    def _get_terrain_mesh(self, cfg: TrimeshPlatformCfg) -> tuple[trimesh.Trimesh, np.ndarray]:
+    def _generate_curriculum_terrains(self):
+        """Add terrains in row-major order with difficulty increasing along rows."""
+        sub_terrains_cfgs = list(self.cfg.sub_terrains.values())
+        if len(sub_terrains_cfgs) == 0:
+            raise ValueError("No sub-terrains available for curriculum placement.")
+
+        for index in range(self.cfg.num_rows * self.cfg.num_cols):
+            sub_row, sub_col = np.unravel_index(index, (self.cfg.num_rows, self.cfg.num_cols))
+            sub_index = index % len(sub_terrains_cfgs)
+            difficulty = 0.0 if self.cfg.num_rows <= 1 else sub_row / (self.cfg.num_rows - 1)
+            mesh, origin = self._get_terrain_mesh(sub_terrains_cfgs[sub_index], difficulty=difficulty)
+            self._add_sub_terrain_stl(mesh, origin, sub_row, sub_col, sub_terrains_cfgs[sub_index])
+
+    def _get_terrain_mesh(self, cfg: TrimeshPlatformCfg, difficulty: float = 0.0) -> tuple[trimesh.Trimesh, np.ndarray]:
+        from .height_field import HfTerrainBaseCfg
+
+        if isinstance(cfg, HfTerrainBaseCfg):
+            meshes, origin = cfg.function(float(difficulty), cfg)
+            mesh = trimesh.util.concatenate(meshes)
+            center_transform = np.eye(4)
+            center_transform[:2, -1] = -0.5 * float(cfg.size[0]), -0.5 * float(cfg.size[1])
+            mesh.apply_transform(center_transform)
+            origin = origin + center_transform[:3, -1]
+            return mesh, origin
         if cfg.stl_file_path is None:
             mesh = trimesh.Trimesh()
         else:

@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import os
 import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, quat_inv, quat_mul, subtract_frame_transforms
+import isaaclab_tasks.manager_based.locomotion.velocity.mdp as velocity_mdp
+from isaaclab.utils.math import (
+    matrix_from_quat,
+    quat_apply,
+    quat_apply_inverse,
+    quat_error_magnitude,
+    quat_inv,
+    quat_mul,
+    sample_uniform,
+    subtract_frame_transforms,
+    yaw_quat,
+)
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
+from whole_body_tracking.tasks.tracking.mdp.domain_commands import domain_name_float_mask, domain_name_mask
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -212,6 +225,86 @@ def motion_command(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
         ],
         dim=1,
     )
+
+
+def motion_command_linvel_xy_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    anchor_yaw_quat = yaw_quat(command.anchor_quat_w)
+    return quat_apply_inverse(anchor_yaw_quat, command.anchor_lin_vel_w)
+
+
+def motion_velocity_command_yaw_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    anchor_yaw_quat = yaw_quat(command.anchor_quat_w)
+    lin_vel_yaw_b = quat_apply_inverse(anchor_yaw_quat, command.anchor_lin_vel_w)
+    ang_vel_yaw_b = quat_apply_inverse(anchor_yaw_quat, command.anchor_ang_vel_w)
+    yaw_rate = ang_vel_yaw_b[:, 2:3]
+    return torch.cat((lin_vel_yaw_b[:, :2], yaw_rate), dim=-1)
+
+
+def mixed_velocity_command(
+    env: ManagerBasedEnv,
+    motion_command_name: str = "motion",
+    velocity_command_name: str = "base_velocity",
+    velocity_domain_names: tuple[str, ...] = ("flat_velocity",),
+) -> torch.Tensor:
+    motion_cmd = motion_velocity_command_yaw_b(env, motion_command_name)
+    if not velocity_domain_names:
+        return motion_cmd
+    velocity_cmd = velocity_mdp.generated_commands(env, velocity_command_name)
+    velocity_mask = domain_name_mask(env, motion_command_name, velocity_domain_names).unsqueeze(-1)
+    out = torch.where(velocity_mask, velocity_cmd, motion_cmd)
+    if os.getenv("WBT_DEBUG_VELCOMMAND", "0") not in ("", "0", "false", "False"):
+        _debug_mixed_velocity_command_once(
+            env, motion_command_name, velocity_domain_names, velocity_mask, velocity_cmd, motion_cmd, out
+        )
+    return out
+
+
+def _debug_mixed_velocity_command_once(
+    env: ManagerBasedEnv,
+    motion_command_name: str,
+    velocity_domain_names: tuple[str, ...],
+    velocity_mask: torch.Tensor,
+    velocity_cmd: torch.Tensor,
+    motion_cmd: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if getattr(env, "_wbt_debug_velcommand_printed", False):
+        return
+    setattr(env, "_wbt_debug_velcommand_printed", True)
+    command = env.command_manager.get_term(motion_command_name)
+    domain_layout = getattr(command, "domain_layout", None)
+    domain_names = tuple(
+        getattr(domain, "name", f"domain_{i}") for i, domain in enumerate(getattr(domain_layout, "domains", ()))
+    )
+    env_domain_ids = getattr(command, "env_domain_ids", None)
+    sample_count = min(int(getattr(env, "num_envs", 0)), 8)
+    print("[WBT_DEBUG_VELCOMMAND] velocity_domain_names:", tuple(velocity_domain_names))
+    print("[WBT_DEBUG_VELCOMMAND] available_domains:", domain_names)
+    for env_id in range(sample_count):
+        domain_id = int(env_domain_ids[env_id].item()) if env_domain_ids is not None else -1
+        domain_name = domain_names[domain_id] if 0 <= domain_id < len(domain_names) else "unknown"
+        print(
+            "[WBT_DEBUG_VELCOMMAND] "
+            f"env={env_id} domain={domain_name} vel_task_mask={float(velocity_mask[env_id, 0].item()):.1f} "
+            f"base_velocity={velocity_cmd[env_id].detach().cpu().tolist()} "
+            f"motion_cmd={motion_cmd[env_id].detach().cpu().tolist()} "
+            f"velcommand_obs={out[env_id].detach().cpu().tolist()}"
+        )
+
+
+def domain_aux_mask(
+    env: ManagerBasedEnv,
+    command_name: str = "motion",
+    aux_domain_names: tuple[str, ...] = ("flat_wbc", "omniretarget_g1_terrain"),
+) -> torch.Tensor:
+    # aux_domain_names comes from profile obs_route_cfg. This is where the
+    # profile-level boolean is converted to the numeric policy input:
+    # enabled domains -> 1.0, all other domains -> 0.0.
+    if not aux_domain_names:
+        return torch.zeros(env.num_envs, 1, device=env.device)
+    return domain_name_float_mask(env, command_name, aux_domain_names)
 
 
 def motion_joint_pos(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:

@@ -20,8 +20,12 @@ conda run -n my_env python preprocess/test_mimic_motions_viser.py \
 
   python preprocess/test_mimic_motions_viser.py \
     --robot_cfg g1 \
-    --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/g1_flat/all_top_files.txt \
-    --motion_dir /home/thl/Documents/g1-mimic-npz
+    --motion_txt /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/tracking_npz_data/walk_run.txt \
+    --motion_dir /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data
+
+ python preprocess/test_mimic_motions_viser.py \
+    --robot_cfg g1 \
+    --motion_dir /home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1_amp/LAFAN_WALK
 
 """
 

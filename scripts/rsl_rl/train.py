@@ -36,6 +36,32 @@ parser.add_argument(
     "--flat_dataset_txt", type=str, default=None, help="Path to flat motion dataset_txt for mixed tasks."
 )
 parser.add_argument("--flat_env_ratio", type=float, default=None, help="Flat-domain env ratio for mixed tasks.")
+parser.add_argument("--flat_wbc_env_ratio", type=float, default=None, help="Flat WBC env ratio for mixed tasks.")
+parser.add_argument(
+    "--flat_velocity_env_ratio",
+    type=float,
+    default=None,
+    help="Flat velocity-command env ratio for mixed tasks.",
+)
+parser.add_argument(
+    "--velocity_terrain_env_ratio",
+    type=float,
+    default=None,
+    help="Procedural velocity-terrain env ratio for mixed tasks.",
+)
+parser.add_argument(
+    "--velocity_terrain_cell_count",
+    type=int,
+    default=None,
+    help="Number of procedural velocity-terrain cells for mixed tasks.",
+)
+parser.add_argument(
+    "--velocity_terrain_profile",
+    type=str,
+    default=None,
+    help="Procedural velocity-terrain profile for mixed tasks.",
+)
+parser.add_argument("--mesh_env_ratio", type=float, default=None, help="Mesh WBC env ratio for mixed tasks.")
 parser.add_argument(
     "--domain_separator_cell_count",
     type=int,
@@ -52,6 +78,26 @@ cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.pairs_jsonl is not None:
+    os.environ["WBT_PAIRS_JSONL"] = args_cli.pairs_jsonl
+if args_cli.flat_dataset_txt is not None:
+    os.environ["WBT_FLAT_DATASET_TXT"] = args_cli.flat_dataset_txt
+if args_cli.flat_env_ratio is not None:
+    os.environ["WBT_FLAT_ENV_RATIO"] = str(args_cli.flat_env_ratio)
+if args_cli.flat_wbc_env_ratio is not None:
+    os.environ["WBT_FLAT_WBC_ENV_RATIO"] = str(args_cli.flat_wbc_env_ratio)
+if args_cli.flat_velocity_env_ratio is not None:
+    os.environ["WBT_FLAT_VELOCITY_ENV_RATIO"] = str(args_cli.flat_velocity_env_ratio)
+if args_cli.velocity_terrain_env_ratio is not None:
+    os.environ["WBT_VELOCITY_TERRAIN_ENV_RATIO"] = str(args_cli.velocity_terrain_env_ratio)
+if args_cli.velocity_terrain_cell_count is not None:
+    os.environ["WBT_VELOCITY_TERRAIN_CELL_COUNT"] = str(args_cli.velocity_terrain_cell_count)
+if args_cli.velocity_terrain_profile is not None:
+    os.environ["WBT_VELOCITY_TERRAIN_PROFILE"] = str(args_cli.velocity_terrain_profile)
+if args_cli.mesh_env_ratio is not None:
+    os.environ["WBT_MESH_ENV_RATIO"] = str(args_cli.mesh_env_ratio)
+if args_cli.domain_separator_cell_count is not None:
+    os.environ["WBT_DOMAIN_SEPARATOR_CELL_COUNT"] = str(args_cli.domain_separator_cell_count)
 
 # For torchrun multi-process launch, bind each process to its own GPU early
 # so AppLauncher and downstream tensors share the same device.
@@ -161,9 +207,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.flat_dataset_txt = args_cli.flat_dataset_txt
     if args_cli.flat_env_ratio is not None:
         if not hasattr(env_cfg, "flat_env_ratio"):
-            raise ValueError("--flat_env_ratio is only supported by mixed terrain env configs.")
+            if not hasattr(env_cfg, "flat_wbc_env_ratio") or not hasattr(env_cfg, "flat_velocity_env_ratio"):
+                raise ValueError("--flat_env_ratio is only supported by mixed terrain env configs.")
         print(f"[INFO]: Using flat env ratio from CLI: {args_cli.flat_env_ratio}")
-        env_cfg.flat_env_ratio = args_cli.flat_env_ratio
+        if hasattr(env_cfg, "flat_env_ratio"):
+            env_cfg.flat_env_ratio = args_cli.flat_env_ratio
+        else:
+            env_cfg.flat_wbc_env_ratio = args_cli.flat_env_ratio * 0.5
+            env_cfg.flat_velocity_env_ratio = args_cli.flat_env_ratio * 0.5
+            env_cfg.mesh_env_ratio = max(0.0, 1.0 - args_cli.flat_env_ratio)
+    for arg_name, cfg_name in (
+        ("flat_wbc_env_ratio", "flat_wbc_env_ratio"),
+        ("flat_velocity_env_ratio", "flat_velocity_env_ratio"),
+        ("mesh_env_ratio", "mesh_env_ratio"),
+    ):
+        value = getattr(args_cli, arg_name)
+        if value is None:
+            continue
+        if not hasattr(env_cfg, cfg_name):
+            raise ValueError(f"--{arg_name} is only supported by mixed terrain env configs.")
+        print(f"[INFO]: Using {cfg_name} from CLI: {value}")
+        setattr(env_cfg, cfg_name, value)
     if args_cli.domain_separator_cell_count is not None:
         if not hasattr(env_cfg, "domain_separator_cell_count"):
             raise ValueError("--domain_separator_cell_count is only supported by mixed terrain env configs.")

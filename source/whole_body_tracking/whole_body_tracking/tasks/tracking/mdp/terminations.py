@@ -4,6 +4,7 @@ import torch
 from typing import TYPE_CHECKING
 
 import isaaclab.utils.math as math_utils
+import isaaclab_tasks.manager_based.locomotion.velocity.mdp as velocity_mdp
 from isaaclab.managers import TerminationManager
 
 if TYPE_CHECKING:
@@ -14,6 +15,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
+from whole_body_tracking.tasks.tracking.mdp.domain_commands import domain_name_mask
 from whole_body_tracking.tasks.tracking.mdp.heading_math import compute_height_filtered_contact_mask
 from whole_body_tracking.tasks.tracking.mdp.rewards import _get_body_indexes
 
@@ -118,9 +120,36 @@ def install_delayed_termination(
     )
 
 
-def bad_anchor_pos(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:
+def _apply_domain_termination_mask(
+    env: ManagerBasedRLEnv,
+    terminated: torch.Tensor,
+    command_name: str,
+    enabled_domain_names: tuple[str, ...] = (),
+) -> torch.Tensor:
+    if not enabled_domain_names:
+        return terminated
+    return terminated & domain_name_mask(env, command_name, enabled_domain_names)
+
+
+def _apply_min_episode_steps(
+    env: ManagerBasedRLEnv,
+    terminated: torch.Tensor,
+    min_episode_steps: int = 0,
+) -> torch.Tensor:
+    if min_episode_steps <= 0:
+        return terminated
+    return terminated & (env.episode_length_buf >= int(min_episode_steps))
+
+
+def bad_anchor_pos(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    enabled_domain_names: tuple[str, ...] = (),
+) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
-    return torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1) > threshold
+    terminated = torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1) > threshold
+    return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
 
 
 def _disable_termination_on_delayed_envs(
@@ -135,13 +164,76 @@ def _disable_termination_on_delayed_envs(
     return terminated & ~mask.to(device=terminated.device, dtype=torch.bool)
 
 
-def bad_anchor_pos_z_only(env: ManagerBasedRLEnv, command_name: str, threshold: float) -> torch.Tensor:
+def bad_anchor_pos_z_only(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    enabled_domain_names: tuple[str, ...] = (),
+) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
-    return torch.abs(command.anchor_pos_w[:, -1] - command.robot_anchor_pos_w[:, -1]) > threshold
+    terminated = torch.abs(command.anchor_pos_w[:, -1] - command.robot_anchor_pos_w[:, -1]) > threshold
+    return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
+
+
+def bad_anchor_pos_xyz(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    enabled_domain_names: tuple[str, ...] = (),
+) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    terminated = torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1) > threshold
+    return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
+
+
+def _compute_parkour_reach_timeout(
+    *,
+    motion_ids: torch.Tensor,
+    local_time_steps: torch.Tensor,
+    frame_end_per_env: torch.Tensor,
+    max_future_step: int,
+    motion_anchor_pos_w: torch.Tensor,
+    time_step_end_idx: torch.Tensor,
+    env_origins: torch.Tensor,
+    robot_anchor_pos_w: torch.Tensor,
+    distance_threshold: float,
+    end_margin_steps: int,
+) -> torch.Tensor:
+    target_time_steps = (time_step_end_idx[motion_ids] - 1).clamp_min(0)
+    target_anchor_pos_w = motion_anchor_pos_w[target_time_steps] + env_origins
+    distance = torch.norm(robot_anchor_pos_w - target_anchor_pos_w, dim=-1)
+    remaining_frames = frame_end_per_env - local_time_steps
+    near_motion_end = remaining_frames <= int(max_future_step) + int(end_margin_steps)
+    return near_motion_end & (distance <= float(distance_threshold))
+
+
+def parkour_reach_timeout(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    distance_threshold: float = 0.30,
+    end_margin_steps: int = 1,
+) -> torch.Tensor:
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return _compute_parkour_reach_timeout(
+        motion_ids=command.motion_ids,
+        local_time_steps=command.local_time_steps,
+        frame_end_per_env=command.frame_end_per_env,
+        max_future_step=int(command.cfg.max_future_step),
+        motion_anchor_pos_w=command.motion.anchor_pos_w,
+        time_step_end_idx=command.motion.time_step_end_idx,
+        env_origins=env.scene.env_origins,
+        robot_anchor_pos_w=command.robot_anchor_pos_w,
+        distance_threshold=distance_threshold,
+        end_margin_steps=end_margin_steps,
+    )
 
 
 def bad_anchor_ori(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, command_name: str, threshold: float
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    command_name: str,
+    threshold: float,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
 
@@ -150,7 +242,8 @@ def bad_anchor_ori(
 
     robot_projected_gravity_b = math_utils.quat_apply_inverse(command.robot_anchor_quat_w, asset.data.GRAVITY_VEC_W)
 
-    return (motion_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2]).abs() > threshold
+    terminated = (motion_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2]).abs() > threshold
+    return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
 
 
 def bad_motion_body_pos(
@@ -159,13 +252,15 @@ def bad_motion_body_pos(
     threshold: float,
     body_names: list[str] | None = None,
     disable_on_delayed_termination_envs: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
 
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.norm(command.body_pos_relative_w[:, body_indexes] - command.robot_body_pos_w[:, body_indexes], dim=-1)
     terminated = torch.any(error > threshold, dim=-1)
-    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
+    terminated = _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
+    return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
 
 
 def bad_motion_body_pos_z_only(
@@ -174,13 +269,73 @@ def bad_motion_body_pos_z_only(
     threshold: float,
     body_names: list[str] | None = None,
     disable_on_delayed_termination_envs: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
 
     body_indexes = _get_body_indexes(command, body_names)
     error = torch.abs(command.body_pos_relative_w[:, body_indexes, -1] - command.robot_body_pos_w[:, body_indexes, -1])
     terminated = torch.any(error > threshold, dim=-1)
-    return _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
+    terminated = _disable_termination_on_delayed_envs(env, terminated, disable_on_delayed_termination_envs)
+    return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
+
+
+def illegal_contact_on_domains(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+    min_episode_steps: int = 0,
+) -> torch.Tensor:
+    terminated = velocity_mdp.illegal_contact(env, threshold, sensor_cfg)
+    terminated = _apply_min_episode_steps(env, terminated, min_episode_steps)
+    return _apply_domain_termination_mask(env, terminated, domain_command_name, enabled_domain_names)
+
+
+def root_height_below_on_domains(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    threshold: float = 0.45,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+    min_episode_steps: int = 0,
+) -> torch.Tensor:
+    asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    terminated = asset.data.root_pos_w[:, 2] < float(threshold)
+    terminated = _apply_min_episode_steps(env, terminated, min_episode_steps)
+    return _apply_domain_termination_mask(env, terminated, domain_command_name, enabled_domain_names)
+
+
+def root_height_below_desired(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    margin: float = 0.3,
+    target_height: float | None = None,
+    min_episode_steps: int = 0,
+) -> torch.Tensor:
+    asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    desired_height = (
+        asset.data.default_root_state[:, 2]
+        if target_height is None
+        else torch.full_like(asset.data.root_pos_w[:, 2], float(target_height))
+    )
+    terminated = asset.data.root_pos_w[:, 2] < desired_height - float(margin)
+    return _apply_min_episode_steps(env, terminated, min_episode_steps)
+
+
+def projected_gravity_xy_on_domains(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    threshold: float = 0.85,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+    min_episode_steps: int = 0,
+) -> torch.Tensor:
+    asset: RigidObject | Articulation = env.scene[asset_cfg.name]
+    terminated = torch.linalg.norm(asset.data.projected_gravity_b[:, :2], dim=-1) > float(threshold)
+    terminated = _apply_min_episode_steps(env, terminated, min_episode_steps)
+    return _apply_domain_termination_mask(env, terminated, domain_command_name, enabled_domain_names)
 
 
 def height_filtered_illegal_contact(

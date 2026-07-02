@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import torch
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+import isaaclab_tasks.manager_based.locomotion.velocity.mdp as velocity_mdp
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import quat_apply_inverse, quat_error_magnitude
 from isaaclab.utils.string import resolve_matching_names_values
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
+from whole_body_tracking.tasks.tracking.mdp.domain_commands import domain_name_mask
 from whole_body_tracking.tasks.tracking.mdp.heading_math import compute_height_filtered_contact_mask
 
 if TYPE_CHECKING:
@@ -17,6 +20,18 @@ if TYPE_CHECKING:
 
 def _get_body_indexes(command: MotionCommand, body_names: list[str] | None) -> list[int]:
     return [i for i, name in enumerate(command.cfg.body_names) if (body_names is None) or (name in body_names)]
+
+
+def _apply_domain_reward_mask(
+    env: ManagerBasedRLEnv,
+    reward: torch.Tensor,
+    command_name: str,
+    enabled_domain_names: Sequence[str] = (),
+) -> torch.Tensor:
+    if not enabled_domain_names:
+        return reward
+    mask = domain_name_mask(env, command_name, enabled_domain_names)
+    return torch.where(mask, reward, torch.zeros_like(reward))
 
 
 def _zero_delayed_termination_rewards(
@@ -272,6 +287,8 @@ class variable_posture(ManagerTermBase):
         std_running: dict[str, float],
         walking_threshold: float = 0.1,
         running_threshold: float = 1.5,
+        domain_command_name: str = "motion",
+        enabled_domain_names: tuple[str, ...] = (),
     ) -> torch.Tensor:
         del std_standing, std_walking, std_running
         asset = env.scene[asset_cfg.name]
@@ -291,7 +308,60 @@ class variable_posture(ManagerTermBase):
         current_joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
         desired_joint_pos = self.default_joint_pos[:, asset_cfg.joint_ids]
         error_squared = torch.square(current_joint_pos - desired_joint_pos)
-        return torch.exp(-torch.mean(error_squared / torch.square(std), dim=-1))
+        reward = torch.exp(-torch.mean(error_squared / torch.square(std), dim=-1))
+        return _apply_domain_reward_mask(env, reward, domain_command_name, enabled_domain_names)
+
+
+def track_lin_vel_xy_yaw_frame_exp_on_domains(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+) -> torch.Tensor:
+    reward = velocity_mdp.track_lin_vel_xy_yaw_frame_exp(env, std, command_name)
+    return _apply_domain_reward_mask(env, reward, domain_command_name, enabled_domain_names)
+
+
+def track_ang_vel_z_world_exp_on_domains(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+) -> torch.Tensor:
+    reward = velocity_mdp.track_ang_vel_z_world_exp(env, command_name, std)
+    return _apply_domain_reward_mask(env, reward, domain_command_name, enabled_domain_names)
+
+
+def lin_vel_z_l2_on_domains(
+    env: ManagerBasedRLEnv,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+) -> torch.Tensor:
+    reward = velocity_mdp.lin_vel_z_l2(env)
+    return _apply_domain_reward_mask(env, reward, domain_command_name, enabled_domain_names)
+
+
+def ang_vel_xy_l2_on_domains(
+    env: ManagerBasedRLEnv,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+) -> torch.Tensor:
+    reward = velocity_mdp.ang_vel_xy_l2(env)
+    return _apply_domain_reward_mask(env, reward, domain_command_name, enabled_domain_names)
+
+
+def feet_air_time_positive_biped_on_domains(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float,
+    domain_command_name: str = "motion",
+    enabled_domain_names: tuple[str, ...] = ("flat_velocity",),
+) -> torch.Tensor:
+    reward = velocity_mdp.feet_air_time_positive_biped(env, command_name, threshold, sensor_cfg)
+    return _apply_domain_reward_mask(env, reward, domain_command_name, enabled_domain_names)
 
 
 def heading_base_linear_velocity_exp(
@@ -331,24 +401,41 @@ def heading_base_linear_velocity_exp(
 
 
 def motion_global_anchor_position_error_exp(
-    env: ManagerBasedRLEnv, command_name: str, std: float, disable_on_delayed_termination: bool = False
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    disable_on_delayed_termination: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     error = torch.sum(torch.square(command.anchor_pos_w - command.robot_anchor_pos_w), dim=-1)
     reward = torch.exp(-error / std**2)
-    return _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    reward = _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
-def motion_global_anchor_position_z_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
+def motion_global_anchor_position_z_error_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    enabled_domain_names: tuple[str, ...] = (),
+) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     error = torch.square(command.anchor_pos_w[:, 2] - command.robot_anchor_pos_w[:, 2])
-    return torch.exp(-error / std**2)
+    reward = torch.exp(-error / std**2)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
-def motion_global_anchor_orientation_error_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
+def motion_global_anchor_orientation_error_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    enabled_domain_names: tuple[str, ...] = (),
+) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     error = quat_error_magnitude(command.anchor_quat_w, command.robot_anchor_quat_w) ** 2
-    return torch.exp(-error / std**2)
+    reward = torch.exp(-error / std**2)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
 def motion_relative_body_position_error_exp(
@@ -357,6 +444,7 @@ def motion_relative_body_position_error_exp(
     std: float,
     body_names: list[str] | None = None,
     disable_on_delayed_termination: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     body_indexes = _get_body_indexes(command, body_names)
@@ -364,7 +452,8 @@ def motion_relative_body_position_error_exp(
         torch.square(command.body_pos_relative_w[:, body_indexes] - command.robot_body_pos_w[:, body_indexes]), dim=-1
     )
     reward = torch.exp(-error.mean(-1) / std**2)
-    return _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    reward = _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
 def motion_relative_body_orientation_error_exp(
@@ -373,6 +462,7 @@ def motion_relative_body_orientation_error_exp(
     std: float,
     body_names: list[str] | None = None,
     disable_on_delayed_termination: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     body_indexes = _get_body_indexes(command, body_names)
@@ -381,7 +471,8 @@ def motion_relative_body_orientation_error_exp(
         ** 2
     )
     reward = torch.exp(-error.mean(-1) / std**2)
-    return _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    reward = _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
 def motion_global_body_linear_velocity_error_exp(
@@ -390,6 +481,7 @@ def motion_global_body_linear_velocity_error_exp(
     std: float,
     body_names: list[str] | None = None,
     disable_on_delayed_termination: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     body_indexes = _get_body_indexes(command, body_names)
@@ -397,7 +489,8 @@ def motion_global_body_linear_velocity_error_exp(
         torch.square(command.body_lin_vel_w[:, body_indexes] - command.robot_body_lin_vel_w[:, body_indexes]), dim=-1
     )
     reward = torch.exp(-error.mean(-1) / std**2)
-    return _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    reward = _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
 def motion_global_body_angular_velocity_error_exp(
@@ -406,6 +499,7 @@ def motion_global_body_angular_velocity_error_exp(
     std: float,
     body_names: list[str] | None = None,
     disable_on_delayed_termination: bool = False,
+    enabled_domain_names: tuple[str, ...] = (),
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
     body_indexes = _get_body_indexes(command, body_names)
@@ -413,7 +507,8 @@ def motion_global_body_angular_velocity_error_exp(
         torch.square(command.body_ang_vel_w[:, body_indexes] - command.robot_body_ang_vel_w[:, body_indexes]), dim=-1
     )
     reward = torch.exp(-error.mean(-1) / std**2)
-    return _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    reward = _zero_delayed_termination_rewards(env, reward, disable_on_delayed_termination)
+    return _apply_domain_reward_mask(env, reward, command_name, enabled_domain_names)
 
 
 def feet_contact_time(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, threshold: float) -> torch.Tensor:

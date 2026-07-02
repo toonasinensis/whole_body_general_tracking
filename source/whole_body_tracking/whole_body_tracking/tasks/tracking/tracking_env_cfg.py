@@ -116,7 +116,7 @@ class CommandsCfg:
             "pitch": (-1.0, 1.0),
             "yaw": (-0.0, 0.0),
         },
-        pose_range_env_ratio=0.3,
+        pose_range_env_ratio=0.0,
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.0, 0.0),
     )
@@ -204,18 +204,13 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     @configclass
-    class ZRbtCmdMfCfg(ObsGroup):
-        motion_joint_pos_multi_future = ObsTerm(
-            func=mdp.motion_joint_pos_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+    class WbcCmdCfg(ObsGroup):
+        command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
+        motion_anchor_pos_b = ObsTerm(
+            func=mdp.motion_anchor_pos_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
-        motion_joint_vel_multi_future = ObsTerm(
-            func=mdp.motion_joint_vel_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.5, n_max=0.5)
-        )
-        motion_anchor_ori_b_multi_future = ObsTerm(
-            func=mdp.motion_anchor_ori_b_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
-        motion_anchor_z_multi_future = ObsTerm(
-            func=mdp.motion_anchor_z_mf, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
+        motion_anchor_ori_b = ObsTerm(
+            func=mdp.motion_anchor_ori_b, params={"command_name": "motion"}, noise=Unoise(n_min=-0.05, n_max=0.05)
         )
 
         def __post_init__(self):
@@ -241,9 +236,9 @@ class ObservationsCfg:
 
     @configclass
     class PrivilegedCfg(ObsGroup):
-        command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
-        motion_anchor_pos_b = ObsTerm(func=mdp.motion_anchor_pos_b, params={"command_name": "motion"})
-        motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
+        # command = ObsTerm(func=mdp.generated_commands, params={"command_name": "motion"})
+        # motion_anchor_pos_b = ObsTerm(func=mdp.motion_anchor_pos_b, params={"command_name": "motion"})
+        # motion_anchor_ori_b = ObsTerm(func=mdp.motion_anchor_ori_b, params={"command_name": "motion"})
         body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})
         body_ori = ObsTerm(func=mdp.robot_body_ori_b, params={"command_name": "motion"})
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
@@ -295,9 +290,7 @@ class ObservationsCfg:
     # observation groups
     # policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
-    rbt_cmd_mf: RbtCmdMfCfg = RbtCmdMfCfg()
-    zrbt_cmd_mf: ZRbtCmdMfCfg = ZRbtCmdMfCfg()
-    smpl_cmd_mf: SmplCmdMfCfg = SmplCmdMfCfg()
+    wbc_cmd: WbcCmdCfg = WbcCmdCfg()
     prop: PropCfg = PropCfg()
     amp: AmpCfg | None = None
 

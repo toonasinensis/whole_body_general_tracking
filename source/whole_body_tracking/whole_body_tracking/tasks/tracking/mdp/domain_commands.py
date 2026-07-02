@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import torch
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
+from isaaclab.managers import EventTermCfg, SceneEntityCfg
 from isaaclab.utils import configclass
 
 from whole_body_tracking.terrains.mixed_domains import (
@@ -28,6 +30,7 @@ class FlatMotionDomainCfg:
     dataset_txt: str = "data/tracking_npz_data/lafan_named.txt"
     max_motion_num: int = -1
     terrain_cell_count: int = 1
+    task_profile: str = "wbc_tracking"
 
 
 @dataclass
@@ -38,6 +41,22 @@ class PairedMeshMotionDomainCfg:
     terrain_kind: str = "stl_grid"
     pairs_jsonl: str = "data/omniretarget/g1_terrain/pairs.jsonl"
     pair_limit: int | None = None
+    task_profile: str = "wbc_tracking"
+
+
+@dataclass
+class ProceduralVelocityTerrainDomainCfg:
+    name: str = "velocity_terrain"
+    env_ratio: float = 0.20
+    pairing: str = "unpaired"
+    terrain_kind: str = "hf_grid"
+    motion_file: str = "data"
+    dataset_txt: str = "data/tracking_npz_data/lafan_named.txt"
+    max_motion_num: int = -1
+    terrain_cell_count: int = 8
+    terrain_profile: str = "velocity_runway_steps"
+    curriculum: bool = True
+    task_profile: str = "velocity_terrain"
 
 
 class DomainMotionCommand(MotionCommand):
@@ -164,6 +183,52 @@ class DomainMotionCommand(MotionCommand):
                 motion_ids[mask] = start + torch.randint(count, (int(mask.sum().item()),), device=self.device)
         return motion_ids
 
+    def _env_ids_for_task_profile(self, env_ids: torch.Tensor, task_profile: str) -> torch.Tensor:
+        if not task_profile:
+            return env_ids[:0]
+        profile_domain_ids = [
+            domain_id
+            for domain_id, domain in enumerate(self.domain_layout.domains)
+            if getattr(domain, "task_profile", "wbc_tracking") == task_profile
+        ]
+        if not profile_domain_ids:
+            return env_ids[:0]
+        mask = torch.zeros(env_ids.shape, dtype=torch.bool, device=self.device)
+        env_domain_ids = self.env_domain_ids[env_ids]
+        for domain_id in profile_domain_ids:
+            mask |= env_domain_ids == domain_id
+        return env_ids[mask]
+
+    @staticmethod
+    def _iter_reset_terms(reset_cfg) -> list[EventTermCfg]:
+        if reset_cfg is None:
+            return []
+        terms = []
+        seen = set()
+        for source in (vars(reset_cfg), vars(type(reset_cfg))):
+            for name, value in source.items():
+                if name.startswith("_") or name in seen:
+                    continue
+                seen.add(name)
+                if isinstance(value, EventTermCfg) and value.mode == "reset":
+                    terms.append(value)
+        return terms
+
+    def _apply_profile_reset_cfg(self, reset_cfg, env_ids: torch.Tensor) -> None:
+        if env_ids.numel() == 0:
+            return
+        for term in self._iter_reset_terms(reset_cfg):
+            term.func(self._env, env_ids, **term.params)
+
+    def _resample_command(self, env_ids: Sequence[int], record_failures: bool = True):
+        super()._resample_command(env_ids, record_failures=record_failures)
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+        if env_ids.numel() == 0:
+            return
+        for task_profile, reset_cfg in self.cfg.profile_reset_cfgs.items():
+            profile_env_ids = self._env_ids_for_task_profile(env_ids, task_profile)
+            self._apply_profile_reset_cfg(reset_cfg, profile_env_ids)
+
     def _uniform_local_times_for_motions(self, motion_ids: torch.Tensor) -> torch.Tensor:
         starts = self.motion.time_step_start_idx[motion_ids]
         ends = self.motion.time_step_end_idx[motion_ids]
@@ -223,6 +288,35 @@ class DomainMotionCommand(MotionCommand):
             self.metrics["prob_max_over_uniform"][:] = probs.max() / self.metrics["prob_uniform"][0].clamp_min(1e-12)
             self.metrics["num_concentrate_bins"][:] = active.sum()
 
+    def _update_metrics(self):
+        super()._update_metrics()
+        self._update_velocity_domain_metrics()
+
+    def _update_velocity_domain_metrics(self) -> None:
+        try:
+            base_velocity = self._env.command_manager.get_term("base_velocity")
+        except Exception:
+            return
+        base_metrics = getattr(base_velocity, "metrics", None)
+        if not base_metrics:
+            return
+        for metric_name in ("error_vel_xy", "error_vel_yaw"):
+            value = base_metrics.get(metric_name)
+            if value is None or not torch.is_tensor(value):
+                continue
+            value = value.to(device=self.device)
+            if value.ndim == 0:
+                continue
+            for domain_id, domain in enumerate(self.domain_layout.domains):
+                if getattr(domain, "task_profile", "wbc_tracking") not in ("velocity_flat", "velocity_terrain"):
+                    continue
+                mask = self.env_domain_ids == domain_id
+                if torch.any(mask):
+                    mean_value = value[mask].mean()
+                else:
+                    mean_value = torch.zeros((), device=self.device, dtype=value.dtype)
+                self.metrics[f"{metric_name}_{domain.name}"] = mean_value.repeat(self.num_envs)
+
     def _mapping_rows(self, env_ids: torch.Tensor) -> list[dict[str, object]]:
         terrain_ids = self._global_terrain_ids_for_envs(env_ids).detach().cpu().tolist()
         motion_ids = self.motion_ids[env_ids].detach().cpu().tolist()
@@ -281,3 +375,112 @@ class DomainMotionCommandCfg(MotionCommandCfg):
     ]
     domain_separator_cell_count: int = 0
     debug_domain_log_count: int = 16
+    profile_reset_cfgs: dict[str, object] = {}
+
+
+# 根据指定的 domain name，返回哪些 env 属于这些 domain 的 mask
+
+
+def domain_name_mask(
+    env,
+    command_name: str = "motion",
+    enabled_domain_names: Sequence[str] = (),
+) -> torch.Tensor:
+    """Return a boolean env mask for selected DomainMotionCommand domain names."""
+    command = env.command_manager.get_term(command_name)
+    if not hasattr(command, "env_domain_ids") or not enabled_domain_names:
+        return torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+
+    layout = getattr(command, "domain_layout", None)
+    domains = tuple(getattr(layout, "domains", ()))
+    name_to_id = {domain.name: domain_id for domain_id, domain in enumerate(domains)}
+    missing = [name for name in enabled_domain_names if name not in name_to_id]
+    if missing:
+        raise ValueError(f"Unknown domain names {missing}. Available domains: {list(name_to_id)}")
+
+    enabled = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    for name in enabled_domain_names:
+        enabled |= command.env_domain_ids == int(name_to_id[name])
+    return enabled
+
+
+def domain_name_float_mask(
+    env,
+    command_name: str = "motion",
+    enabled_domain_names: Sequence[str] = (),
+) -> torch.Tensor:
+    return domain_name_mask(env, command_name, enabled_domain_names).to(dtype=torch.float32).unsqueeze(-1)
+
+
+def _resolve_masked_source_params(env, source_params: dict | None) -> dict:
+    if not source_params:
+        return {}
+    scene_id = id(env.scene)
+    for value in source_params.values():
+        if not isinstance(value, SceneEntityCfg):
+            continue
+        if getattr(value, "_domain_mask_resolved_scene_id", None) == scene_id:
+            continue
+        value.resolve(env.scene)
+        value._domain_mask_resolved_scene_id = scene_id
+    return source_params
+
+
+def domain_masked_reward(
+    env,
+    source_func,
+    source_params: dict | None = None,
+    domain_command_name: str = "motion",
+    enabled_domain_names: Sequence[str] = (),
+) -> torch.Tensor:
+    source_params = _resolve_masked_source_params(env, source_params)
+    reward = source_func(env, **source_params)
+    if not enabled_domain_names:
+        return reward
+    mask = domain_name_mask(env, domain_command_name, enabled_domain_names)
+    _debug_domain_masked_reward_once(env, source_func, enabled_domain_names, mask, reward)
+    return torch.where(mask, reward, torch.zeros_like(reward))
+
+
+def _debug_domain_masked_reward_once(
+    env,
+    source_func,
+    enabled_domain_names: Sequence[str],
+    mask: torch.Tensor,
+    reward: torch.Tensor,
+) -> None:
+    if os.getenv("WBT_DEBUG_VELCOMMAND", "0") in ("", "0", "false", "False"):
+        return
+    func_name = getattr(source_func, "__name__", source_func.__class__.__name__)
+    debug_key = (func_name, tuple(enabled_domain_names))
+    printed = getattr(env, "_wbt_debug_masked_rewards_printed", set())
+    if debug_key in printed:
+        return
+    printed = set(printed)
+    printed.add(debug_key)
+    setattr(env, "_wbt_debug_masked_rewards_printed", printed)
+    mask = mask.to(dtype=torch.bool)
+    active_count = int(mask.sum().item())
+    inactive_count = int((~mask).sum().item())
+    active_mean = float(reward[mask].mean().item()) if active_count > 0 else 0.0
+    inactive_mean = float(reward[~mask].mean().item()) if inactive_count > 0 else 0.0
+    print(
+        "[WBT_DEBUG_REWARD_MASK] "
+        f"func={func_name} enabled_domains={tuple(enabled_domain_names)} "
+        f"active_envs={active_count} inactive_envs={inactive_count} "
+        f"reward_mean_active={active_mean:.6f} reward_mean_inactive_before_zero={inactive_mean:.6f}"
+    )
+
+
+def domain_masked_termination(
+    env,
+    source_func,
+    source_params: dict | None = None,
+    domain_command_name: str = "motion",
+    enabled_domain_names: Sequence[str] = (),
+) -> torch.Tensor:
+    source_params = _resolve_masked_source_params(env, source_params)
+    terminated = source_func(env, **source_params)
+    if not enabled_domain_names:
+        return terminated
+    return terminated & domain_name_mask(env, domain_command_name, enabled_domain_names)

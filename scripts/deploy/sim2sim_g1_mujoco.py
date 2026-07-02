@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import numpy as np
 
 # import time
@@ -31,6 +32,7 @@ from sim2sim_g1.observations import (  # print_obs_layout,
     validate_inputs,
 )
 from sim2sim_g1.onnx_policy import OnnxPolicy, load_metadata, onnx_input_names, validate_grouped_onnx_contract
+from sim2sim_g1.terrain import MujocoHeightScanner, mujoco_xml_with_terrain_mesh, terrain_path_from_motion
 from sim2sim_g1.viewer import ReferenceMotionPlayer
 
 
@@ -63,6 +65,43 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kd", type=float, default=None, help="Override metadata joint damping with a scalar value.")
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--no_render", action="store_true", help="Disable MuJoCo viewer when wrapper enables --render.")
+    parser.add_argument(
+        "--camera_follow",
+        action="store_true",
+        default=True,
+        help="Keep the MuJoCo viewer camera looking at the robot.",
+    )
+    parser.add_argument("--no_camera_follow", action="store_false", dest="camera_follow")
+    parser.add_argument("--camera_body", default="pelvis", help="Body name used as the camera look-at target.")
+    parser.add_argument("--camera_distance", type=float, default=3.0, help="MuJoCo viewer camera distance.")
+    parser.add_argument("--camera_azimuth", type=float, default=135.0, help="MuJoCo viewer camera azimuth in degrees.")
+    parser.add_argument(
+        "--camera_elevation", type=float, default=-18.0, help="MuJoCo viewer camera elevation in degrees."
+    )
+    parser.add_argument(
+        "--camera_lookat_offset",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        default=(0.0, 0.0, 0.45),
+        help="World-frame offset added to the camera look-at body position.",
+    )
+    parser.add_argument(
+        "--hold_final_frame",
+        action="store_true",
+        default=True,
+        help="When rendering, keep simulating after rollout completes while holding the final reference frame.",
+    )
+    parser.add_argument("--no_hold_final_frame", action="store_false", dest="hold_final_frame")
+    parser.add_argument(
+        "--hold_final_policy_mode",
+        choices=["run_policy", "hold_target"],
+        default="run_policy",
+        help=(
+            "After rollout completes, either keep running the policy with the final motion command "
+            "or hold the final PD target."
+        ),
+    )
     parser.add_argument("--imu_quat_sensor", default="base_quat", help="MuJoCo framequat sensor name.")
     parser.add_argument("--imu_gyro_sensor", default="base_gyro", help="MuJoCo gyro sensor name.")
     parser.add_argument("--debug_imu", action="store_true", help="Print XML sensor IMU values once at startup.")
@@ -71,6 +110,30 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print motion/root/obs/action alignment values once at startup.",
     )
+    parser.add_argument(
+        "--velocity_command_source",
+        choices=["motion", "keyboard", "zero"],
+        default="motion",
+        help="Source for ONNX input 'velcommand' when the policy exposes it.",
+    )
+    parser.add_argument("--keyboard_vx_step", type=float, default=0.1, help="Keyboard vx increment for numpad 8/5.")
+    parser.add_argument("--keyboard_vy_step", type=float, default=0.1, help="Keyboard vy increment for numpad 4/6.")
+    parser.add_argument(
+        "--keyboard_yaw_step", type=float, default=0.1, help="Keyboard yaw-rate increment for numpad 7/9."
+    )
+    parser.add_argument("--keyboard_vx_limit", type=float, default=1.5, help="Absolute vx command limit.")
+    parser.add_argument("--keyboard_vy_limit", type=float, default=1.0, help="Absolute vy command limit.")
+    parser.add_argument("--keyboard_yaw_limit", type=float, default=1.5, help="Absolute yaw-rate command limit.")
+    parser.add_argument(
+        "--show_velocity_command",
+        action="store_true",
+        default=True,
+        help="Render the current velocity command as an arrow in the MuJoCo viewer.",
+    )
+    parser.add_argument("--no_show_velocity_command", action="store_false", dest="show_velocity_command")
+    parser.add_argument("--velocity_command_arrow_scale", type=float, default=0.45)
+    parser.add_argument("--velocity_command_arrow_z", type=float, default=0.08)
+    parser.add_argument("--debug_height_scan", action="store_true", help="Print height_scan ray/obs stats once.")
     parser.add_argument(
         "--init_from_motion",
         action="store_true",
@@ -82,6 +145,12 @@ def parse_args() -> argparse.Namespace:
         "--init_root_body",
         default=None,
         help="Motion body used to initialize the floating base. Defaults to metadata root body or first motion body.",
+    )
+    parser.add_argument(
+        "--spawn_height_offset",
+        type=float,
+        default=0.05,
+        help="Additional z offset in meters applied to the floating base after initialization.",
     )
     parser.add_argument(
         "--show_reference",
@@ -106,6 +175,87 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no_print_joint_map", action="store_false", dest="print_joint_map")
     parser.add_argument("--dry_run", action="store_true", help="Build and validate one observation, then exit.")
+    parser.add_argument(
+        "--terrain_stl",
+        default=None,
+        help="STL terrain used for height_scan. Defaults to the selected motion npz terrain_stl field when present.",
+    )
+    parser.add_argument(
+        "--terrain_mode",
+        choices=["auto", "flat", "mesh"],
+        default="auto",
+        help="MuJoCo terrain source. auto injects an STL when available, otherwise uses the flat floor.",
+    )
+    parser.add_argument(
+        "--terrain_mesh_group",
+        type=int,
+        default=0,
+        help="MuJoCo geom group assigned to injected terrain mesh; height_scan should include this group.",
+    )
+    parser.add_argument(
+        "--terrain_collision_backend",
+        choices=["boxes", "mesh"],
+        default="boxes",
+        help="Collision representation for STL terrain. boxes avoids MuJoCo mesh convex-hull collision.",
+    )
+    parser.add_argument("--height_scan_body", default="torso_link", help="MuJoCo body used as height scanner frame.")
+    parser.add_argument(
+        "--height_scan_offset",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        default=(0.80, 0.0, 20.0),
+        help="RayCaster offset in the scanner body frame, matching IsaacLab height_scanner.",
+    )
+    parser.add_argument(
+        "--height_scan_ground_z", type=float, default=0.0, help="Flat-ground height when no STL is set."
+    )
+    parser.add_argument(
+        "--height_scan_obs_offset",
+        type=float,
+        default=0.5,
+        help="Observation offset subtracted from height_scan, matching isaaclab.envs.mdp.height_scan offset.",
+    )
+    parser.add_argument(
+        "--height_scan_geom_groups",
+        type=int,
+        nargs="+",
+        default=(0,),
+        help="MuJoCo geom groups included in height_scan ray casts. Default 0 matches the floor geom.",
+    )
+    parser.add_argument(
+        "--show_height_scan",
+        action="store_true",
+        help="Render MuJoCo height_scan ray hits in the viewer when the policy has a terrain input.",
+    )
+    parser.add_argument(
+        "--height_scan_vis_interval",
+        type=int,
+        default=1,
+        help="Update height_scan visualization every N policy steps.",
+    )
+    parser.add_argument(
+        "--height_scan_vis_points_only",
+        action="store_true",
+        help="Only render height_scan hit points, without vertical ray lines.",
+    )
+    parser.add_argument(
+        "--height_scan_vis_z_offset",
+        type=float,
+        default=0.0,
+        help="Lift only the rendered height_scan hit points by this many meters to avoid z-fighting.",
+    )
+    parser.add_argument(
+        "--height_scan_vis_radius",
+        type=float,
+        default=0.02,
+        help="Rendered height_scan hit point sphere radius in meters.",
+    )
+    parser.add_argument(
+        "--debug_height_scan_vis",
+        action="store_true",
+        help="Print how many height_scan debug geoms are appended to the MuJoCo viewer.",
+    )
     parser.add_argument(
         "--latent_sample_mode",
         choices=["normal", "zero"],
@@ -152,6 +302,8 @@ def parse_args() -> argparse.Namespace:
         raise ValueError("--latent_std must be non-negative.")
     if args.latent_resample_interval < 1:
         raise ValueError("--latent_resample_interval must be >= 1.")
+    if args.height_scan_vis_interval < 1:
+        raise ValueError("--height_scan_vis_interval must be >= 1.")
     if args.dataset_txt is not None and not args.dataset_txt.strip():
         args.dataset_txt = None
     return args
@@ -207,6 +359,64 @@ class LatentInputSampler:
             self.current = self.rng.normal(self.mean, self.std, size=self.shape).astype(np.float32)
         obs["z"] = self.current
         return obs
+
+
+class KeyboardVelocityCommand:
+    """Keyboard-adjustable [vx, vy, yaw_rate] command in the robot yaw frame."""
+
+    GLFW_KEY_KP_0 = 320
+    GLFW_KEY_KP_4 = 324
+    GLFW_KEY_KP_5 = 325
+    GLFW_KEY_KP_6 = 326
+    GLFW_KEY_KP_7 = 327
+    GLFW_KEY_KP_8 = 328
+    GLFW_KEY_KP_9 = 329
+
+    def __init__(
+        self,
+        *,
+        vx_step: float,
+        vy_step: float,
+        yaw_step: float,
+        vx_limit: float,
+        vy_limit: float,
+        yaw_limit: float,
+    ) -> None:
+        self.command = np.zeros(3, dtype=np.float32)
+        self.steps = np.asarray([vx_step, vy_step, yaw_step], dtype=np.float32)
+        self.limits = np.asarray([vx_limit, vy_limit, yaw_limit], dtype=np.float32)
+
+    def on_key(self, key: int) -> None:
+        key = int(key)
+        if key in (self.GLFW_KEY_KP_8, ord("8")):
+            self.command[0] += self.steps[0]
+        elif key in (self.GLFW_KEY_KP_5, ord("5")):
+            self.command[0] -= self.steps[0]
+        elif key in (self.GLFW_KEY_KP_4, ord("4")):
+            self.command[1] += self.steps[1]
+        elif key in (self.GLFW_KEY_KP_6, ord("6")):
+            self.command[1] -= self.steps[1]
+        elif key in (self.GLFW_KEY_KP_7, ord("7")):
+            self.command[2] += self.steps[2]
+        elif key in (self.GLFW_KEY_KP_9, ord("9")):
+            self.command[2] -= self.steps[2]
+        elif key in (self.GLFW_KEY_KP_0, ord("0")):
+            self.command[:] = 0.0
+        else:
+            return
+        self.command[:] = np.clip(self.command, -self.limits, self.limits)
+        print(
+            f"[VCMD] keyboard velcommand vx={self.command[0]:.3f}, vy={self.command[1]:.3f}, yaw={self.command[2]:.3f}"
+        )
+
+    def value(self) -> np.ndarray:
+        return self.command.reshape(1, 3).astype(np.float32)
+
+    def print_config(self) -> None:
+        print(
+            "[INFO] Keyboard velocity command: numpad 8/5=vx, 4/6=vy, 7/9=yaw_rate, 0=zero, "
+            f"steps={self.steps.tolist()}, limits={self.limits.tolist()}"
+        )
 
 
 def print_motion_alignment_debug(
@@ -329,6 +539,56 @@ def _select_motion_paths(args: argparse.Namespace, paths: list[str]) -> list[tup
     return indexed_paths
 
 
+def _manifest_terrain_paths(motion_file: str, dataset_txt: str | None) -> dict[str, Path]:
+    if dataset_txt:
+        return {}
+    manifest_path = Path(motion_file).expanduser()
+    if not manifest_path.is_file() or manifest_path.suffix != ".jsonl":
+        return {}
+    out: dict[str, Path] = {}
+    for line_no, line in enumerate(manifest_path.read_text().splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        record = json.loads(line)
+        if "tracking_motion" not in record or "terrain_stl" not in record:
+            continue
+        motion_path = _resolve_manifest_path(manifest_path, record["tracking_motion"])
+        terrain_path = _resolve_manifest_path(manifest_path, record["terrain_stl"])
+        if not terrain_path.is_file():
+            raise FileNotFoundError(f"{manifest_path}:{line_no}: terrain_stl not found: {terrain_path}")
+        out[str(motion_path)] = terrain_path
+    return out
+
+
+def _resolve_manifest_path(manifest_path: Path, value) -> Path:
+    path = Path(str(value)).expanduser()
+    return path.resolve() if path.is_absolute() else (manifest_path.parent / path).resolve()
+
+
+def _terrain_path_for_motion(
+    args: argparse.Namespace,
+    motion: MotionData,
+    motion_path: str,
+    manifest_terrain_paths: dict[str, Path],
+) -> Path | None:
+    if args.terrain_stl:
+        return Path(args.terrain_stl).expanduser().resolve()
+    manifest_path = manifest_terrain_paths.get(str(Path(motion_path).expanduser().resolve()))
+    if manifest_path is not None:
+        return manifest_path
+    path = terrain_path_from_motion(motion, None)
+    return path.resolve() if path is not None else None
+
+
+def _apply_spawn_height_offset(data, offset: float) -> None:
+    offset = float(offset)
+    if offset == 0.0:
+        return
+    data.qpos[2] += offset
+    print(f"[INFO] Applied spawn height offset: z += {offset:.3f} m -> root_z={float(data.qpos[2]):.6f}")
+
+
 def _motion_meta_for_rollout(motion: MotionData, meta: dict) -> dict:
     body_names = list(meta["motion_body_names"])
     motion_meta = dict(meta)
@@ -401,6 +661,167 @@ def _new_reference_player(args, model, motion: MotionData, meta: dict, joint_qpo
     )
 
 
+def _new_height_scanner(
+    args: argparse.Namespace,
+    model,
+    motion: MotionData,
+    input_names: list[str],
+    terrain_path: Path | None = None,
+):
+    if "terrain" not in input_names:
+        return None
+    scanner = MujocoHeightScanner(
+        model,
+        body_name=args.height_scan_body,
+        terrain_path=terrain_path,
+        offset=tuple(float(v) for v in args.height_scan_offset),
+        ground_z=args.height_scan_ground_z,
+        height_offset=args.height_scan_obs_offset,
+        geom_groups=tuple(int(v) for v in args.height_scan_geom_groups),
+    )
+    scanner.print_config()
+    return scanner
+
+
+def _draw_viewer_overlays(
+    viewer,
+    reference_player,
+    terrain_scanner,
+    args: argparse.Namespace,
+    frame: int,
+    *,
+    draw_reference: bool,
+    draw_height_scan: bool,
+    velocity_command: np.ndarray | None = None,
+    model=None,
+    data=None,
+) -> None:
+    if viewer is None:
+        return
+    if reference_player is not None and draw_reference:
+        reference_player.draw(viewer, frame)
+    elif reference_player is None and (draw_height_scan or velocity_command is not None):
+        with viewer.lock():
+            viewer.user_scn.ngeom = 0
+    if draw_height_scan and terrain_scanner is not None:
+        added = terrain_scanner.draw(
+            viewer,
+            points_only=args.height_scan_vis_points_only,
+            z_offset=args.height_scan_vis_z_offset,
+            point_radius=args.height_scan_vis_radius,
+        )
+        if args.debug_height_scan_vis:
+            print(f"[HSCANVIS] appended_debug_geoms={added}")
+    if velocity_command is not None and model is not None and data is not None:
+        _draw_velocity_command_arrow(viewer, model, data, args, velocity_command)
+
+
+def _velcommand_override(
+    args: argparse.Namespace,
+    keyboard_command: KeyboardVelocityCommand | None,
+) -> np.ndarray | None:
+    if args.velocity_command_source == "motion":
+        return None
+    if args.velocity_command_source == "zero":
+        return np.zeros((1, 3), dtype=np.float32)
+    if keyboard_command is None:
+        return np.zeros((1, 3), dtype=np.float32)
+    return keyboard_command.value()
+
+
+def _draw_velocity_command_arrow(viewer, model, data, args: argparse.Namespace, command: np.ndarray) -> None:
+    import mujoco
+
+    cmd = np.asarray(command, dtype=np.float64).reshape(-1)
+    if cmd.shape[0] < 3:
+        return
+    body_id = int(model.body(args.camera_body if args.camera_body else "pelvis").id)
+    root_pos = np.asarray(data.xpos[body_id], dtype=np.float64)
+    body_xmat = np.asarray(data.xmat[body_id], dtype=np.float64).reshape(3, 3)
+    yaw = float(np.arctan2(body_xmat[1, 0], body_xmat[0, 0]))
+    c = np.cos(yaw)
+    s = np.sin(yaw)
+    vel_w = np.asarray([c * cmd[0] - s * cmd[1], s * cmd[0] + c * cmd[1], 0.0], dtype=np.float64)
+    start = np.asarray([root_pos[0], root_pos[1], args.velocity_command_arrow_z], dtype=np.float64)
+    end = start + float(args.velocity_command_arrow_scale) * vel_w
+    if np.linalg.norm(end - start) < 1e-4:
+        end = start + np.asarray([0.001, 0.0, 0.0], dtype=np.float64)
+    rgba = np.asarray([1.0, 0.1, 0.1, 1.0], dtype=np.float32)
+    mat = np.eye(3, dtype=np.float64).reshape(-1)
+    with viewer.lock():
+        scn = viewer.user_scn
+        max_geoms = getattr(scn, "maxgeom", None)
+        if max_geoms is None:
+            max_geoms = len(scn.geoms)
+        max_geoms = int(max_geoms)
+        if scn.ngeom >= max_geoms:
+            return
+        geom = scn.geoms[scn.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            mujoco.mjtGeom.mjGEOM_ARROW,
+            np.zeros(3, dtype=np.float64),
+            np.zeros(3, dtype=np.float64),
+            mat,
+            rgba,
+        )
+        mujoco.mjv_connector(
+            geom,
+            mujoco.mjtGeom.mjGEOM_ARROW,
+            0.035,
+            start,
+            end,
+        )
+        geom.category = mujoco.mjtCatBit.mjCAT_DECOR
+        geom.rgba[:] = rgba
+        scn.ngeom += 1
+
+
+def _update_viewer_camera(viewer, model, data, args: argparse.Namespace) -> None:
+    if viewer is None or not args.camera_follow:
+        return
+    try:
+        body_id = int(model.body(args.camera_body).id)
+    except KeyError as exc:
+        raise ValueError(f"--camera_body {args.camera_body!r} is not a MuJoCo body name.") from exc
+    lookat = np.asarray(data.xpos[body_id], dtype=np.float64) + np.asarray(args.camera_lookat_offset, dtype=np.float64)
+    with viewer.lock():
+        viewer.cam.lookat[:] = lookat
+        viewer.cam.distance = float(args.camera_distance)
+        viewer.cam.azimuth = float(args.camera_azimuth)
+        viewer.cam.elevation = float(args.camera_elevation)
+
+
+def _print_height_scan_debug(terrain_scanner) -> None:
+    if terrain_scanner is None or terrain_scanner.last_scan is None:
+        print("[HSCANDBG] height scanner has no cached scan yet.")
+        return
+    cache = terrain_scanner.last_scan
+    values = np.asarray(cache["values"], dtype=np.float64).reshape(-1)
+    hit_points = np.asarray(cache["hit_points"], dtype=np.float64)
+    ray_starts = np.asarray(cache["ray_starts"], dtype=np.float64)
+    scan_origin = np.asarray(cache["scan_origin"], dtype=np.float64)
+    geom_ids = np.asarray(cache.get("geom_ids", []), dtype=np.int32).reshape(-1)
+    hit_count = int(np.sum(geom_ids >= 0)) if geom_ids.size else 0
+    print("========== MUJOCO HEIGHT SCAN DEBUG ==========")
+    print(f"[HSCANDBG] scan_origin: {scan_origin.tolist()}")
+    print(
+        f"[HSCANDBG] ray_start_z range: ({float(np.min(ray_starts[:, 2])):.6f}, {float(np.max(ray_starts[:, 2])):.6f})"
+    )
+    print(
+        "[HSCANDBG] hit_z range: "
+        f"({float(np.min(hit_points[:, 2])):.6f}, {float(np.max(hit_points[:, 2])):.6f}), "
+        f"mj_ray_hits={hit_count}/{hit_points.shape[0]}"
+    )
+    print(
+        "[HSCANDBG] obs range: "
+        f"({float(np.min(values)):.6f}, {float(np.max(values)):.6f}), "
+        f"mean={float(np.mean(values)):.6f}"
+    )
+    print("[HSCANDBG] IsaacLab formula: torso_body_z - hit_z - obs_offset, ray offset is only ray start.")
+    print("==============================================")
+
+
 def _motion_start_frame(args: argparse.Namespace, motion: MotionData) -> int:
     if motion.num_frames <= 0:
         raise ValueError(f"Motion {motion.path} has no frames.")
@@ -422,6 +843,11 @@ def main() -> None:
     meta = load_metadata(args.onnx_path)
     input_names = onnx_input_names(args.onnx_path)
     validate_grouped_onnx_contract(input_names, meta)
+    if args.velocity_command_source != "motion" and "velcommand" not in input_names:
+        raise ValueError(
+            f"--velocity_command_source {args.velocity_command_source!r} requires an ONNX input named 'velcommand'. "
+            f"Current inputs: {input_names}"
+        )
     if "smpl_cmd_mf" in input_names and meta.get("encoder_mode") not in (None, "robot", "encoder_g1", "g1"):
         print(
             f"[WARN] ONNX encoder_mode={meta.get('encoder_mode')} needs non-zero smpl_cmd_mf. "
@@ -441,13 +867,26 @@ def main() -> None:
     if metrics_csv_path is not None:
         print(f"[INFO] Metrics CSV: {metrics_csv_path}")
 
+    manifest_terrain_paths = _manifest_terrain_paths(args.motion_file, args.dataset_txt)
     first_selected_index, first_motion_path = motion_entries[0]
     first_motion = MotionData(first_motion_path)
     motion = first_motion
     print(f"[INFO] Motion 1/{len(motion_paths)} (original_index={first_selected_index}): {motion.path}")
     motion.print_config()
 
-    model = mujoco.MjModel.from_xml_path(args.xml_path)
+    active_terrain_path = _terrain_path_for_motion(args, first_motion, first_motion_path, manifest_terrain_paths)
+    model_xml_path, terrain_tmpdir, active_model_terrain_path = mujoco_xml_with_terrain_mesh(
+        args.xml_path,
+        active_terrain_path,
+        mode=args.terrain_mode,
+        collision_backend=args.terrain_collision_backend,
+        geom_group=args.terrain_mesh_group,
+    )
+    if active_model_terrain_path is None:
+        print(f"[INFO] MuJoCo terrain: flat floor from XML ({args.xml_path})")
+    else:
+        print(f"[INFO] MuJoCo terrain: injected STL mesh {active_model_terrain_path}")
+    model = mujoco.MjModel.from_xml_path(model_xml_path)
     model.opt.timestep = float(meta.get("sim_dt", model.opt.timestep))
     data = mujoco.MjData(model)
     joint_names = list(meta["action_joint_names"])
@@ -475,6 +914,7 @@ def main() -> None:
     else:
         initialize_default_pose(data, meta, joint_names, joint_qpos)
         print("[INFO] Initialized MuJoCo state from default standing pose.")
+    _apply_spawn_height_offset(data, args.spawn_height_offset)
     mujoco.mj_forward(model, data)
     imu_reader.print_config()
     if args.debug_imu:
@@ -491,6 +931,7 @@ def main() -> None:
 
     decimation = args.decimation or int(meta.get("decimation", 1))
     reference_update_interval = max(1, int(args.reference_update_interval))
+    height_scan_vis_interval = max(1, int(args.height_scan_vis_interval))
     latent_sampler = LatentInputSampler(
         input_names,
         meta,
@@ -501,15 +942,43 @@ def main() -> None:
         sample_mode=args.latent_sample_mode,
     )
     latent_sampler.print_config()
+    keyboard_command = (
+        KeyboardVelocityCommand(
+            vx_step=args.keyboard_vx_step,
+            vy_step=args.keyboard_vy_step,
+            yaw_step=args.keyboard_yaw_step,
+            vx_limit=args.keyboard_vx_limit,
+            vy_limit=args.keyboard_vy_limit,
+            yaw_limit=args.keyboard_yaw_limit,
+        )
+        if args.velocity_command_source == "keyboard"
+        else None
+    )
+    if keyboard_command is not None:
+        keyboard_command.print_config()
     # print_obs_layout(meta, prop_history, input_names)
     if args.dry_run:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
         prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+        terrain_scanner = _new_height_scanner(args, model, motion, input_names, active_model_terrain_path)
         obs = build_obs(
-            data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
+            data,
+            motion,
+            start_frame,
+            motion_meta,
+            imu_reader,
+            joint_qpos,
+            joint_qvel,
+            last_action,
+            prop_history,
+            body_ids,
+            terrain_scanner,
+            _velcommand_override(args, keyboard_command),
         )
         latent_sampler.add_to_obs(obs, step=0)
         validate_inputs(obs, input_names, meta)
+        if args.debug_height_scan:
+            _print_height_scan_debug(terrain_scanner)
         if args.debug_motion_alignment:
             print_motion_alignment_debug(
                 data,
@@ -530,11 +999,25 @@ def main() -> None:
     if args.debug_motion_alignment:
         last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
         debug_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+        terrain_scanner = _new_height_scanner(args, model, motion, input_names, active_model_terrain_path)
         debug_obs = build_obs(
-            data, motion, start_frame, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, debug_history
+            data,
+            motion,
+            start_frame,
+            motion_meta,
+            imu_reader,
+            joint_qpos,
+            joint_qvel,
+            last_action,
+            debug_history,
+            body_ids,
+            terrain_scanner,
+            _velcommand_override(args, keyboard_command),
         )
         latent_sampler.add_to_obs(debug_obs, step=0)
         validate_inputs(debug_obs, input_names, meta)
+        if args.debug_height_scan:
+            _print_height_scan_debug(terrain_scanner)
         debug_action = policy.run(debug_obs)
         debug_target = action_to_target(debug_action, action_scale, action_offset)
         print_motion_alignment_debug(
@@ -556,8 +1039,13 @@ def main() -> None:
     if args.render:
         import mujoco.viewer
 
-        viewer_cm = mujoco.viewer.launch_passive(model, data)
+        viewer_cm = mujoco.viewer.launch_passive(
+            model,
+            data,
+            key_callback=keyboard_command.on_key if keyboard_command is not None else None,
+        )
         viewer = viewer_cm.__enter__()
+        _update_viewer_camera(viewer, model, data, args)
     else:
         print("[INFO] MuJoCo viewer disabled. Pass --render to watch the rollout.")
 
@@ -566,6 +1054,14 @@ def main() -> None:
         f"dt={model.opt.timestep:.6f}, render={args.render}"
     )
     metric_rows: list[dict[str, float | int | str]] = []
+    hold_target: np.ndarray | None = None
+    hold_last_action: np.ndarray | None = None
+    hold_reference_player = None
+    hold_terrain_scanner = None
+    hold_motion = None
+    hold_motion_meta = None
+    hold_prop_history = None
+    hold_frame = 0
 
     try:
         for selected_index, (motion_index, motion_path) in enumerate(motion_entries):
@@ -578,6 +1074,14 @@ def main() -> None:
                     f"(original_index={motion_index}): {motion.path}"
                 )
                 motion.print_config()
+            motion_terrain_path = _terrain_path_for_motion(args, motion, motion_path, manifest_terrain_paths)
+            if active_model_terrain_path is not None and motion_terrain_path is not None:
+                if motion_terrain_path.resolve() != active_model_terrain_path.resolve():
+                    raise ValueError(
+                        "Current MuJoCo mesh terrain mode supports one compiled terrain per run. "
+                        f"First terrain is {active_model_terrain_path}, but motion {motion.path} requests "
+                        f"{motion_terrain_path}. Use --motion_index/--motion_path for one terrain at a time."
+                    )
             motion, motion_meta = _align_motion_for_rollout(motion, meta, model, joint_names, body_ids)
             _validate_motion_for_rollout(motion, motion_meta, len(joint_names))
             start_frame = _motion_start_frame(args, motion)
@@ -590,17 +1094,28 @@ def main() -> None:
             else:
                 initialize_default_pose(data, meta, joint_names, joint_qpos)
                 print("[INFO] Reset MuJoCo state to default standing pose.")
+            _apply_spawn_height_offset(data, args.spawn_height_offset)
             mujoco.mj_forward(model, data)
 
             reference_player = _new_reference_player(args, model, motion, motion_meta, joint_qpos)
             if reference_player is not None:
                 reference_player.print_config()
             if viewer is not None and reference_player is not None:
-                reference_player.draw(viewer, start_frame)
+                _draw_viewer_overlays(
+                    viewer,
+                    reference_player,
+                    terrain_scanner=None,
+                    args=args,
+                    frame=start_frame,
+                    draw_reference=True,
+                    draw_height_scan=False,
+                )
+                _update_viewer_camera(viewer, model, data, args)
                 viewer.sync()
 
             last_action = np.zeros((1, len(joint_names)), dtype=np.float32)
             prop_history = TermMajorHistory(prop_terms_from_metadata(meta, len(joint_names)))
+            terrain_scanner = _new_height_scanner(args, model, motion, input_names, active_model_terrain_path)
             latent_sampler.reset()
             # start_root_pos = np.asarray(data.qpos[:3], dtype=np.float64).copy()
             rollout_steps = min(max(int(args.steps), 0), int(motion.num_frames) - start_frame)
@@ -621,21 +1136,59 @@ def main() -> None:
                 accumulator.update(metrics)
 
                 obs = build_obs(
-                    data, motion, t, motion_meta, imu_reader, joint_qpos, joint_qvel, last_action, prop_history
+                    data,
+                    motion,
+                    t,
+                    motion_meta,
+                    imu_reader,
+                    joint_qpos,
+                    joint_qvel,
+                    last_action,
+                    prop_history,
+                    body_ids,
+                    terrain_scanner,
+                    _velcommand_override(args, keyboard_command),
                 )
                 latent_sampler.add_to_obs(obs, step=step)
                 validate_inputs(obs, input_names, meta)
+                if args.debug_height_scan and step == 0:
+                    _print_height_scan_debug(terrain_scanner)
                 raw_action = policy.run(obs)
                 target = action_to_target(raw_action, action_scale, action_offset)
                 last_action = raw_action
+                hold_target = target
+                hold_last_action = last_action
+                hold_reference_player = reference_player
+                hold_terrain_scanner = terrain_scanner
+                hold_motion = motion
+                hold_motion_meta = motion_meta
+                hold_prop_history = prop_history
+                hold_frame = t
 
-                if viewer is not None and reference_player is not None and step % reference_update_interval == 0:
-                    reference_player.draw(viewer, t)
+                draw_reference = reference_player is not None and step % reference_update_interval == 0
+                draw_height_scan = (
+                    bool(args.show_height_scan) and terrain_scanner is not None and step % height_scan_vis_interval == 0
+                )
+                draw_velocity_command = bool(args.show_velocity_command) and "velcommand" in obs
+                if viewer is not None and (draw_reference or draw_height_scan or draw_velocity_command):
+                    _draw_viewer_overlays(
+                        viewer,
+                        reference_player,
+                        terrain_scanner,
+                        args,
+                        t,
+                        draw_reference=draw_reference or draw_height_scan or draw_velocity_command,
+                        draw_height_scan=draw_height_scan,
+                        velocity_command=obs.get("velcommand"),
+                        model=model,
+                        data=data,
+                    )
                 # input("Press Enter to step the simulation...")  # Step on Enter key press
                 if viewer is not None:
                     import time
 
                     time.sleep(decimation * model.opt.timestep)
+                    _update_viewer_camera(viewer, model, data, args)
                     viewer.sync()
 
                 for _ in range(decimation):
@@ -679,9 +1232,83 @@ def main() -> None:
         )
         if metrics_csv_path is not None:
             print(f"[INFO] Wrote per-motion mean metrics: {metrics_csv_path}")
+        if viewer is not None and args.hold_final_frame:
+            print(
+                "[INFO] Continuing MuJoCo simulation on the final reference frame "
+                f"(policy_mode={args.hold_final_policy_mode}). "
+                "Close the viewer window or press Ctrl-C to exit."
+            )
+            hold_step = 0
+            while viewer.is_running():
+                import time
+
+                hold_velocity_command = None
+                if (
+                    args.hold_final_policy_mode == "run_policy"
+                    and hold_motion is not None
+                    and hold_motion_meta is not None
+                    and hold_prop_history is not None
+                    and hold_last_action is not None
+                ):
+                    hold_obs = build_obs(
+                        data,
+                        hold_motion,
+                        hold_frame,
+                        hold_motion_meta,
+                        imu_reader,
+                        joint_qpos,
+                        joint_qvel,
+                        hold_last_action,
+                        hold_prop_history,
+                        body_ids,
+                        hold_terrain_scanner,
+                        _velcommand_override(args, keyboard_command),
+                    )
+                    latent_sampler.add_to_obs(hold_obs, step=hold_step)
+                    validate_inputs(hold_obs, input_names, meta)
+                    hold_velocity_command = hold_obs.get("velcommand")
+                    hold_last_action = policy.run(hold_obs)
+                    hold_target = action_to_target(hold_last_action, action_scale, action_offset)
+                    hold_step += 1
+                if hold_target is not None:
+                    for _ in range(decimation):
+                        apply_pd_control(
+                            data,
+                            actuator_ids,
+                            joint_qpos,
+                            joint_qvel,
+                            hold_target,
+                            kp,
+                            kd,
+                            torque_limits,
+                        )
+                        mujoco.mj_step(model, data)
+                if hold_terrain_scanner is not None:
+                    hold_terrain_scanner.scan(data)
+                if (
+                    hold_reference_player is not None
+                    or (args.show_height_scan and hold_terrain_scanner is not None)
+                    or (args.show_velocity_command and hold_velocity_command is not None)
+                ):
+                    _draw_viewer_overlays(
+                        viewer,
+                        hold_reference_player,
+                        hold_terrain_scanner,
+                        args,
+                        hold_frame,
+                        draw_reference=hold_reference_player is not None,
+                        draw_height_scan=bool(args.show_height_scan) and hold_terrain_scanner is not None,
+                        velocity_command=hold_velocity_command if args.show_velocity_command else None,
+                        model=model,
+                        data=data,
+                    )
+                time.sleep(decimation * model.opt.timestep)
+                viewer.sync()
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)
+        if terrain_tmpdir is not None:
+            terrain_tmpdir.cleanup()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
 import sys
 
 from isaaclab.app import AppLauncher
@@ -22,6 +23,43 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
 parser.add_argument("--dataset_txt", type=str, default=None, help="Path to the motion dataset_txt.")
 parser.add_argument("--smpl_file_path", type=str, default=None, help="Path to the SMPL file directory.")
+parser.add_argument("--pairs_jsonl", type=str, default=None, help="Path to paired terrain-motion manifest.")
+parser.add_argument(
+    "--flat_dataset_txt", type=str, default=None, help="Path to flat motion dataset_txt for mixed tasks."
+)
+parser.add_argument("--flat_env_ratio", type=float, default=None, help="Flat-domain env ratio for mixed tasks.")
+parser.add_argument("--flat_wbc_env_ratio", type=float, default=None, help="Flat WBC env ratio for mixed tasks.")
+parser.add_argument(
+    "--flat_velocity_env_ratio",
+    type=float,
+    default=None,
+    help="Flat velocity-command env ratio for mixed tasks.",
+)
+parser.add_argument(
+    "--velocity_terrain_env_ratio",
+    type=float,
+    default=None,
+    help="Procedural velocity-terrain env ratio for mixed tasks.",
+)
+parser.add_argument(
+    "--velocity_terrain_cell_count",
+    type=int,
+    default=None,
+    help="Number of procedural velocity-terrain cells for mixed tasks.",
+)
+parser.add_argument(
+    "--velocity_terrain_profile",
+    type=str,
+    default=None,
+    help="Procedural velocity-terrain profile for mixed tasks.",
+)
+parser.add_argument("--mesh_env_ratio", type=float, default=None, help="Mesh WBC env ratio for mixed tasks.")
+parser.add_argument(
+    "--domain_separator_cell_count",
+    type=int,
+    default=None,
+    help="Ground-only terrain cells inserted between mixed domains.",
+)
 parser.add_argument(
     "--encoder_mode",
     type=str,
@@ -118,12 +156,38 @@ parser.add_argument(
     help="Number of values to print per observation group in --debug_zero_obs.",
 )
 parser.add_argument("--max_steps", type=int, default=None, help="Exit play after this many environment steps.")
+parser.add_argument(
+    "--motion_reset_z_offset",
+    type=float,
+    default=0.1,
+    help="Set motion reset root z offset above the reference motion, in meters.",
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.pairs_jsonl is not None:
+    os.environ["WBT_PAIRS_JSONL"] = args_cli.pairs_jsonl
+if args_cli.flat_dataset_txt is not None:
+    os.environ["WBT_FLAT_DATASET_TXT"] = args_cli.flat_dataset_txt
+if args_cli.flat_env_ratio is not None:
+    os.environ["WBT_FLAT_ENV_RATIO"] = str(args_cli.flat_env_ratio)
+if args_cli.flat_wbc_env_ratio is not None:
+    os.environ["WBT_FLAT_WBC_ENV_RATIO"] = str(args_cli.flat_wbc_env_ratio)
+if args_cli.flat_velocity_env_ratio is not None:
+    os.environ["WBT_FLAT_VELOCITY_ENV_RATIO"] = str(args_cli.flat_velocity_env_ratio)
+if args_cli.velocity_terrain_env_ratio is not None:
+    os.environ["WBT_VELOCITY_TERRAIN_ENV_RATIO"] = str(args_cli.velocity_terrain_env_ratio)
+if args_cli.velocity_terrain_cell_count is not None:
+    os.environ["WBT_VELOCITY_TERRAIN_CELL_COUNT"] = str(args_cli.velocity_terrain_cell_count)
+if args_cli.velocity_terrain_profile is not None:
+    os.environ["WBT_VELOCITY_TERRAIN_PROFILE"] = str(args_cli.velocity_terrain_profile)
+if args_cli.mesh_env_ratio is not None:
+    os.environ["WBT_MESH_ENV_RATIO"] = str(args_cli.mesh_env_ratio)
+if args_cli.domain_separator_cell_count is not None:
+    os.environ["WBT_DOMAIN_SEPARATOR_CELL_COUNT"] = str(args_cli.domain_separator_cell_count)
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = False  # True
@@ -139,7 +203,6 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import numpy as np
-import os
 import torch
 
 from rsl_rl.runners import OnPolicyRunner
@@ -350,9 +413,9 @@ def main(  # noqa: C901
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    # env_cfg.terminations.ee_body_pos = None
-    # env_cfg.terminations.anchor_ori = None
-    # env_cfg.terminations.anchor_pos = None
+    env_cfg.terminations.ee_body_pos = None
+    env_cfg.terminations.anchor_ori = None
+    env_cfg.terminations.anchor_pos = None
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -363,28 +426,88 @@ def main(  # noqa: C901
         print(f"[INFO] Loading experiment from directory: {log_root_path}")
         # resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         resume_path = args_cli.resume_path
+        motion_cfg = getattr(getattr(env_cfg, "commands", None), "motion", None)
 
         if args_cli.motion_file is not None:
+            if motion_cfg is None:
+                raise ValueError("--motion_file is only supported by env configs with a motion command.")
             print(f"[INFO]: Using motion file from CLI: {args_cli.motion_file}")
-            env_cfg.commands.motion.motion_file = args_cli.motion_file
-            print(
-                f"[INFO]: Overriding motion file in the environment config with: {env_cfg.commands.motion.motion_file}"
-            )
+            motion_cfg.motion_file = args_cli.motion_file
+            print(f"[INFO]: Overriding motion file in the environment config with: {motion_cfg.motion_file}")
 
         if args_cli.dataset_txt is not None:
+            if motion_cfg is None:
+                raise ValueError("--dataset_txt is only supported by env configs with a motion command.")
             print(f"[INFO]: Using motion file filter from CLI: {args_cli.dataset_txt}")
-            env_cfg.commands.motion.dataset_txt = args_cli.dataset_txt
-            print(
-                "[INFO]: Overriding motion file filter in the environment config with:"
-                f" {env_cfg.commands.motion.dataset_txt}"
-            )
+            motion_cfg.dataset_txt = args_cli.dataset_txt
+            print(f"[INFO]: Overriding motion file filter in the environment config with: {motion_cfg.dataset_txt}")
+
+        if args_cli.pairs_jsonl is not None:
+            if not hasattr(env_cfg, "pairs_jsonl"):
+                raise ValueError("--pairs_jsonl is only supported by env configs with a pairs_jsonl field.")
+            print(f"[INFO]: Using paired terrain manifest from CLI: {args_cli.pairs_jsonl}")
+            env_cfg.pairs_jsonl = args_cli.pairs_jsonl
+            if hasattr(env_cfg, "configure_pairs"):
+                env_cfg.configure_pairs()
+            elif motion_cfg is not None and hasattr(motion_cfg, "pairs_jsonl"):
+                motion_cfg.pairs_jsonl = args_cli.pairs_jsonl
+
+        if args_cli.flat_dataset_txt is not None:
+            if not hasattr(env_cfg, "flat_dataset_txt"):
+                raise ValueError("--flat_dataset_txt is only supported by mixed terrain env configs.")
+            print(f"[INFO]: Using flat dataset from CLI: {args_cli.flat_dataset_txt}")
+            env_cfg.flat_dataset_txt = args_cli.flat_dataset_txt
+
+        if args_cli.flat_env_ratio is not None:
+            if not hasattr(env_cfg, "flat_env_ratio"):
+                if not hasattr(env_cfg, "flat_wbc_env_ratio") or not hasattr(env_cfg, "flat_velocity_env_ratio"):
+                    raise ValueError("--flat_env_ratio is only supported by mixed terrain env configs.")
+            print(f"[INFO]: Using flat env ratio from CLI: {args_cli.flat_env_ratio}")
+            if hasattr(env_cfg, "flat_env_ratio"):
+                env_cfg.flat_env_ratio = args_cli.flat_env_ratio
+            else:
+                env_cfg.flat_wbc_env_ratio = args_cli.flat_env_ratio * 0.5
+                env_cfg.flat_velocity_env_ratio = args_cli.flat_env_ratio * 0.5
+                env_cfg.mesh_env_ratio = max(0.0, 1.0 - args_cli.flat_env_ratio)
+
+        for arg_name, cfg_name in (
+            ("flat_wbc_env_ratio", "flat_wbc_env_ratio"),
+            ("flat_velocity_env_ratio", "flat_velocity_env_ratio"),
+            ("mesh_env_ratio", "mesh_env_ratio"),
+        ):
+            value = getattr(args_cli, arg_name)
+            if value is None:
+                continue
+            if not hasattr(env_cfg, cfg_name):
+                raise ValueError(f"--{arg_name} is only supported by mixed terrain env configs.")
+            print(f"[INFO]: Using {cfg_name} from CLI: {value}")
+            setattr(env_cfg, cfg_name, value)
+
+        if args_cli.domain_separator_cell_count is not None:
+            if not hasattr(env_cfg, "domain_separator_cell_count"):
+                raise ValueError("--domain_separator_cell_count is only supported by mixed terrain env configs.")
+            print(f"[INFO]: Using mixed domain separator cells from CLI: {args_cli.domain_separator_cell_count}")
+            env_cfg.domain_separator_cell_count = args_cli.domain_separator_cell_count
+
+        if hasattr(env_cfg, "configure_domains"):
+            env_cfg.configure_domains()
+
+        if args_cli.motion_reset_z_offset is not None:
+            if motion_cfg is None:
+                raise ValueError("--motion_reset_z_offset is only supported by env configs with a motion command.")
+            z_offset = float(args_cli.motion_reset_z_offset)
+            print(f"[INFO]: Using motion reset z offset from CLI: {z_offset}")
+            motion_cfg.pose_range = dict(getattr(motion_cfg, "pose_range", {}))
+            motion_cfg.pose_range["z"] = (z_offset, z_offset)
+            motion_cfg.pose_range_env_ratio = 1.0
+            motion_cfg.pose_range_init_mode = "range"
 
         if args_cli.smpl_file_path is not None:
+            if motion_cfg is None:
+                raise ValueError("--smpl_file_path is only supported by env configs with a motion command.")
             print(f"[INFO]: Using SMPL file from CLI: {args_cli.smpl_file_path}")
-            env_cfg.commands.motion.smpl_file_path = args_cli.smpl_file_path
-            print(
-                f"[INFO]: Overriding SMPL file in the environment config with: {env_cfg.commands.motion.smpl_file_path}"
-            )
+            motion_cfg.smpl_file_path = args_cli.smpl_file_path
+            print(f"[INFO]: Overriding SMPL file in the environment config with: {motion_cfg.smpl_file_path}")
 
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     env_cfg.episode_length_s = 9999

@@ -7,7 +7,9 @@ from pathlib import Path
 import isaaclab.sim as sim_utils
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
@@ -30,8 +32,8 @@ class TerrainHeightScanCfg(ObsGroup):
     height_scan = ObsTerm(
         func=mdp.height_scan,
         params={"sensor_cfg": SceneEntityCfg("height_scanner")},
-        noise=Unoise(n_min=-0.1, n_max=0.1),
-        clip=(-1.0, 1.0),
+        noise=Unoise(n_min=-0.00, n_max=0.00),
+        clip=(-2.0, 2.0),
     )
 
     def __post_init__(self):
@@ -52,6 +54,9 @@ class G1PairedTerrainEnvCfg(TrackingEnvCfg):
         super().__post_init__()
 
         self.scene.robot = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        pairs_jsonl_override = os.getenv("WBT_PAIRS_JSONL")
+        if pairs_jsonl_override:
+            self.pairs_jsonl = pairs_jsonl_override
         self.configure_pairs()
         self.scene.height_scanner = RayCasterCfg(
             prim_path="{ENV_REGEX_NS}/Robot/torso_link",
@@ -68,8 +73,33 @@ class G1PairedTerrainEnvCfg(TrackingEnvCfg):
         self.rewards.motion_body_ori.params["disable_on_delayed_termination"] = False
         self.rewards.motion_body_lin_vel.params["disable_on_delayed_termination"] = False
         self.rewards.motion_body_ang_vel.params["disable_on_delayed_termination"] = False
+        self.rewards.feet_stumble = RewTerm(
+            func=mdp.feet_stumble,
+            weight=-0.5,
+            params={
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link"),
+                "ratio": 5.0,
+                "force_threshold": 1.0,
+            },
+        )
+        self.rewards.action_rate_l2.weight = -0.01
         self.terminations.ee_body_pos.params["disable_on_delayed_termination_envs"] = False
+        self.terminations.anchor_pos.params["threshold"] = 0.20
 
+        self.terminations.anchor_pos_xy = DoneTerm(
+            func=mdp.bad_anchor_pos_xyz,
+            params={"command_name": "motion", "threshold": 0.4},
+        )
+        self.rewards.undesired_contacts.weight = -0.05
+        self.terminations.parkour_reach = DoneTerm(
+            func=mdp.parkour_reach_timeout,
+            time_out=True,
+            params={
+                "command_name": "motion",
+                "distance_threshold": 0.10,
+                "end_margin_steps": 3,
+            },
+        )
         self.actions.joint_pos.scale = G1_ACTION_SCALE
 
     def configure_pairs(self):
@@ -145,17 +175,20 @@ class G1PairedTerrainEnvCfg(TrackingEnvCfg):
             pose_range_env_ratio=1.0,
             pose_range_init_mode="range",
             velocity_range={
-                "x": (-0.5, 0.5),
-                "y": (-0.5, 0.5),
-                "z": (-0.2, 0.2),
-                "roll": (-0.52, 0.52),
-                "pitch": (-0.52, 0.52),
-                "yaw": (-0.78, 0.78),
+                "x": (-0.0, 0.0),
+                "y": (-0.0, 0.0),
+                "z": (-0.0, 0.0),
+                "roll": (-0.0, 0.0),
+                "pitch": (-0.0, 0.0),
+                "yaw": (-0.0, 0.0),
             },
             joint_position_range=(-0.0, 0.0),
             motion_sampling_start_frame=5,
             adaptive_sample_rewind_min_bins=1,
             adaptive_sample_rewind_bins=2,
+            terminal_guidance_velocity_enabled=True,
+            debug_body_pose=False,
+            debug_anchor_speed=True,
         )
 
 
@@ -164,9 +197,8 @@ def manifest_motion_root(manifest: TerrainMotionPairManifest) -> Path:
 
 
 def manifest_dataset_txt(pairs_jsonl: str, manifest: TerrainMotionPairManifest) -> Path:
-    output = resolve_repo_path(pairs_jsonl).with_name("paired_tracking_dataset.txt")
-    if output.is_file():
-        return output
+    manifest_path = resolve_repo_path(pairs_jsonl)
+    output = manifest_path.with_name(f"{manifest_path.stem}_tracking_dataset.txt")
     root = manifest_motion_root(manifest)
     lines = []
     for motion_path in manifest.motion_paths:
@@ -175,5 +207,7 @@ def manifest_dataset_txt(pairs_jsonl: str, manifest: TerrainMotionPairManifest) 
             lines.append(str(motion.relative_to(root)))
         except ValueError:
             lines.append(str(motion))
-    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    content = "\n".join(lines) + "\n"
+    if not output.is_file() or output.read_text(encoding="utf-8") != content:
+        output.write_text(content, encoding="utf-8")
     return output

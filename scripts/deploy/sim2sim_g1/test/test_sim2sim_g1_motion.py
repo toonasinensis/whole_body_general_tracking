@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import numpy as np
 
 from sim2sim_g1.motion import MotionData, first_motion_file, future_indices, motion_files, motion_groups
@@ -67,6 +68,24 @@ def test_motion_files_empty_dataset_txt_uses_motion_directory(tmp_path) -> None:
 
     assert motion_files(str(root), "") == [str(first), str(nested)]
     assert motion_files(str(root), "   ") == [str(first), str(nested)]
+
+
+def test_motion_files_expands_jsonl_pair_manifest(tmp_path) -> None:
+    root = tmp_path / "dataset"
+    root.mkdir()
+    absolute = tmp_path / "absolute.npz"
+    manifest = root / "selected_pairs.jsonl"
+    manifest.write_text(
+        "\n".join(
+            [
+                json.dumps({"tracking_motion": "tracking/a.npz", "terrain_stl": "terrains/a.stl"}),
+                json.dumps({"tracking_motion": str(absolute), "terrain_stl": "terrains/b.stl"}),
+            ]
+        )
+        + "\n"
+    )
+
+    assert motion_files(str(manifest), None) == [str(root / "tracking/a.npz"), str(absolute)]
 
 
 def test_future_indices_clips_to_motion_length() -> None:

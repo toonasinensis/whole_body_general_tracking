@@ -98,6 +98,8 @@ class MotionCommand(CommandTerm):
         self.metrics["error_body_rot"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_joint_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_joint_vel"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["terminal_guidance_distance"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["terminal_guidance_speed"] = torch.zeros(self.num_envs, device=self.device)
         if self.cfg.adaptive_sample:
             self.metrics["sampling_entropy"] = torch.zeros(self.num_envs, device=self.device)
             self.metrics["sampling_top1_prob_max"] = torch.zeros(self.num_envs, device=self.device)
@@ -168,7 +170,11 @@ class MotionCommand(CommandTerm):
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.global_time_steps]
+        body_lin_vel_w = self.motion.body_lin_vel_w[self.global_time_steps]
+        guidance = self.terminal_guidance_lin_vel_w
+        if guidance is not None:
+            body_lin_vel_w = body_lin_vel_w + guidance[:, None, :]
+        return body_lin_vel_w
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
@@ -192,11 +198,38 @@ class MotionCommand(CommandTerm):
 
     @property
     def anchor_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.anchor_lin_vel_w[self.global_time_steps]
+        anchor_lin_vel_w = self.motion.anchor_lin_vel_w[self.global_time_steps]
+        guidance = self.terminal_guidance_lin_vel_w
+        if guidance is not None:
+            anchor_lin_vel_w = anchor_lin_vel_w + guidance
+        return anchor_lin_vel_w
 
     @property
     def anchor_ang_vel_w(self) -> torch.Tensor:
         return self.motion.anchor_ang_vel_w[self.global_time_steps]
+
+    @property
+    def motion_terminal_anchor_pos_w(self) -> torch.Tensor:
+        last_steps = torch.clamp(self.motion.time_step_end_idx[self.motion_ids] - 1, min=0)
+        return self.motion.anchor_pos_w[last_steps] + self._env.scene.env_origins
+
+    @property
+    def terminal_guidance_lin_vel_w(self) -> torch.Tensor | None:
+        if not bool(self.cfg.terminal_guidance_velocity_enabled):
+            return None
+
+        delta_xy = self.motion_terminal_anchor_pos_w[:, :2] - self.robot_anchor_pos_w[:, :2]
+        distance = torch.linalg.norm(delta_xy, dim=-1, keepdim=True)
+        direction_xy = delta_xy / distance.clamp(min=1.0e-6)
+        speed = torch.clamp(
+            distance,
+            min=float(self.cfg.terminal_guidance_speed_range[0]),
+            max=float(self.cfg.terminal_guidance_speed_range[1]),
+        )
+        speed = torch.where(distance > float(self.cfg.terminal_guidance_stop_distance), speed, torch.zeros_like(speed))
+        guidance = torch.zeros(self.num_envs, 3, device=self.device)
+        guidance[:, :2] = direction_xy * speed
+        return guidance
 
     @property
     def global_time_steps(self) -> torch.Tensor:
@@ -802,6 +835,14 @@ class MotionCommand(CommandTerm):
         )
         self.metrics["error_joint_pos"] = torch.mean(torch.abs(self.joint_pos - self.robot_joint_pos), dim=-1)
         self.metrics["error_joint_vel"] = torch.mean(torch.abs(self.joint_vel - self.robot_joint_vel), dim=-1)
+        if self.cfg.terminal_guidance_velocity_enabled:
+            delta_xy = self.motion_terminal_anchor_pos_w[:, :2] - self.robot_anchor_pos_w[:, :2]
+            guidance = self.terminal_guidance_lin_vel_w
+            self.metrics["terminal_guidance_distance"] = torch.linalg.norm(delta_xy, dim=-1)
+            self.metrics["terminal_guidance_speed"] = torch.linalg.norm(guidance, dim=-1)
+        else:
+            self.metrics["terminal_guidance_distance"].zero_()
+            self.metrics["terminal_guidance_speed"].zero_()
 
     def _prepare_adaptive_sampling(self, env_ids: torch.Tensor) -> None:
         """Hook for subclasses to sync terrain/domain state before sampling."""
@@ -1060,7 +1101,12 @@ class MotionCommand(CommandTerm):
                     self.goal_anchor_lin_vel_visualizer = VisualizationMarkers(
                         self.cfg.goal_anchor_lin_vel_visualizer_cfg
                     )
+                    if self.cfg.terminal_guidance_velocity_enabled:
+                        self.terminal_guidance_lin_vel_visualizer = VisualizationMarkers(
+                            self.cfg.terminal_guidance_lin_vel_visualizer_cfg
+                        )
 
+            if self.cfg.debug_body_pose and not hasattr(self, "current_body_visualizers"):
                 self.current_body_visualizers = []
                 self.goal_body_visualizers = []
                 for name in self.cfg.body_names:
@@ -1098,14 +1144,17 @@ class MotionCommand(CommandTerm):
             if self.cfg.debug_anchor_speed:
                 self.current_anchor_lin_vel_visualizer.set_visibility(True)
                 self.goal_anchor_lin_vel_visualizer.set_visibility(True)
+                if hasattr(self, "terminal_guidance_lin_vel_visualizer"):
+                    self.terminal_guidance_lin_vel_visualizer.set_visibility(True)
             if hasattr(self, "current_smpl_visualizer"):
                 self.current_smpl_visualizer.set_visibility(True)
             if hasattr(self, "future_smpl_visualizer"):
                 self.future_smpl_visualizer.set_visibility(True)
 
-            for i in range(len(self.cfg.body_names)):
-                self.current_body_visualizers[i].set_visibility(False)
-                self.goal_body_visualizers[i].set_visibility(True)
+            if hasattr(self, "current_body_visualizers"):
+                for i in range(len(self.cfg.body_names)):
+                    self.current_body_visualizers[i].set_visibility(False)
+                    self.goal_body_visualizers[i].set_visibility(bool(self.cfg.debug_body_pose))
 
         else:
             if hasattr(self, "current_anchor_visualizer"):
@@ -1115,14 +1164,17 @@ class MotionCommand(CommandTerm):
                 if self.cfg.debug_anchor_speed:
                     self.current_anchor_lin_vel_visualizer.set_visibility(False)
                     self.goal_anchor_lin_vel_visualizer.set_visibility(False)
+                    if hasattr(self, "terminal_guidance_lin_vel_visualizer"):
+                        self.terminal_guidance_lin_vel_visualizer.set_visibility(False)
                 if hasattr(self, "current_smpl_visualizer"):
                     self.current_smpl_visualizer.set_visibility(False)
                 if hasattr(self, "future_smpl_visualizer"):
                     self.future_smpl_visualizer.set_visibility(False)
 
-                for i in range(len(self.cfg.body_names)):
-                    self.current_body_visualizers[i].set_visibility(False)
-                    self.goal_body_visualizers[i].set_visibility(False)
+                if hasattr(self, "current_body_visualizers"):
+                    for i in range(len(self.cfg.body_names)):
+                        self.current_body_visualizers[i].set_visibility(False)
+                        self.goal_body_visualizers[i].set_visibility(False)
 
     def _resolve_velocity_to_arrow(
         self,
@@ -1219,10 +1271,25 @@ class MotionCommand(CommandTerm):
                 goal_lin_vel_quat,
                 goal_lin_vel_scale,
             )
+            if hasattr(self, "terminal_guidance_lin_vel_visualizer"):
+                guidance = self.terminal_guidance_lin_vel_w
+                guidance_scale, guidance_quat = self._resolve_velocity_to_arrow(
+                    guidance,
+                    self.terminal_guidance_lin_vel_visualizer.cfg.markers["arrow"].scale,
+                    self.cfg.debug_anchor_speed_scale,
+                )
+                guidance_pos = self.robot_anchor_pos_w.clone()
+                guidance_pos[:, 2] += float(self.cfg.terminal_guidance_debug_z_offset)
+                self.terminal_guidance_lin_vel_visualizer.visualize(
+                    guidance_pos,
+                    guidance_quat,
+                    guidance_scale,
+                )
 
-        for i in range(len(self.cfg.body_names)):
-            self.current_body_visualizers[i].visualize(self.robot_body_pos_w[:, i], self.robot_body_quat_w[:, i])
-            self.goal_body_visualizers[i].visualize(self.body_pos_relative_w[:, i], self.body_quat_relative_w[:, i])
+        if self.cfg.debug_body_pose and hasattr(self, "current_body_visualizers"):
+            for i in range(len(self.cfg.body_names)):
+                self.current_body_visualizers[i].visualize(self.robot_body_pos_w[:, i], self.robot_body_quat_w[:, i])
+                self.goal_body_visualizers[i].visualize(self.body_pos_relative_w[:, i], self.body_quat_relative_w[:, i])
 
     # endregion debug visualization
 
@@ -1250,6 +1317,10 @@ class MotionCommandCfg(CommandTermCfg):
     pose_range_init_mode: str = "range"
     pose_range_lying_height_range: tuple[float, float] = (0.25, 0.45)
     velocity_range: dict[str, tuple[float, float]] = {}
+    terminal_guidance_velocity_enabled: bool = False
+    terminal_guidance_speed_range: tuple[float, float] = (0.5, 1.5)
+    terminal_guidance_stop_distance: float = 0.05
+    terminal_guidance_debug_z_offset: float = 0.4
 
     # future_step_num = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
     future_step_num = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -1293,14 +1364,19 @@ class MotionCommandCfg(CommandTermCfg):
     goal_anchor_lin_vel_visualizer_cfg: VisualizationMarkersCfg = GREEN_ARROW_X_MARKER_CFG.replace(
         prim_path="/Visuals/Command/goal/anchor_lin_vel"
     )
+    terminal_guidance_lin_vel_visualizer_cfg: VisualizationMarkersCfg = GREEN_ARROW_X_MARKER_CFG.replace(
+        prim_path="/Visuals/Command/goal/terminal_guidance_lin_vel"
+    )
     current_anchor_lin_vel_visualizer_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
     goal_anchor_lin_vel_visualizer_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+    terminal_guidance_lin_vel_visualizer_cfg.markers["arrow"].scale = (0.5, 0.2, 0.2)
 
     # Debug printing for anchor velocity in _debug_vis_callback.
+    debug_body_pose: bool = False
     debug_anchor_speed: bool = True
     debug_anchor_speed_scale: float = 1.0
-    debug_smpl_global_position: bool = True
-    debug_smpl_future_global_position: bool = True
+    debug_smpl_global_position: bool = False
+    debug_smpl_future_global_position: bool = False
 
     # 为了分布式训练
     distributed: bool = False

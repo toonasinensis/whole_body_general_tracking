@@ -63,7 +63,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": mixed_terrain_env_cfg.G1MixedFlatMeshEnvCfg,
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1MixedFlatMeshRunnerCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_paired_terrain_cfg:G1MixedTerrainHeightScanAMPRunnerCfg",
     },
 )
 
