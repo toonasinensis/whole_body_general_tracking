@@ -4,8 +4,11 @@ import copy
 import inspect
 from collections.abc import Sequence
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from isaaclab.managers import CommandTermCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
@@ -97,9 +100,9 @@ def profile_reset_cfgs_for_domains(domains: Sequence[object], profiles: dict[str
         if task_profile in out:
             continue
         profile = profiles[task_profile]
-        reset_cfg = getattr(profile, "reset_cfg", None)
+        reset_cfg = _reset_events_cfg(getattr(profile, "events_cfg", None))
         if reset_cfg is not None:
-            out[task_profile] = copy.deepcopy(reset_cfg)
+            out[task_profile] = reset_cfg
     return out
 
 
@@ -116,6 +119,12 @@ def collect_domain_profile_routes(domains: Sequence[object], profiles: dict[str,
 def apply_domain_profiles(env_cfg, domains: Sequence[object], profiles: dict[str, object]) -> None:
     _validate_profiles(domains, profiles)
     _clear_profile_commands(env_cfg.commands, profiles)
+    if not hasattr(env_cfg, "events"):
+        env_cfg.events = SimpleNamespace()
+    _clear_profile_events(env_cfg.events, profiles)
+    if not hasattr(env_cfg, "curriculum"):
+        env_cfg.curriculum = SimpleNamespace()
+    _clear_profile_curriculums(env_cfg.curriculum, profiles)
     _clear_terms(env_cfg.rewards, RewTerm)
     _clear_terms(env_cfg.terminations, DoneTerm)
     for task_profile, profile in profiles.items():
@@ -123,6 +132,13 @@ def apply_domain_profiles(env_cfg, domains: Sequence[object], profiles: dict[str
         if not domain_names:
             continue
         _apply_command_cfg(env_cfg.commands, getattr(profile, "commands_cfg", None))
+        _apply_event_cfg(env_cfg.events, task_profile, getattr(profile, "events_cfg", None), domain_names)
+        _apply_curriculum_cfg(
+            env_cfg.curriculum,
+            task_profile,
+            getattr(profile, "curriculum_cfg", None),
+            domain_names,
+        )
         _apply_reward_cfg(env_cfg.rewards, task_profile, getattr(profile, "rewards_cfg", None), domain_names)
         _apply_termination_cfg(
             env_cfg.terminations,
@@ -187,9 +203,40 @@ def _clear_profile_commands(target_cfg, profiles: dict[str, object]) -> None:
         setattr(target_cfg, name, None)
 
 
+def _clear_profile_events(target_cfg, profiles: dict[str, object]) -> None:
+    event_names = set()
+    for profile_name, profile in profiles.items():
+        for name, term in _iter_cfg_items(getattr(profile, "events_cfg", None), EventTerm):
+            if _event_is_registered_to_manager(term):
+                event_names.add(f"{profile_name}_{name}")
+    for name in event_names:
+        setattr(target_cfg, name, None)
+
+
+def _clear_profile_curriculums(target_cfg, profiles: dict[str, object]) -> None:
+    curriculum_names = set()
+    for profile_name, profile in profiles.items():
+        for name, _ in _iter_cfg_items(getattr(profile, "curriculum_cfg", None), CurrTerm):
+            curriculum_names.add(f"{profile_name}_{name}")
+    for name in curriculum_names:
+        setattr(target_cfg, name, None)
+
+
 def _apply_command_cfg(target_cfg, commands_cfg) -> None:
     for name, value in _iter_cfg_items(commands_cfg, CommandTermCfg):
         setattr(target_cfg, name, copy.deepcopy(value))
+
+
+def _apply_event_cfg(target_cfg, profile_name: str, events_cfg, domain_names: Sequence[str]) -> None:
+    for name, term in _iter_cfg_items(events_cfg, EventTerm):
+        if not _event_is_registered_to_manager(term):
+            continue
+        setattr(target_cfg, f"{profile_name}_{name}", _domain_masked_event_term(term, domain_names))
+
+
+def _apply_curriculum_cfg(target_cfg, profile_name: str, curriculum_cfg, domain_names: Sequence[str]) -> None:
+    for name, term in _iter_cfg_items(curriculum_cfg, CurrTerm):
+        setattr(target_cfg, f"{profile_name}_{name}", _domain_masked_curriculum_term(term, domain_names))
 
 
 def _apply_reward_cfg(target_cfg, profile_name: str, rewards_cfg, domain_names: Sequence[str]) -> None:
@@ -206,6 +253,21 @@ def _term_func_is_class(func) -> bool:
     return inspect.isclass(func)
 
 
+def _event_is_registered_to_manager(term: EventTerm) -> bool:
+    return getattr(term, "mode", None) != "reset"
+
+
+def _reset_events_cfg(events_cfg):
+    reset_terms = {
+        name: copy.deepcopy(term)
+        for name, term in _iter_cfg_items(events_cfg, EventTerm)
+        if getattr(term, "mode", None) == "reset"
+    }
+    if not reset_terms:
+        return None
+    return SimpleNamespace(**reset_terms)
+
+
 def _domain_masked_reward_term(term: RewTerm, domain_names: Sequence[str]) -> RewTerm:
     out = copy.deepcopy(term)
     if _term_func_is_class(out.func):
@@ -215,6 +277,34 @@ def _domain_masked_reward_term(term: RewTerm, domain_names: Sequence[str]) -> Re
     source_func = out.func
     source_params = out.params
     out.func = mdp.domain_masked_reward
+    out.params = {
+        "source_func": source_func,
+        "source_params": source_params,
+        "domain_command_name": "motion",
+        "enabled_domain_names": tuple(domain_names),
+    }
+    return out
+
+
+def _domain_masked_event_term(term: EventTerm, domain_names: Sequence[str]) -> EventTerm:
+    out = copy.deepcopy(term)
+    source_func = out.func
+    source_params = out.params
+    out.func = mdp.domain_masked_event
+    out.params = {
+        "source_func": source_func,
+        "source_params": source_params,
+        "domain_command_name": "motion",
+        "enabled_domain_names": tuple(domain_names),
+    }
+    return out
+
+
+def _domain_masked_curriculum_term(term: CurrTerm, domain_names: Sequence[str]) -> CurrTerm:
+    out = copy.deepcopy(term)
+    source_func = out.func
+    source_params = out.params
+    out.func = mdp.domain_masked_curriculum
     out.params = {
         "source_func": source_func,
         "source_params": source_params,

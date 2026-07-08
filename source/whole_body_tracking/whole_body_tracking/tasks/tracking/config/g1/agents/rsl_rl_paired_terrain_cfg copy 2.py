@@ -10,7 +10,8 @@ from .rsl_rl_ppo_cfg import CriticCfg, MyPpoAlgorithmCfg
 _WBT_ROOT = Path(__file__).resolve().parents[8]
 
 
-G1_AMP_MOTION_DIR = str(_WBT_ROOT / "data/mesh_flatwbc_model151000_z10cm/tracking_npz_data_amp_walk")
+G1_AMP_MOTION_DIR = str(_WBT_ROOT / "data/mesh_flatwbc_model151000_z10cm/tracking_npz_data_amp")
+G1_AMP_MOTION_DIR = str(_WBT_ROOT / "/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/data/g1_amp/WalkandRun_isaaclab")
 
 
 @configclass
@@ -99,7 +100,7 @@ class PairedTerrainModalityFusionActorCfg:
         "obs_normalization": True,
         "token_specs": [
             {"name": "prop", "group": "prop"},
-            {"name": "terrain", "group": "terrain"},
+            # {"name": "terrain", "group": "terrain"},
             # {"name": "wbc", "group": "wbc_cmd"},
             {"name": "vel", "group": "velcommand"},
         ],
@@ -177,7 +178,7 @@ class G1MixedTerrainHeightScanAMPRunnerCfg(G1PairedTerrainHeightScanRunnerCfg):
         plugins=[
             {
                 "class_name": "AMPPlugin",
-                "amp_reward_coef": 0.5,
+                "amp_reward_coef": 0.2,
                 "amp_motion_files": G1_AMP_MOTION_DIR,
                 "amp_task_reward_lerp": 0.9,
                 "amp_discr_hidden_dims": [1024, 512, 512],
@@ -192,7 +193,7 @@ class G1MixedTerrainHeightScanAMPRunnerCfg(G1PairedTerrainHeightScanRunnerCfg):
 
 @configclass
 class G1MixedTerrainHeightScanAMPModalityFusionRunnerCfg(G1MixedTerrainHeightScanAMPRunnerCfg):
-    experiment_name = "g1_new_walk"
+    experiment_name = "amp_walk"
     run_name = "g1_new_walk"
 
     actor = PairedTerrainModalityFusionActorCfg()

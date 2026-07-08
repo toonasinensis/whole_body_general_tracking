@@ -32,7 +32,7 @@ class G1MixedWbcRewardsCfg:
     )
     motion_global_anchor_pos_z = RewTerm(
         func=mdp.motion_global_anchor_position_z_error_exp,
-        weight=1.0,
+        weight=2.0,
         params={"command_name": "motion", "std": 0.3},
     )
     motion_global_anchor_ori = RewTerm(
@@ -68,7 +68,7 @@ class G1MixedWbcRewardsCfg:
     )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.05,
+        weight=-0.1,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
@@ -88,14 +88,30 @@ class G1MixedWbcRewardsCfg:
             "force_threshold": 1.0,
         },
     )
+    feet_flat = RewTerm(
+        func=mdp.feet_flat,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_ankle_roll_link"),
+            "force_threshold": 1.0,
+        },
+    )
 
 
 @configclass
 class G1MixedWbcTerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     anchor_pos = DoneTerm(
-        func=mdp.bad_anchor_pos_z_only,
-        params={"command_name": "motion", "threshold": 0.250},
+        func=mdp.bad_anchor_pos_z_only,  # 防止跪着
+        params={
+            "command_name": "motion",
+            "threshold": 0.250,
+            "curriculum_metric_threshold": 0.10,
+            "min_threshold": 0.150,
+            "threshold_update_rate": 0.001,
+            "ema_alpha": 0.99,
+            "metric_name": "wbc_tracking_anchor_pos",
+        },
     )
     anchor_ori = DoneTerm(
         func=mdp.bad_anchor_ori,
@@ -134,7 +150,6 @@ class G1MixedWbcTerminationsCfg:
 @configclass
 class G1MixedWbcTrackingProfileCfg:
     commands_cfg = EmptyProfileCommandsCfg()
-    reset_cfg = EmptyProfileResetCfg()
     rewards_cfg = G1MixedWbcRewardsCfg()
     terminations_cfg = G1MixedWbcTerminationsCfg()
     obs_route_cfg = ProfileObsRouteCfg(velcommand_source="motion", aux_mask_enabled=True, amp_mask_enabled=True)
@@ -144,14 +159,14 @@ class G1MixedWbcTrackingProfileCfg:
 class G1FlatVelocityCommandsCfg:
     base_velocity = velocity_mdp.UniformVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
+        resampling_time_range=(2.0, 10.0),
         rel_standing_envs=0.02,
         rel_heading_envs=1.0,
-        heading_command=True,
+        heading_command=False,
         heading_control_stiffness=0.5,
         debug_vis=True,
         ranges=velocity_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.50, 1.0),
+            lin_vel_x=(-0.50, 1.50),
             lin_vel_y=(-0.5, 0.5),
             ang_vel_z=(-1.0, 1.0),
             heading=(-math.pi, math.pi),
@@ -160,7 +175,13 @@ class G1FlatVelocityCommandsCfg:
 
 
 @configclass
-class G1MixedVelocityResetCfg:
+class G1MixedVelocityEventsCfg:
+    push_robot = EventTerm(
+        func=velocity_mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(10.0, 15.0),
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+    )
     reset_base = EventTerm(
         func=velocity_mdp.reset_root_state_uniform,
         mode="reset",
@@ -200,6 +221,11 @@ class G1MixedVelocityRewardsCfg:
         func=mdp.body_orientation_l2,
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=["torso_link"])},
+    )
+    pelvis_orientation_l2 = RewTerm(
+        func=mdp.body_orientation_l2,
+        weight=-1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["pelvis"])},
     )
     pose = RewTerm(
         func=mdp.variable_posture,
@@ -272,6 +298,19 @@ class G1MixedVelocityRewardsCfg:
         weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"])},
     )
+    undesired_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-0.01,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=[
+                    r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$).+$"
+                ],
+            ),
+            "threshold": 1.0,
+        },
+    )
 
 
 @configclass
@@ -281,10 +320,14 @@ class G1MixedVelocityTerminationsCfg:
         func=velocity_mdp.illegal_contact,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="torso_link"), "threshold": 1.0},
     )
-    low_root_height = DoneTerm(
-        func=mdp.root_height_below_desired,
-        params={"asset_cfg": SceneEntityCfg("robot"), "margin": 0.3},
-    )
+    # fell_over = DoneTerm(
+    #   func=mdp.bad_orientation,
+    #   params={"limit_angle": math.radians(70.0)},
+    # )
+    # low_root_height = DoneTerm(
+    #     func=mdp.root_height_below_desired,
+    #     params={"asset_cfg": SceneEntityCfg("robot"), "margin": 0.3},
+    # )
 
 
 @configclass
@@ -294,38 +337,48 @@ class G1MixedVelocityObsRouteCfg(ProfileObsRouteCfg):
     amp_mask_enabled: bool = True
 
 
+from .velocity_amp_env_cfg import (
+    G1VelocityFlatAMPCommandsCfg,
+    G1VelocityFlatAMPCurriculumCfg,
+    G1VelocityFlatAMPEventCfg,
+    G1VelocityFlatAMPRewardsCfg,
+    G1VelocityFlatAMPTerminationsCfg,
+)
+
+
 @configclass
 class G1MixedVelocityFlatProfileCfg:
-    commands_cfg = G1FlatVelocityCommandsCfg()
-    reset_cfg = G1MixedVelocityResetCfg()
-    rewards_cfg = G1MixedVelocityRewardsCfg()
-    terminations_cfg = G1MixedVelocityTerminationsCfg()
+    commands_cfg = G1VelocityFlatAMPCommandsCfg()
+    events_cfg = G1VelocityFlatAMPEventCfg()
+    # curriculum_cfg = G1VelocityFlatAMPCurriculumCfg()
+    rewards_cfg = G1VelocityFlatAMPRewardsCfg()
+    terminations_cfg = G1VelocityFlatAMPTerminationsCfg()
     obs_route_cfg = G1MixedVelocityObsRouteCfg()
 
 
-@configclass
-class G1ParkourVelocityCommandsCfg:
-    base_velocity = velocity_mdp.UniformVelocityCommandCfg(
-        asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.02,
-        rel_heading_envs=1.0,
-        heading_command=True,
-        heading_control_stiffness=0.5,
-        debug_vis=True,
-        ranges=velocity_mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.50, 2.0),
-            lin_vel_y=(-0.0, 0.0),
-            ang_vel_z=(-0.0, 0.0),
-            heading=(-math.pi, math.pi),
-        ),
-    )
+# @configclass
+# class G1ParkourVelocityCommandsCfg:
+#     base_velocity = velocity_mdp.UniformVelocityCommandCfg(
+#         asset_name="robot",
+#         resampling_time_range=(10.0, 10.0),
+#         rel_standing_envs=0.02,
+#         rel_heading_envs=1.0,
+#         heading_command=True,
+#         heading_control_stiffness=0.5,
+#         debug_vis=True,
+#         ranges=velocity_mdp.UniformVelocityCommandCfg.Ranges(
+#             lin_vel_x=(0.50, 2.0),
+#             lin_vel_y=(-0.0, 0.0),
+#             ang_vel_z=(-0.0, 0.0),
+#             heading=(-math.pi, math.pi),
+#         ),
+#     )
 
 
 @configclass
 class G1MixedVelocityTerrainProfileCfg:
-    commands_cfg = G1ParkourVelocityCommandsCfg()
-    reset_cfg = G1MixedVelocityResetCfg()
+    commands_cfg = G1FlatVelocityCommandsCfg()
+    events_cfg = G1MixedVelocityEventsCfg()
     rewards_cfg = G1MixedVelocityRewardsCfg()
     terminations_cfg = G1MixedVelocityTerminationsCfg()
     obs_route_cfg = G1MixedVelocityObsRouteCfg()
@@ -335,5 +388,5 @@ def build_default_mixed_profiles() -> dict[str, object]:
     return {
         "wbc_tracking": G1MixedWbcTrackingProfileCfg(),
         "velocity_flat": G1MixedVelocityFlatProfileCfg(),
-        "velocity_terrain": G1MixedVelocityTerrainProfileCfg(),
+        # "velocity_terrain": G1MixedVelocityTerrainProfileCfg(), #TODO: NOT USE!!!!!!!!!
     }

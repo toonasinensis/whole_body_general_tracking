@@ -19,6 +19,8 @@ def test_heading_walk_amp_modal_task_is_registered() -> None:
     assert 'id="HeadingWalkAMP-Modal-G1"' in source
     assert "velocity_amp_env_cfg.G1VelocityFlatAMPModalEnvCfg" in source
     assert "G1VelocityFlatAMPModalRunnerCfg" in source
+    assert 'id="HeadingWalkAMP-ModalTransformer-G1"' in source
+    assert "G1VelocityFlatAMPModalityFusionRunnerCfg" in source
 
 
 def test_heading_walk_amp_modal_env_uses_local_flat_velocity_mdp_plus_amp() -> None:
@@ -88,7 +90,13 @@ def test_heading_walk_amp_modal_env_cfg_instantiates_local_project_g1_velocity_a
     assert cfg.scene.terrain.terrain_generator is None
     assert cfg.scene.height_scanner is None
     assert cfg.curriculum.terrain_levels is None
-    assert cfg.commands.base_velocity.ranges.lin_vel_x == (0.0, 1.0)
+    assert cfg.curriculum.command_vel is not None
+    assert cfg.curriculum.command_vel.params["velocity_stages"][1]["lin_vel_x"] == (-1.0, 2.0)
+    assert cfg.curriculum.command_vel.params["metric_targets"] == {"error_vel_xy": 0.35, "error_vel_yaw": 0.5}
+    assert cfg.curriculum.command_vel.params["ema_alpha"] == 0.999
+    assert cfg.curriculum.command_vel.params["stage_tolerance"] == 1.0e-3
+    assert cfg.curriculum.command_vel.params["min_update_calls"] == 200
+    assert cfg.commands.base_velocity.ranges.lin_vel_x == (-0.5, 1.0)
     assert cfg.commands.base_velocity.ranges.lin_vel_y == (-0.5, 0.5)
     assert cfg.rewards.track_ang_vel_z_exp.weight == 1.0
     assert cfg.rewards.track_root_height.weight == 1.0

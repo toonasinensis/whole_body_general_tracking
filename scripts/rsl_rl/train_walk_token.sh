@@ -11,16 +11,15 @@ export PYTHONPATH="${WBT_ROOT}/../rsl_rl${PYTHONPATH:+:${PYTHONPATH}}"
 
 PYTHON_BIN="${PYTHON_BIN:-${WBT_ROOT}/scripts/omniretarget/run_with_isaaclab_python.sh}"
 
-TASK="${TASK:-HeadingWalkAMP-MLP-G1}"
+TASK="${TASK:-HeadingWalkAMP-ModalTransformer-G1}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 NUM_ENVS="${NUM_ENVS:-4000}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29330}"
 REGISTRY_NAME="${REGISTRY_NAME:-test1}"
-RUN_NAME="${RUN_NAME:-heading_walk_amp_mlp}"
+RUN_NAME="${RUN_NAME:-0.5amp}"
 HEADLESS="${HEADLESS:-1}"
-RESUME_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/MLP/2026-07-07_21-52-17_heading_walk_amp_mlp/model_1600.pt"
 
 COMMON_ARGS=(
   scripts/rsl_rl/train.py
@@ -28,9 +27,7 @@ COMMON_ARGS=(
   --task="${TASK}"
   --num_envs="${NUM_ENVS}"
   --run_name="${RUN_NAME}"
-#   --resume=true \
-#   --resume_path="${RESUME_PATH}" \
-  )
+)
 
 if [[ -n "${MAX_ITERATIONS}" ]]; then
   COMMON_ARGS+=(--max_iterations "${MAX_ITERATIONS}")

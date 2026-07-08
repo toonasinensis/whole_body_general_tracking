@@ -61,6 +61,12 @@ parser.add_argument(
     help="Ground-only terrain cells inserted between mixed domains.",
 )
 parser.add_argument(
+    "--terrain_border_width",
+    type=float,
+    default=None,
+    help="Flat border width around the whole mixed terrain grid.",
+)
+parser.add_argument(
     "--encoder_mode",
     type=str,
     default=None,
@@ -188,6 +194,8 @@ if args_cli.mesh_env_ratio is not None:
     os.environ["WBT_MESH_ENV_RATIO"] = str(args_cli.mesh_env_ratio)
 if args_cli.domain_separator_cell_count is not None:
     os.environ["WBT_DOMAIN_SEPARATOR_CELL_COUNT"] = str(args_cli.domain_separator_cell_count)
+if args_cli.terrain_border_width is not None:
+    os.environ["WBT_TERRAIN_BORDER_WIDTH"] = str(args_cli.terrain_border_width)
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = False  # True
@@ -366,9 +374,9 @@ def _collect_onnx_metadata(vec_env, base_env, policy, encoder_mode: str, fsq_sam
         "joint_damping": joint_damping,
         "action_scale": _to_serializable(scale),
         "action_offset": _to_serializable(offset),
-        "motion_body_names": list(base_env.cfg.commands.motion.body_names),
-        "anchor_body_name": base_env.cfg.commands.motion.anchor_body_name,
-        "future_step_num": list(base_env.cfg.commands.motion.future_step_num),
+        # "motion_body_names": list(base_env.cfg.commands.motion.body_names),
+        # "anchor_body_name": base_env.cfg.commands.motion.anchor_body_name,
+        # "future_step_num": list(base_env.cfg.commands.motion.future_step_num),
         "decimation": int(base_env.cfg.decimation),
         "sim_dt": float(base_env.cfg.sim.dt),
     }
@@ -488,19 +496,25 @@ def main(  # noqa: C901
                 raise ValueError("--domain_separator_cell_count is only supported by mixed terrain env configs.")
             print(f"[INFO]: Using mixed domain separator cells from CLI: {args_cli.domain_separator_cell_count}")
             env_cfg.domain_separator_cell_count = args_cli.domain_separator_cell_count
+        if args_cli.terrain_border_width is not None:
+            if not hasattr(env_cfg, "terrain_border_width"):
+                raise ValueError("--terrain_border_width is only supported by mixed terrain env configs.")
+            print(f"[INFO]: Using mixed terrain border width from CLI: {args_cli.terrain_border_width}")
+            env_cfg.terrain_border_width = args_cli.terrain_border_width
 
         if hasattr(env_cfg, "configure_domains"):
             env_cfg.configure_domains()
 
         if args_cli.motion_reset_z_offset is not None:
             if motion_cfg is None:
-                raise ValueError("--motion_reset_z_offset is only supported by env configs with a motion command.")
-            z_offset = float(args_cli.motion_reset_z_offset)
-            print(f"[INFO]: Using motion reset z offset from CLI: {z_offset}")
-            motion_cfg.pose_range = dict(getattr(motion_cfg, "pose_range", {}))
-            motion_cfg.pose_range["z"] = (z_offset, z_offset)
-            motion_cfg.pose_range_env_ratio = 1.0
-            motion_cfg.pose_range_init_mode = "range"
+                print("[WARN]: Ignoring --motion_reset_z_offset because this env config has no motion command.")
+            else:
+                z_offset = float(args_cli.motion_reset_z_offset)
+                print(f"[INFO]: Using motion reset z offset from CLI: {z_offset}")
+                motion_cfg.pose_range = dict(getattr(motion_cfg, "pose_range", {}))
+                motion_cfg.pose_range["z"] = (z_offset, z_offset)
+                motion_cfg.pose_range_env_ratio = 1.0
+                motion_cfg.pose_range_init_mode = "range"
 
         if args_cli.smpl_file_path is not None:
             if motion_cfg is None:
@@ -538,7 +552,16 @@ def main(  # noqa: C901
     # load previously trained model
     runner_device = getattr(agent_cfg, "device", None) or getattr(args_cli, "device", None) or env.unwrapped.device
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=runner_device)
-    ppo_runner.load(resume_path)
+    ppo_runner.load(
+        resume_path,
+        load_cfg={
+            "actor": True,
+            "critic": False,
+            "optimizer": False,
+            "iteration": False,
+        },
+        strict=False,
+    )
 
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)

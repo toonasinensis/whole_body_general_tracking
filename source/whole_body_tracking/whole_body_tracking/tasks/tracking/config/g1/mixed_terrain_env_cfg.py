@@ -101,6 +101,7 @@ class G1MixedFlatMeshEnvCfg(G1PairedTerrainEnvCfg):
     velocity_terrain_profile: str = "velocity_runway_steps"
     pair_limit: int | None = None
     terrain_size: tuple[float, float] = (24.0, 8.0)
+    terrain_border_width: float = 25.0
     terrain_ground_thickness: float = 0.01
     terrain_ground_z: float = 0.0
     domain_separator_cell_count: int = 32
@@ -152,6 +153,9 @@ class G1MixedFlatMeshEnvCfg(G1PairedTerrainEnvCfg):
         separator_override = os.getenv("WBT_DOMAIN_SEPARATOR_CELL_COUNT")
         if separator_override:
             self.domain_separator_cell_count = int(separator_override)
+        # terrain_border_override = os.getenv("WBT_TERRAIN_BORDER_WIDTH")
+        # if terrain_border_override:
+        #     self.terrain_border_width = float(terrain_border_override)
 
     def _normalized_domain_ratios(self) -> tuple[float, float, float, float]:
         ratios = (
@@ -232,6 +236,7 @@ class G1MixedFlatMeshEnvCfg(G1PairedTerrainEnvCfg):
         terrain_generator, _ = build_mixed_terrain_cfg(
             domains,
             terrain_size=self.terrain_size,
+            border_width=self.terrain_border_width,
             ground_thickness=self.terrain_ground_thickness,
             ground_z=self.terrain_ground_z,
             domain_separator_cell_count=self.domain_separator_cell_count,

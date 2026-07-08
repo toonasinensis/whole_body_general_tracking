@@ -68,6 +68,12 @@ parser.add_argument(
     default=None,
     help="Ground-only terrain cells inserted between mixed domains.",
 )
+parser.add_argument(
+    "--terrain_border_width",
+    type=float,
+    default=None,
+    help="Flat border width around the whole mixed terrain grid.",
+)
 
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
@@ -98,6 +104,8 @@ if args_cli.mesh_env_ratio is not None:
     os.environ["WBT_MESH_ENV_RATIO"] = str(args_cli.mesh_env_ratio)
 if args_cli.domain_separator_cell_count is not None:
     os.environ["WBT_DOMAIN_SEPARATOR_CELL_COUNT"] = str(args_cli.domain_separator_cell_count)
+if args_cli.terrain_border_width is not None:
+    os.environ["WBT_TERRAIN_BORDER_WIDTH"] = str(args_cli.terrain_border_width)
 
 # For torchrun multi-process launch, bind each process to its own GPU early
 # so AppLauncher and downstream tensors share the same device.
@@ -233,6 +241,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             raise ValueError("--domain_separator_cell_count is only supported by mixed terrain env configs.")
         print(f"[INFO]: Using mixed domain separator cells from CLI: {args_cli.domain_separator_cell_count}")
         env_cfg.domain_separator_cell_count = args_cli.domain_separator_cell_count
+    if args_cli.terrain_border_width is not None:
+        if not hasattr(env_cfg, "terrain_border_width"):
+            raise ValueError("--terrain_border_width is only supported by mixed terrain env configs.")
+        print(f"[INFO]: Using mixed terrain border width from CLI: {args_cli.terrain_border_width}")
+        env_cfg.terrain_border_width = args_cli.terrain_border_width
     if hasattr(env_cfg, "configure_domains"):
         env_cfg.configure_domains()
     if args_cli.distributed and motion_cfg is not None:

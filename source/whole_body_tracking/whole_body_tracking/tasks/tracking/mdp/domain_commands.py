@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import torch
 from collections.abc import Sequence
@@ -484,3 +485,72 @@ def domain_masked_termination(
     if not enabled_domain_names:
         return terminated
     return terminated & domain_name_mask(env, domain_command_name, enabled_domain_names)
+
+
+def domain_masked_event(
+    env,
+    env_ids: torch.Tensor | None,
+    source_func,
+    source_params: dict | None = None,
+    domain_command_name: str = "motion",
+    enabled_domain_names: Sequence[str] = (),
+) -> None:
+    """Run an event only for envs that belong to selected mixed-domain names."""
+    source_params = _resolve_masked_source_params(env, source_params)
+    if not enabled_domain_names:
+        _call_domain_masked_event_source(env, env_ids, source_func, source_params)
+        return
+
+    filtered_env_ids = _filtered_domain_env_ids(env, env_ids, domain_command_name, enabled_domain_names)
+    if filtered_env_ids.numel() == 0:
+        return
+    _call_domain_masked_event_source(env, filtered_env_ids, source_func, source_params)
+
+
+def domain_masked_curriculum(
+    env,
+    env_ids: torch.Tensor | None,
+    source_func,
+    source_params: dict | None = None,
+    domain_command_name: str = "motion",
+    enabled_domain_names: Sequence[str] = (),
+):
+    """Run a curriculum term only on reset envs that belong to selected mixed-domain names."""
+    source_params = _resolve_masked_source_params(env, source_params)
+    if not enabled_domain_names:
+        return source_func(env, env_ids, **source_params)
+    filtered_env_ids = _filtered_domain_env_ids(env, env_ids, domain_command_name, enabled_domain_names)
+    if filtered_env_ids.numel() == 0:
+        return {}
+    return source_func(env, filtered_env_ids, **source_params)
+
+
+def _filtered_domain_env_ids(
+    env,
+    env_ids: torch.Tensor | None,
+    domain_command_name: str,
+    enabled_domain_names: Sequence[str],
+) -> torch.Tensor:
+    mask = domain_name_mask(env, domain_command_name, enabled_domain_names)
+    if env_ids is None:
+        return torch.nonzero(mask, as_tuple=False).squeeze(-1)
+    if isinstance(env_ids, slice):
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)[env_ids]
+    else:
+        env_ids = env_ids.to(device=env.device, dtype=torch.long)
+    return env_ids[mask[env_ids]]
+
+
+def _call_domain_masked_event_source(env, env_ids: torch.Tensor | None, source_func, source_params: dict) -> None:
+    call_params = {key: value for key, value in source_params.items() if not str(key).startswith("_domain_masked_")}
+    if inspect.isclass(source_func):
+        cache_key = "_domain_masked_event_instance"
+        cache = source_params.setdefault(cache_key, {})
+        scene_id = id(env.scene)
+        instance = cache.get(scene_id)
+        if instance is None:
+            term_cfg = EventTermCfg(func=source_func, params=call_params, mode="startup")
+            instance = source_func(cfg=term_cfg, env=env)
+            cache[scene_id] = instance
+        source_func = instance
+    source_func(env, env_ids, **call_params)

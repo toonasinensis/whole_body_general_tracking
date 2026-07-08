@@ -440,6 +440,7 @@ def _load_mixed_domain_profiles(monkeypatch):
     class EventTermCfg:
         func: object
         mode: str = "reset"
+        interval_range_s: tuple[float, float] | None = None
         params: dict = field(default_factory=dict)
 
     @dataclass
@@ -496,6 +497,7 @@ def _load_mixed_domain_profiles(monkeypatch):
         "is_terminated",
         "reset_root_state_uniform",
         "reset_joints_by_scale",
+        "push_by_setting_velocity",
         "track_lin_vel_xy_yaw_frame_exp",
         "track_ang_vel_z_world_exp",
         "lin_vel_z_l2",
@@ -523,8 +525,10 @@ def _load_mixed_domain_profiles(monkeypatch):
         "joint_pos_limits",
         "undesired_contacts",
         "feet_stumble",
+        "feet_flat",
         "time_out",
         "bad_anchor_pos_z_only",
+        "bad_anchor_pos_xyz",
         "bad_anchor_ori",
         "bad_motion_body_pos_z_only",
         "parkour_reach_timeout",
@@ -533,6 +537,7 @@ def _load_mixed_domain_profiles(monkeypatch):
         "body_orientation_l2",
         "domain_masked_reward",
         "domain_masked_termination",
+        "domain_masked_event",
     ):
         setattr(mdp, name, fake_func)
     mdp.variable_posture = variable_posture
@@ -619,6 +624,8 @@ def test_profile_applier_registers_prefixed_masked_terms(monkeypatch) -> None:
     registry = profiles.build_default_mixed_profiles()
     profiles.apply_domain_profiles(env_cfg, domains, registry)
 
+    assert not hasattr(registry["wbc_tracking"], "reset_cfg")
+    assert not hasattr(registry["velocity_flat"], "reset_cfg")
     assert env_cfg.rewards.old is None
     assert env_cfg.terminations.old is None
     assert env_cfg.commands.base_velocity is not registry["velocity_flat"].commands_cfg.base_velocity
@@ -631,6 +638,19 @@ def test_profile_applier_registers_prefixed_masked_terms(monkeypatch) -> None:
     assert env_cfg.rewards.velocity_flat_track_lin_vel_xy_exp.params["enabled_domain_names"] == ("flat_velocity",)
     assert env_cfg.rewards.velocity_flat_pose.params["enabled_domain_names"] == ("flat_velocity",)
     assert env_cfg.rewards.velocity_flat_pose.func is registry["velocity_flat"].rewards_cfg.pose.func
+    assert not hasattr(env_cfg.events, "velocity_flat_reset_base")
+    assert env_cfg.events.velocity_flat_push_robot.params["enabled_domain_names"] == ("flat_velocity",)
+    assert (
+        env_cfg.events.velocity_flat_push_robot.params["source_func"]
+        is registry["velocity_flat"].events_cfg.push_robot.func
+    )
+    assert env_cfg.events.velocity_flat_push_robot.mode == "interval"
+
+    routes = profiles.collect_domain_profile_routes(domains, registry)
+    assert tuple(routes.profile_reset_cfgs) == ("velocity_flat",)
+    assert hasattr(routes.profile_reset_cfgs["velocity_flat"], "reset_base")
+    assert routes.profile_reset_cfgs["velocity_flat"].reset_base is not registry["velocity_flat"].events_cfg.reset_base
+    assert routes.profile_reset_cfgs["velocity_flat"].reset_base.params["pose_range"]["z"] == (0.05, 0.1)
 
 
 def test_profile_applier_deep_copies_terms_and_is_idempotent(monkeypatch) -> None:
@@ -648,11 +668,11 @@ def test_profile_applier_deep_copies_terms_and_is_idempotent(monkeypatch) -> Non
     env_cfg.commands.base_velocity.ranges.lin_vel_x = (9.0, 9.0)
 
     assert registry["velocity_flat"].rewards_cfg.track_lin_vel_xy_exp.params["std"] == 0.5
-    assert registry["velocity_flat"].commands_cfg.base_velocity.ranges.lin_vel_x == (-0.5, 1.0)
+    assert registry["velocity_flat"].commands_cfg.base_velocity.ranges.lin_vel_x == (-0.5, 1.5)
 
     profiles.apply_domain_profiles(env_cfg, domains, registry)
     assert env_cfg.rewards.velocity_flat_track_lin_vel_xy_exp.params["source_params"]["std"] == 0.5
-    assert env_cfg.commands.base_velocity.ranges.lin_vel_x == (-0.5, 1.0)
+    assert env_cfg.commands.base_velocity.ranges.lin_vel_x == (-0.5, 1.5)
 
     profiles.apply_domain_profiles(
         env_cfg,
@@ -725,6 +745,11 @@ def test_mixed_task_registers_amp_runner_without_polluting_paired_runner() -> No
     )
     assert (
         '"rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_paired_terrain_cfg:G1MixedTerrainHeightScanAMPRunnerCfg"'
+        in init_source
+    )
+    assert (
+        '"rsl_rl_cfg_entry_point":'
+        ' f"{agents.__name__}.rsl_rl_paired_terrain_cfg:G1MixedTerrainHeightScanAMPModalityFusionRunnerCfg"'
         in init_source
     )
     paired_runner_block = runner_source.split("class G1MixedTerrainHeightScanAMPRunnerCfg", maxsplit=1)[0]

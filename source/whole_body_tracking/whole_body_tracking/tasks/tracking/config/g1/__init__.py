@@ -68,6 +68,28 @@ gym.register(
 )
 
 gym.register(
+    id="TerrainPairMixedModal-G1",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": mixed_terrain_env_cfg.G1MixedFlatMeshEnvCfg,
+        "rsl_rl_cfg_entry_point": (
+            f"{agents.__name__}.rsl_rl_paired_terrain_cfg:G1MixedTerrainHeightScanAMPModalityFusionRunnerCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="TerrainPairMixedMLP-G1",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": mixed_terrain_env_cfg.G1MixedFlatMeshEnvCfg,
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_paired_terrain_cfg_MLP:MLPRunnerCfg",
+    },
+)
+
+gym.register(
     id="HeadingWalkAMP-G1",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
@@ -78,12 +100,22 @@ gym.register(
 )
 
 gym.register(
-    id="HeadingWalkAMP-Modal-G1",
+    id="HeadingWalkAMP-MLP-G1",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": velocity_amp_env_cfg.G1VelocityFlatAMPModalEnvCfg,
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_velocity_amp_cfg:G1VelocityFlatAMPModalRunnerCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_velocity_amp_cfg:G1VelocityFlatAMPMLPRunnerCfg",
+    },
+)
+
+gym.register(
+    id="HeadingWalkAMP-ModalTransformer-G1",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": velocity_amp_env_cfg.G1VelocityFlatAMPModalEnvCfg,
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_velocity_amp_cfg:G1VelocityFlatAMPModalityFusionRunnerCfg",
     },
 )
 

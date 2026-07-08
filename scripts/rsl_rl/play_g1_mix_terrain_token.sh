@@ -10,10 +10,9 @@ export PYTHONPATH="${WBT_ROOT}/../rsl_rl${PYTHONPATH:+:${PYTHONPATH}}"
 
 PYTHON_BIN="${PYTHON_BIN:-${WBT_ROOT}/scripts/omniretarget/run_with_isaaclab_python.sh}"
 
-TASK="${TASK:-TerrainPairMixedMLP-G1}"
+TASK="${TASK:-TerrainPairMixedModal-G1}"
 NUM_ENVS="${NUM_ENVS:-20}"
-DEFAULT_RESUME_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/MLP/2026-07-08_17-07-44_use_velocity_amp_env_cfg_resume_add_curri/model_2600.pt"
-
+DEFAULT_RESUME_PATH="/home/thl/wt_wbc/wbc_parkour/whole_body_tracking/logs/rsl_rl/model_11000.pt"
 if [[ $# -gt 0 && "${1}" != --* ]]; then
   RESUME_PATH="${RESUME_PATH:-${1}}"
   shift
@@ -29,6 +28,7 @@ VELOCITY_TERRAIN_CELL_COUNT="${VELOCITY_TERRAIN_CELL_COUNT:-8}"
 VELOCITY_TERRAIN_PROFILE="${VELOCITY_TERRAIN_PROFILE:-velocity_runway_steps}"
 MESH_ENV_RATIO="${MESH_ENV_RATIO:-0.00}"
 DOMAIN_SEPARATOR_CELLS="${DOMAIN_SEPARATOR_CELLS:-32}"
+TERRAIN_BORDER_WIDTH="${TERRAIN_BORDER_WIDTH:-10.0}"
 DEBUG_VELCOMMAND="${DEBUG_VELCOMMAND:-0}"
 HEADLESS="${HEADLESS:-0}"
 MAX_STEPS="${MAX_STEPS:-100000}"
@@ -53,7 +53,7 @@ ARGS=(
   --velocity_terrain_cell_count="${VELOCITY_TERRAIN_CELL_COUNT}"
   --velocity_terrain_profile="${VELOCITY_TERRAIN_PROFILE}"
   --mesh_env_ratio="${MESH_ENV_RATIO}"
-#   --encoder_mode=latent
+  --terrain_border_width="${TERRAIN_BORDER_WIDTH}"
   --export_onnx \
   --use_onnx_policy \
   --export_only \

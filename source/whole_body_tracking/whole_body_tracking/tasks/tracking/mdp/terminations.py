@@ -169,10 +169,87 @@ def bad_anchor_pos_z_only(
     command_name: str,
     threshold: float,
     enabled_domain_names: tuple[str, ...] = (),
+    curriculum_metric_threshold: float | None = None,
+    min_threshold: float | None = None,
+    threshold_update_rate: float = 0.001,
+    ema_alpha: float = 0.99,
+    metric_name: str = "wbc_tracking_anchor_pos",
 ) -> torch.Tensor:
     command: MotionCommand = env.command_manager.get_term(command_name)
-    terminated = torch.abs(command.anchor_pos_w[:, -1] - command.robot_anchor_pos_w[:, -1]) > threshold
+    threshold_value = _curriculum_anchor_z_threshold(
+        env,
+        command,
+        base_threshold=float(threshold),
+        curriculum_metric_threshold=curriculum_metric_threshold,
+        min_threshold=min_threshold,
+        threshold_update_rate=threshold_update_rate,
+        ema_alpha=ema_alpha,
+        metric_name=metric_name,
+    )
+    terminated = (command.anchor_pos_w[:, -1] - command.robot_anchor_pos_w[:, -1]) > threshold_value  # 不能低
     return _apply_domain_termination_mask(env, terminated, command_name, enabled_domain_names)
+
+
+def _curriculum_anchor_z_threshold(
+    env: ManagerBasedRLEnv,
+    command: MotionCommand,
+    base_threshold: float,
+    curriculum_metric_threshold: float | None,
+    min_threshold: float | None,
+    threshold_update_rate: float,
+    ema_alpha: float,
+    metric_name: str,
+) -> float:
+    if curriculum_metric_threshold is None or min_threshold is None:
+        return base_threshold
+
+    state = getattr(env, "_wbt_anchor_z_threshold_curriculum", None)
+    if state is None:
+        state = {
+            "threshold": float(base_threshold),
+            "ema": None,
+        }
+        setattr(env, "_wbt_anchor_z_threshold_curriculum", state)
+
+    metric = _read_scalar_metric(env, metric_name)
+    if metric is None:
+        metric = torch.norm(command.anchor_pos_w - command.robot_anchor_pos_w, dim=1).mean()
+
+    metric_value = float(metric.detach().mean().item() if isinstance(metric, torch.Tensor) else metric)
+    alpha = float(max(0.0, min(1.0, ema_alpha)))
+    previous_ema = state["ema"]
+    ema = metric_value if previous_ema is None else alpha * float(previous_ema) + (1.0 - alpha) * metric_value
+    state["ema"] = ema
+
+    if ema < float(curriculum_metric_threshold):
+        current = float(state["threshold"])
+        target = float(min_threshold)
+        rate = float(max(0.0, min(1.0, threshold_update_rate)))
+        state["threshold"] = max(target, current + rate * (target - current))
+    metric_template = command.metrics.get(
+        "error_anchor_pos",
+        torch.zeros(command.anchor_pos_w.shape[0], device=command.anchor_pos_w.device),
+    )
+    command.metrics["anchor_z_threshold_curriculum"] = torch.full_like(metric_template, float(state["threshold"]))
+    command.metrics["anchor_z_threshold_metric_ema"] = torch.full_like(metric_template, float(ema))
+    return float(state["threshold"])
+
+
+def _read_scalar_metric(env: ManagerBasedRLEnv, metric_name: str) -> torch.Tensor | None:
+    reward_manager = getattr(env, "reward_manager", None)
+    episode_sums = getattr(reward_manager, "_episode_sums", None)
+    if isinstance(episode_sums, dict):
+        for name in (metric_name, f"{metric_name}_raw", f"{metric_name}_mean"):
+            value = episode_sums.get(name)
+            if value is not None:
+                return value
+
+    extras = getattr(env, "extras", None)
+    if isinstance(extras, dict):
+        value = extras.get(metric_name)
+        if value is not None:
+            return value
+    return None
 
 
 def bad_anchor_pos_xyz(

@@ -34,7 +34,6 @@ class HeadingTransformerActorCfg:
     #     "command_group": "heading_cmd",
     #     "tracking_tokens": [],
     #     "head_hidden_dims": [512, 256],
-    #     "action_head_init_scale": 0.01,
     # }
 
 
@@ -49,7 +48,6 @@ class HeadingModalTransformerActorCfg:
     backbone: dict = {
         "class_name": "ModalityFusionTransformerModel",
         "d_model": 64,
-        "token_layout": "concat",
         "num_layers": 4,
         "num_heads": 2,
         "dim_feedforward": 512,
@@ -60,10 +58,15 @@ class HeadingModalTransformerActorCfg:
         "use_pos_embedding": False,
         "obs_normalization": True,
         "token_specs": [
-            {"name": "prop", "group": "prop"},
-            {"name": "heading", "group": "heading_cmd", "slice": [0, 2]},
-            {"name": "facing", "group": "heading_cmd", "slice": [2, 4]},
-            {"name": "speed", "group": "heading_cmd", "slice": [4, 5]},
+            {
+                "name": "heading_state",
+                "groups": [
+                    {"group": "prop"},
+                    {"group": "heading_cmd", "slice": [0, 2]},
+                    {"group": "heading_cmd", "slice": [2, 4]},
+                    {"group": "heading_cmd", "slice": [4, 5]},
+                ],
+            },
         ],
         "token_hidden_dims": [256, 128],
         "head_hidden_dims": [1024, 512],
